@@ -4,8 +4,8 @@ extends Node3D
 const CourseScript = preload("res://scripts/course.gd")
 const RunnerScript = preload("res://scripts/runner.gd")
 
-var course: Node3D
-var runner: CharacterBody3D
+var course
+var runner
 var view_camera: Camera3D
 var first_person := false
 var run_finished := false
@@ -68,7 +68,7 @@ func _process(delta: float) -> void:
 	_update_hud()
 
 func _update_camera(delta: float) -> void:
-	var pos := runner.global_position
+	var pos: Vector3 = runner.global_position
 	var desired: Vector3
 	var target: Vector3
 	if first_person:
