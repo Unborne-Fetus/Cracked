@@ -3,6 +3,7 @@ extends Node3D
 
 const CourseScript = preload("res://scripts/course.gd")
 const RunnerScript = preload("res://scripts/runner.gd")
+const COURSE_LENGTH := 1050.0
 
 var course
 var runner
@@ -60,9 +61,9 @@ func _restart() -> void:
 func _process(delta: float) -> void:
 	if not run_finished:
 		run_time += delta
-		if runner.global_position.y < course.surface_height(clampf(runner.global_position.x, 0, course.LENGTH), 0.0) - 32.0 or absf(runner.global_position.z) > 48.0:
+		if runner.global_position.y < course.surface_height(clampf(runner.global_position.x, 0, COURSE_LENGTH), 0.0) - 32.0 or absf(runner.global_position.z) > 48.0:
 			_restart()
-		if runner.global_position.x >= course.LENGTH - 15.0:
+		if runner.global_position.x >= COURSE_LENGTH - 15.0:
 			_finish()
 	_update_camera(delta)
 	_update_hud()
@@ -76,7 +77,7 @@ func _update_camera(delta: float) -> void:
 		target = pos + Vector3(25.0, 0.7, 0)
 	else:
 		var behind_x := pos.x - 14.0
-		var terrain_y: float = course.surface_height(clampf(behind_x, 0.0, course.LENGTH), pos.z)
+		var terrain_y: float = course.surface_height(clampf(behind_x, 0.0, COURSE_LENGTH), pos.z)
 		desired = Vector3(behind_x, maxf(pos.y + 5.8, terrain_y + 3.5), pos.z)
 		target = pos + Vector3(12.0, 1.6, 0)
 	var blend := clampf(delta * (16.0 if first_person else 6.0), 0.0, 1.0)
@@ -86,7 +87,7 @@ func _update_camera(delta: float) -> void:
 
 func _update_hud() -> void:
 	speed_label.text = "%d" % int(runner.speed * 3.6)
-	distance_label.text = "%d / %d m" % [int(clampf(runner.global_position.x, 0.0, course.LENGTH - 15.0)), int(course.LENGTH - 15.0)]
+	distance_label.text = "%d / %d m" % [int(clampf(runner.global_position.x, 0.0, COURSE_LENGTH - 15.0)), int(COURSE_LENGTH - 15.0)]
 	clock_label.text = "TIME  " + _clock(run_time)
 	record_label.text = "BEST  " + ("--:--" if best_time <= 0.0 else _clock(best_time))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
@@ -116,11 +117,14 @@ func _toggle_camera() -> void:
 	runner.set_first_person(first_person)
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not event is InputEventKey or not event.pressed or event.echo:
+	if not event is InputEventKey:
 		return
-	if event.keycode == KEY_V or event.keycode == KEY_C:
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return
+	if key.keycode == KEY_V or key.keycode == KEY_C:
 		_toggle_camera()
-	elif event.keycode == KEY_R:
+	elif key.keycode == KEY_R:
 		_restart()
 
 func _label(text: String, font_size: int, color: Color) -> Label:
