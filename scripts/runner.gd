@@ -262,7 +262,10 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		var new_gap: float = course.call("surface_clearance", distance, lane, height, side)
 		var face: Transform3D = course.call("surface_frame", distance, lane, side)
 		var toward := air_velocity.dot(face.basis.y)
-		if old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
+		# A crossing at the beginning of the step is not a landing if the
+		# player has already moved past the edge by the end of that step.
+		# Keep both face checks, but require support under the new position.
+		if absf(lane) > limit or old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
 			continue
 		var fraction := clampf(old_gap / maxf(old_gap - new_gap, 0.0001), 0.0, 1.0)
 		var hit_pos := previous_pos.lerp(next_pos, fraction)
