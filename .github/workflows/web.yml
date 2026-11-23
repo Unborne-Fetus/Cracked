@@ -18,6 +18,7 @@ jobs:
     permissions:
       contents: read
       pages: read
+      statuses: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,11 +66,39 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/web
-          godot --headless --path . --export-release "Web" build/web/index.html
+          godot --headless --path . --export-release "Web" build/web/index.html 2>&1 | tee /tmp/godot-export.log
           test -s build/web/index.html
           test -s build/web/index.wasm
           test -s build/web/index.pck
           touch build/web/.nojekyll
+      - name: Publish readable CI result to commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then
+            STATE="success"
+            DETAIL="Godot import, headless tests and browser export passed"
+          else
+            STATE="failure"
+            DETAIL="Build failed; see Actions logs"
+            for LOG in /tmp/godot-export.log /tmp/godot-gameplay.log /tmp/godot-collision.log /tmp/godot-run.log /tmp/godot-import.log; do
+              if [ -f "$LOG" ]; then
+                LINE=$(grep -E 'SCRIPT ERROR:|Parse Error:|ERROR:|FAILED|Assertion failed|GAMEPLAY REGRESSION:|GROUND COLLISION REGRESSION:' "$LOG" | tail -n 1 || true)
+                if [ -n "$LINE" ]; then
+                  DETAIL="$(printf "%s" "$LINE" | tr -cd '[:print:]' | cut -c1-135)"
+                  break
+                fi
+              fi
+            done
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$STATE" \
+            -f context="cracked/godot-build" \
+            -f description="$DETAIL" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
       - name: Upload browser build
         uses: actions/upload-artifact@v4
         with:
