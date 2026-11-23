@@ -129,6 +129,33 @@ func _run_tests() -> void:
 		if bool(runner.call("is_grounded")) or runner.transform.basis.y.dot(takeoff_basis.y) < 0.999:
 			_fail("Airborne body was rotated by a changing bank.")
 			return
+	# Ground contact is immediate while the landing orientation eases in.
+	game.call("_restart")
+	runner.set("distance", 864.0)
+	runner.set("lane", 0.0)
+	runner.set("grounded", false)
+	var landing_frame: Transform3D = course.call("sample", 864.0)
+	# A deliberately mismatched flight pose makes a snap easy to detect.
+	var pre_contact := landing_frame.basis.rotated(-landing_frame.basis.z, PI * 0.5)
+	runner.set("air_basis", pre_contact)
+	runner.transform = Transform3D(pre_contact, landing_frame.origin + landing_frame.basis.y * 0.01)
+	game.call("_update_camera", 1.0 / 60.0)
+	runner.call("_finish_landing", course)
+	if not bool(runner.call("is_grounded")) or runner.position.distance_to(landing_frame.origin) > 0.01 or runner.transform.basis.y.dot(pre_contact.y) < 0.999:
+		_fail("Landing snapped the body orientation or delayed physical contact.")
+		return
+	runner.set("landing_blend", 0.25)
+	runner.call("sync_pose", course)
+	var midway_up := runner.transform.basis.y
+	if midway_up.dot(pre_contact.y) < 0.65 or midway_up.dot(landing_frame.basis.y) < 0.65:
+		_fail("Landing blend did not interpolate between flight and ground.")
+		return
+	game.call("_update_camera", 1.0 / 60.0)
+	runner.set("landing_blend", 0.0)
+	runner.call("sync_pose", course)
+	if runner.transform.basis.y.dot(landing_frame.basis.y) < 0.999:
+		_fail("Landing blend did not finish aligned to the track.")
+		return
 	# Crossing a road edge must detach instead of clamping the lane.
 	game.call("_restart")
 	runner.set("lane", 21.9)

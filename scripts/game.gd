@@ -124,7 +124,7 @@ func _update_camera(delta: float) -> void:
 	var pos: Vector3 = runner.position
 	# Camera stays on the correct side of the road; only orientation and
 	# the additional chase height are damped, never the bank-relative base.
-	camera_height = lerpf(camera_height, float(runner.height), 1.0 - exp(-delta * 8.0))
+	camera_height = lerpf(camera_height, maxf(0.0, float(runner.height)), 1.0 - exp(-delta * 8.0))
 	if not runner.is_grounded():
 		# Follow the free player's own pose, not the twisting road below.
 		var air_up: Vector3 = runner.transform.basis.y
@@ -161,6 +161,29 @@ func _update_camera(delta: float) -> void:
 			camera_track_s = player_s
 			view_camera.position = pos + up * 3.6
 			_aim_camera(view_camera.position + forward * 22.0, up)
+	# Blend the flight camera's relative arm into the grounded arm, rather
+	# than abruptly switching between two different camera positions.
+	# The offset follows the moving player, so even extreme speeds do not
+	# create positional lag. Clamp only when needed to avoid the ribbon.
+	if runner.is_grounded() and runner.landing_blend > 0.0:
+		var blend: float = runner.landing_fraction()
+		var from_basis: Basis = runner.landing_from_basis
+		var from_up := from_basis.y
+		var from_forward := -from_basis.z
+		var air_offset := from_up * 1.55 if first_person else -from_forward * 9.0 + from_up * 4.0
+		var ground_offset := view_camera.position - pos
+		var candidate := pos + air_offset.lerp(ground_offset, blend)
+		var projected: Vector3 = course.project_position(candidate, lerpf(player_s, camera_track_s, blend))
+		var surface: Transform3D = course.sample(projected.x)
+		if absf(projected.y) <= float(course.half_width_at(projected.x)) + 0.5 and projected.z < 1.15:
+			candidate += surface.basis.y * (1.15 - projected.z)
+		if first_person or _camera_line_clear(candidate, pos + up * 1.35, projected.x, player_s):
+			view_camera.position = candidate
+			camera_track_s = projected.x
+		# Match the blended body orientation, preserving the pre-impact view.
+		var air_look := from_forward if first_person else from_forward * 13.0 - from_up * 2.6
+		var air_goal := Basis.looking_at(air_look.normalized(), from_up)
+		camera_goal = air_goal.slerp(camera_goal, blend).orthonormalized()
 	var camera_frame: Transform3D = course.sample(camera_track_s)
 	camera_track_clearance = (view_camera.position - camera_frame.origin).dot(camera_frame.basis.y)
 	# Quaternion interpolation avoids Euler flips near 180/360 degrees.

@@ -14,6 +14,7 @@ const AIR_STEER_ACCEL := 13.0
 const RUN_DRAG := 1.2
 const AIR_DRAG := 0.8
 const LANDING_RECOVERY := 0.18
+const LANDING_BLEND_TIME := 0.50
 const JUMP_IMPULSE := 12.5
 const JUMP_SPEED_GAIN := 1.55
 const MAX_JUMP_IMPULSE := 45.0
@@ -48,6 +49,8 @@ var jump_held := false
 var is_sliding := false
 var uphill := false
 var landing_timer := 0.0
+var landing_blend := 0.0
+var landing_from_basis := Basis.IDENTITY
 var hit_timer := 0.0
 var hits := 0
 var avatar: Node3D
@@ -96,6 +99,8 @@ func reset_run(course: Node3D) -> void:
 	is_sliding = false
 	uphill = false
 	landing_timer = 0.0
+	landing_blend = 0.0
+	landing_from_basis = Basis.IDENTITY
 	hit_timer = 0.0
 	hits = 0
 	sync_pose(course)
@@ -173,13 +178,30 @@ func apply_obstacle_hit() -> void:
 	hits += 1
 	hit_timer = 0.85
 
+func landing_fraction() -> float:
+	return smoothstep(0.0, 1.0, 1.0 - landing_blend / LANDING_BLEND_TIME)
+
 func sync_pose(course: Node3D) -> void:
-	# Used for grounded placement and deterministic test setup. Flight never
-	# calls this to overwrite the player's world-space position or basis.
+	# Contact position is exact, but the displayed orientation eases in
+	# from the actual flight basis. No change to the collision point.
 	if not grounded:
 		return
 	var frame: Transform3D = course.call("sample", distance)
-	transform = Transform3D(frame.basis, frame.origin + frame.basis.x * lane)
+	var body_basis := frame.basis
+	if landing_blend > 0.0:
+		body_basis = landing_from_basis.slerp(frame.basis, landing_fraction()).orthonormalized()
+	transform = Transform3D(body_basis, frame.origin + frame.basis.x * lane)
+
+func _finish_landing(course: Node3D) -> void:
+	landing_from_basis = air_basis
+	landing_blend = LANDING_BLEND_TIME
+	height = 0.0
+	vertical_speed = 0.0
+	air_time = 0.0
+	grounded = true
+	landing_timer = LANDING_RECOVERY
+	queued_jump = false
+	sync_pose(course)
 
 func is_grounded() -> bool:
 	return grounded
@@ -187,6 +209,7 @@ func is_grounded() -> bool:
 func _begin_flight(frame: Transform3D, impulse: float) -> void:
 	grounded = false
 	air_time = 0.0
+	landing_blend = 0.0
 	air_basis = transform.basis
 	air_velocity = -frame.basis.z * speed + frame.basis.x * lateral_speed + frame.basis.y * impulse
 	vertical_speed = impulse
@@ -245,13 +268,7 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 			var forward_velocity := maxf(0.0, air_velocity.dot(-landing_frame.basis.z))
 			speed = landing_speed(minf(speed, forward_velocity), maxf(0.0, -air_velocity.dot(landing_frame.basis.y)))
 			lateral_speed = air_velocity.dot(landing_frame.basis.x)
-			height = 0.0
-			vertical_speed = 0.0
-			air_time = 0.0
-			grounded = true
-			landing_timer = LANDING_RECOVERY
-			queued_jump = false
-			sync_pose(course)
+			_finish_landing(course)
 	else:
 		transform = Transform3D(air_basis, next_pos)
 	# If a projected crossing misses the actual edge, keep moving freely.
@@ -280,6 +297,8 @@ func tick(delta: float, course: Node3D) -> void:
 		queued_jump = true
 	jump_held = jump
 	landing_timer = maxf(0.0, landing_timer - delta)
+	if grounded:
+		landing_blend = maxf(0.0, landing_blend - delta)
 	hit_timer = maxf(0.0, hit_timer - delta)
 	if grounded:
 		var frame: Transform3D = course.call("sample", distance)
