@@ -104,7 +104,7 @@ func _update_hud() -> void:
 	clock_label.text = "TIME  " + _clock(run_time)
 	record_label.text = "BEST  " + ("--:--" if best_time <= 0.0 else _clock(best_time))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
-	slide_label.text = "SLIDING  // GAINING SPEED" if runner.is_sliding else "HOLD SHIFT / S TO SLIDE"
+	slide_label.text = "UPHILL  //  SLIDE DISABLED" if runner.slide_blocked else ("SLIDING  //  GAINING SPEED" if runner.is_sliding else "HOLD SHIFT / S TO SLIDE")
 	var gap: float = maxf(float(storm.gap_to(runner.global_position.x)), 0.0)
 	storm_label.text = "STORM  %d m  //  %d km/h" % [int(gap), int(storm.speed * 3.6)]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.21, 0.38) if gap < 40.0 else Color(0.96, 0.53, 0.72))
