@@ -75,9 +75,8 @@ jobs:
           test -s "$RELEASE_DIR/index.js"
           test -s "$RELEASE_DIR/index.wasm"
           test -s "$RELEASE_DIR/index.pck"
-          # Keep the same relative engine filenames INSIDE a unique build path.
-          # This avoids stale WebAssembly, JavaScript, and PCK responses being
-          # served from the browser cache after a successful Pages deployment.
+          # Keep the public address stable. A full-viewport iframe loads
+          # the uniquely versioned engine files without redirecting the tab.
           cat > build/web/index.html <<EOF
           <!doctype html>
           <html lang="en">
@@ -86,11 +85,28 @@ jobs:
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
           <title>Vector Velocity · $SHORT_SHA</title>
-          <style>body{background:#070819;color:#e8faff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;text-align:center}a{color:#2aebff}</style>
+          <style>html,body{width:100%;height:100%;margin:0;background:#070819;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style>
           </head>
           <body>
-          <main><h1>VECTOR VELOCITY</h1><p>Loading build $SHORT_SHA…</p><p><a href="./releases/$SHORT_SHA/index.html">Launch this version directly</a></p></main>
-          <script>location.replace("./releases/$SHORT_SHA/index.html" + location.search);</script>
+          <iframe id="game" title="Vector Velocity" src="./releases/$SHORT_SHA/index.html" allow="fullscreen; autoplay; gamepad" allowfullscreen tabindex="0"></iframe>
+          <script>const game=document.getElementById('game');game.addEventListener('load',()=>{game.focus();});</script>
+          </body>
+          </html>
+          EOF
+          # Repair old bookmarks/tabs that point to removed release directories.
+          # A cache-busting query also bypasses any cached old redirect page.
+          cat > build/web/404.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Vector Velocity — Updated</title>
+          <style>body{background:#070819;color:#e8faff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;text-align:center}a{color:#2aebff}</style>
+          </head>
+          <body>
+          <main><h1>VECTOR VELOCITY</h1><p>This release has been replaced.</p><p><a href="/Cracked/?v=$SHORT_SHA">Open the latest build</a></p></main>
+          <script>if(location.pathname.startsWith('/Cracked/releases/'))location.replace('/Cracked/?v=$SHORT_SHA');</script>
           </body>
           </html>
           EOF
@@ -113,7 +129,9 @@ jobs:
           touch build/web/.nojekyll
           test -s build/web/index.html
           test -s build/web/version.txt
-          echo "Published release URL: https://unborne-fetus.github.io/Cracked/releases/$SHORT_SHA/index.html"
+          test -s build/web/404.html
+          grep -F "./releases/$SHORT_SHA/index.html" build/web/index.html
+          echo "Published stable URL: https://unborne-fetus.github.io/Cracked/?v=$SHORT_SHA"
       - name: Publish readable CI result to commit status
         if: always()
         env:
