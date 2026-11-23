@@ -156,6 +156,22 @@ func _run_tests() -> void:
 	if runner.transform.basis.y.dot(landing_frame.basis.y) < 0.999:
 		_fail("Landing blend did not finish aligned to the track.")
 		return
+	# Head-first contact with a ceiling is blocked before the feet cross.
+	game.call("_restart")
+	var ceiling: Transform3D = course.call("surface_frame", 864.0, 0.0, 1)
+	var head_first := ceiling.basis.rotated(-ceiling.basis.z, PI)
+	runner.set("distance", 864.0)
+	runner.set("lane", 0.0)
+	runner.set("grounded", false)
+	runner.set("air_basis", head_first)
+	runner.set("air_velocity", -ceiling.basis.z * 22.0 - ceiling.basis.y * 10.0)
+	runner.transform = Transform3D(head_first, ceiling.origin + ceiling.basis.y * 2.3)
+	runner.call("_advance_flight", 0.1, course, 0.0)
+	var head_projection: Vector3 = course.call("project_position", runner.position + head_first.y * 1.5 - head_first.z * 0.15, float(runner.get("distance")))
+	var head_gap: float = course.call("surface_clearance", head_projection.x, head_projection.y, head_projection.z, 1)
+	if bool(runner.call("is_grounded")) or head_gap < 0.34:
+		_fail("Head-first collision passed through the ceiling.")
+		return
 	# A 180-bank underside is a real rideable face, not a visual duplicate.
 	game.call("_restart")
 	var underside: Transform3D = course.call("surface_frame", 864.0, 0.0, -1)
@@ -406,6 +422,10 @@ func _run_tests() -> void:
 		for fp in [false, true]:
 			game.set("first_person", fp)
 			game.call("_update_camera", 1.0 / 60.0)
+			var camera: Camera3D = game.get("view_camera")
+			if absf(camera.basis.x.y) > 0.001 or camera.basis.y.y < 0.0:
+				_fail("Camera rolled with the sustained wall/ceiling.")
+				return
 			if float(game.get("camera_track_clearance")) < 0.8:
 				_fail("Camera crossed a sustained wall/ceiling surface.")
 				return

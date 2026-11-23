@@ -39,6 +39,7 @@ var height := 0.0
 var vertical_speed := 0.0
 var grounded := true
 var surface_side := 1
+var screen_steer_sign := 1.0
 var fallen := false
 var air_velocity := Vector3.ZERO
 var air_basis := Basis.IDENTITY
@@ -90,6 +91,7 @@ func reset_run(course: Node3D) -> void:
 	vertical_speed = 0.0
 	grounded = true
 	surface_side = 1
+	screen_steer_sign = 1.0
 	fallen = false
 	air_velocity = Vector3.ZERO
 	air_basis = Basis.IDENTITY
@@ -183,6 +185,21 @@ func apply_obstacle_hit() -> void:
 func landing_fraction() -> float:
 	return smoothstep(0.0, 1.0, 1.0 - landing_blend / LANDING_BLEND_TIME)
 
+func _body_support(normal: Vector3, body_basis: Basis, probe: int) -> float:
+	# Exact normal support of the torso box and scaled visor ellipsoid.
+	var y_scale := avatar.scale.y
+	var nx := normal.dot(body_basis.x)
+	var ny := normal.dot(body_basis.y)
+	var nz := normal.dot(body_basis.z)
+	if probe == 0:
+		return 0.4 * absf(nx) + 0.625 * y_scale * absf(ny) + 0.4 * absf(nz)
+	return 0.37 * sqrt(nx * nx + ny * ny * y_scale * y_scale + nz * nz)
+
+func _body_offset(body_basis: Basis, probe: int) -> Vector3:
+	if probe == 0:
+		return body_basis.y * (0.64 * avatar.scale.y)
+	return body_basis.y * (1.5 * avatar.scale.y) - body_basis.z * 0.15
+
 func sync_pose(course: Node3D) -> void:
 	# Contact position is exact, but the displayed orientation eases in
 	# from the actual flight basis. No change to the collision point.
@@ -193,6 +210,15 @@ func sync_pose(course: Node3D) -> void:
 	if landing_blend > 0.0:
 		body_basis = landing_from_basis.slerp(frame.basis, landing_fraction()).orthonormalized()
 	transform = Transform3D(body_basis, frame.origin)
+	# A blended body may still point into the road on an inverted landing.
+	# Lift only the visual avatar enough to keep head and torso above the
+	# face, preserving exact physical foot contact and the eased rotation.
+	var lift := 0.0
+	if landing_blend > 0.0:
+		for probe in range(2):
+			var gap := _body_offset(body_basis, probe).dot(frame.basis.y) - _body_support(frame.basis.y, body_basis, probe)
+			lift = maxf(lift, -gap)
+	avatar.position = body_basis.inverse() * frame.basis.y * lift
 
 func _finish_landing(course: Node3D) -> void:
 	landing_from_basis = air_basis
@@ -213,10 +239,48 @@ func _begin_flight(frame: Transform3D, impulse: float) -> void:
 	air_time = 0.0
 	landing_blend = 0.0
 	air_basis = transform.basis
+	# If a new takeoff interrupts a landing blend, carry its visual position
+	# into flight rather than snapping the avatar through the road.
+	position += air_basis * avatar.position
+	avatar.position = Vector3.ZERO
 	air_velocity = -frame.basis.z * speed + frame.basis.x * lateral_speed * float(surface_side) + frame.basis.y * impulse
 	vertical_speed = impulse
 	queued_jump = false
 	is_sliding = false
+
+func _body_sweep(course: Node3D, from_pos: Vector3, to_pos: Vector3, from_s: float, to_s: float) -> Dictionary:
+	# Sweep the actual torso and head volumes against both faces. We only
+	# intercept contacts where the body leads the feet; ordinary feet-first
+	# landings continue to use the existing precise attachment logic.
+	var best: Dictionary = {}
+	var best_fraction := 2.0
+	for probe in range(2):
+		var offset := _body_offset(air_basis, probe)
+		var old_p: Vector3 = course.call("project_position", from_pos + offset, from_s)
+		var new_p: Vector3 = course.call("project_position", to_pos + offset, to_s)
+		for side: int in [1, -1]:
+			var old_face: Transform3D = course.call("surface_frame", old_p.x, old_p.y, side)
+			var new_face: Transform3D = course.call("surface_frame", new_p.x, new_p.y, side)
+			var support := _body_support(new_face.basis.y, air_basis, probe)
+			if offset.dot(new_face.basis.y) - support > -0.06:
+				continue
+			var old_gap: float = course.call("surface_clearance", old_p.x, old_p.y, old_p.z, side)
+			old_gap -= _body_support(old_face.basis.y, air_basis, probe)
+			var new_gap: float = course.call("surface_clearance", new_p.x, new_p.y, new_p.z, side)
+			new_gap -= support
+			if old_gap < -0.06 or new_gap > 0.0 or new_gap >= old_gap:
+				continue
+			var fraction := clampf(old_gap / maxf(old_gap - new_gap, 0.0001), 0.0, 1.0)
+			if fraction >= best_fraction:
+				continue
+			var hit: Vector3 = course.call("project_position", from_pos.lerp(to_pos, fraction) + offset, lerpf(from_s, to_s, fraction))
+			if absf(hit.y) > float(course.call("half_width_at", hit.x)):
+				continue
+			# Do not reattach at the edge; head/torso contacts only deflect.
+			var face: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
+			best_fraction = fraction
+			best = {"fraction": fraction, "normal": face.basis.y}
+	return best
 
 func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	air_time += delta
@@ -228,8 +292,9 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	var old_frame: Transform3D = course.call("sample", distance)
 	# Flight follows the actual momentum vector and fixed takeoff basis.
 	# The road can turn or rotate underneath without carrying the player.
-	var steering_axis := air_basis.x
-	steering_axis.y = 0.0
+	var flat_forward := -air_basis.z
+	flat_forward.y = 0.0
+	var steering_axis := flat_forward.cross(Vector3.UP)
 	if steering_axis.length_squared() > 0.001:
 		air_velocity += steering_axis.normalized() * steer * AIR_STEER_ACCEL * delta
 	var horizontal := Vector3(air_velocity.x, 0.0, air_velocity.z)
@@ -248,6 +313,16 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	var shift := new_origin - old_origin
 	previous_pos -= shift
 	next_pos -= shift
+	var body_contact := _body_sweep(course, previous_pos, next_pos, old_s, predicted_s)
+	if not body_contact.is_empty():
+		var normal: Vector3 = body_contact["normal"]
+		# Stop at first impact and gently deflect away from the surface,
+		# rather than allowing the feet to tunnel across the slab later.
+		next_pos = previous_pos.lerp(next_pos, float(body_contact["fraction"])) + normal * 0.08
+		var incoming := air_velocity.dot(normal)
+		if incoming < 0.0:
+			air_velocity -= normal * incoming * 1.2
+			speed = landing_speed(speed, -incoming)
 	var projected: Vector3 = course.call("project_position", next_pos, predicted_s)
 	distance = projected.x
 	lane = projected.y
@@ -265,7 +340,7 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		# A crossing at the beginning of the step is not a landing if the
 		# player has already moved past the edge by the end of that step.
 		# Keep both face checks, but require support under the new position.
-		if absf(lane) > limit or old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
+		if not body_contact.is_empty() or absf(lane) > limit or old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
 			continue
 		var fraction := clampf(old_gap / maxf(old_gap - new_gap, 0.0001), 0.0, 1.0)
 		var hit_pos := previous_pos.lerp(next_pos, fraction)
@@ -329,7 +404,17 @@ func tick(delta: float, course: Node3D) -> void:
 			var old_lane := lane
 			var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
 			var steering_factor := 0.62 if slide else 1.0
-			lateral_speed = move_toward(lateral_speed, steer * float(surface_side) * steer_speed * steering_factor, 82.0 * delta * steering_factor)
+			var base_frame: Transform3D = course.call("sample", distance)
+			var screen_right := (-base_frame.basis.z).cross(Vector3.UP).normalized()
+			var screen_alignment := base_frame.basis.x.dot(screen_right)
+			# A/D moves in the visible horizontal direction where possible.
+			# On a vertical wall retain the last mapping to avoid jitter.
+			if absf(screen_alignment) > 0.18:
+				screen_steer_sign = signf(screen_alignment)
+			# A small gravity-driven drift makes vertical walls meaningfully
+			# different from flat ground, while steering can counter it.
+			var wall_drift := -base_frame.basis.x.y * 5.0
+			lateral_speed = move_toward(lateral_speed, steer * screen_steer_sign * steer_speed * steering_factor + wall_drift, 82.0 * delta * steering_factor)
 			var next_s := distance + speed * delta
 			var next_lane := lane + lateral_speed * delta
 			course.call("stream", next_s)

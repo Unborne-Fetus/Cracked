@@ -45,8 +45,17 @@ var restart_button: Button
 func _ready() -> void:
 	var world := WorldEnvironment.new()
 	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.005, 0.008, 0.028)
+	# A world-fixed sky makes vertical orientation visible even on an empty ribbon.
+	env.background_mode = Environment.BG_SKY
+	var sky := Sky.new()
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.012, 0.022, 0.065)
+	sky_mat.sky_horizon_color = Color(0.036, 0.072, 0.115)
+	sky_mat.ground_horizon_color = Color(0.036, 0.072, 0.115)
+	sky_mat.ground_bottom_color = Color(0.003, 0.004, 0.012)
+	sky_mat.sun_angle_max = 0.0
+	sky.sky_material = sky_mat
+	env.sky = sky
 	world.environment = env
 	add_child(world)
 	course = CourseScript.new()
@@ -121,10 +130,23 @@ func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> b
 			return false
 	return true
 
-func _aim_camera(target: Vector3, up: Vector3) -> void:
+func _level_camera_basis(direction: Vector3) -> Basis:
+	var heading := direction.normalized()
+	# Keep the horizon world-up even while the camera is physically beside
+	# or underneath the track. Avoid a singularity for steep viewing angles.
+	if absf(heading.y) > 0.94:
+		var horizontal := Vector3(heading.x, 0.0, heading.z)
+		if horizontal.length_squared() < 0.0001:
+			horizontal = Vector3(-view_camera.basis.z.x, 0.0, -view_camera.basis.z.z)
+		if horizontal.length_squared() < 0.0001:
+			horizontal = Vector3.FORWARD
+		heading = (horizontal.normalized() * 0.342 + Vector3.UP * signf(heading.y) * 0.94).normalized()
+	return Basis.looking_at(heading, Vector3.UP)
+
+func _aim_camera(target: Vector3, _up: Vector3) -> void:
 	var direction := target - view_camera.position
 	if direction.length_squared() > 0.0001:
-		camera_goal = Basis.looking_at(direction.normalized(), up)
+		camera_goal = _level_camera_basis(direction)
 
 func _update_camera(delta: float) -> void:
 	var player_s: float = runner.distance
@@ -203,7 +225,7 @@ func _update_camera(delta: float) -> void:
 			camera_track_s = projected.x
 		# Match the blended body orientation, preserving the pre-impact view.
 		var air_look := from_forward if first_person else from_forward * 13.0 - from_up * 2.6
-		var air_goal := Basis.looking_at(air_look.normalized(), from_up)
+		var air_goal := _level_camera_basis(air_look)
 		camera_goal = air_goal.slerp(camera_goal, blend).orthonormalized()
 	var camera_projection: Vector3 = course.project_position(view_camera.position, camera_track_s)
 	camera_track_clearance = float(course.surface_clearance(camera_projection.x, camera_projection.y, camera_projection.z, int(runner.surface_side)))
@@ -216,7 +238,10 @@ func _update_camera(delta: float) -> void:
 		view_camera.basis = camera_goal
 		camera_rotation_ready = true
 	else:
-		view_camera.basis = view_camera.basis.slerp(camera_goal, 1.0 - exp(-delta * 11.0)).orthonormalized()
+		# Interpolate forward directions, then reconstruct a level basis.
+		# Quaternion blending whole tilted frames can introduce unwanted roll.
+		var heading := (-view_camera.basis.z).slerp(-camera_goal.z, 1.0 - exp(-delta * 11.0))
+		view_camera.basis = _level_camera_basis(heading)
 	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.10, 78.0, 98.0), 1.0 - exp(-delta * 4.0))
 
 func _speed_display(meters_per_second: float) -> int:
