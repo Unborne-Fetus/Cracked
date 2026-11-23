@@ -19,23 +19,24 @@ The workflow also produces a downloadable \`vector-velocity-web\` artifact. The 
 | A / D or ← / → | Steer sideways |
 | Space | Jump |
 | V or C | Toggle first-person / third-person |
-| S or ↓ | Brake |
+| Hold Shift, Ctrl, S or ↓ | Slide on flat/downhill ground; uphill sliding is blocked |
 | R | Restart |
 | Controller left stick | Steer |
 | Controller A | Jump |
-| Controller B | Brake |
-| Touch arrows, JUMP, VIEW | Mobile / tablet browsers |
+| Hold controller B | Slide |
+| Touch arrows, SLIDE, JUMP, VIEW | Mobile / tablet browsers |
 
-You move automatically in the +X direction. Descending a hill gives speed; climbing consumes speed. Sloped landings preserve or lose momentum depending on their angle. Neon magenta strips give a speed boost. Reach the gold gate at 1035 meters to set a time. Your best time is saved locally in the browser.
+You move automatically in the +X direction. **Hold slide on flat or downhill terrain to gain speed**. Running, jumping, and landing do not grant horizontal speed. **Uphill inclines disable sliding**, and friction slows you down when not sliding. There is **no upper speed cap**. Avoid glowing columns and barriers (or jump over the short hurdles). A translucent neon storm starts behind you and **accelerates over time**; it ends the run if it catches you. Reach the gold gate at 1035 meters to set a time. Your best time is saved locally in the browser.
 
 ## Technical features
 
-- 3D \`CharacterBody3D\` player with automatic forward motion, slope-sensitive acceleration, steerable air movement, jumping, landing grades and speed-dependent camera field of view.
+- 3D \`CharacterBody3D\` player with uncapped horizontal speed, slide-only acceleration on flat/downhill slopes, uphill slide lockout, air steering and speed-dependent camera field of view.
 - Dynamically generated dark terrain mesh; neon grid lines and physics collision share one mathematical height function.
 - Lightweight unshaded materials; no external models, images or commercial assets.
 - First-person and third-person follow cameras.
-- Five boost pads, glowing arches, a finish gate, on-screen HUD, touch buttons and saved best times.
-- GitHub Actions CI: import check, startup smoke test, Web export and GitHub Pages deployment.
+- Neon obstacle hazards with continuous movement collision sweep, glowing course arches, a finish gate, on-screen HUD, touch buttons and saved best times.
+- A visible storm wall that chases the player and increases its speed continuously, restarting from its initial speed with each run.
+- GitHub Actions CI: import check, startup smoke test, terrain grounding regression, slide/storm/obstacle regression, Web export and GitHub Pages deployment.
 
 ## Open locally
 
