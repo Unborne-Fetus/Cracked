@@ -1,4 +1,6 @@
 extends Node3D
+
+signal hazard_hit(body: Node3D)
 ## Procedural static test course. A visible grid and the physics collider are
 ## built from the same height function, so the wireframe matches every slope.
 
@@ -118,41 +120,66 @@ func _gate(x: float, color: Color) -> void:
 	_box(Vector3(0.55, 13.0, 0.55), Vector3(x, right_y + 6.5, 21), mat)
 	_box(Vector3(0.7, 0.55, 42.5), Vector3(x, maxf(left_y, right_y) + 13.0, 0), mat)
 
-func _boost(x: float) -> void:
-	var hot := _neon(Color(1.0, 0.18, 0.52))
-	var h := surface_height(x, 0.0)
-	for i in range(4):
-		var z := -6.0 + i * 4.0
-		_box(Vector3(3.0, 0.12, 2.4), Vector3(x, surface_height(x, z) + 0.16, z), hot)
+func _hazard(x: float, z: float, size: Vector3, color: Color) -> void:
+	# Obstacle visuals and trigger share exactly the same dimensions.
+	# Area3D hazards are reliable even when the player is moving very fast.
+	var center := Vector3(x, surface_height(x, z) + size.y * 0.5 + 0.05, z)
+	_box(size, center, _neon(color))
+	# Top stripe makes tall pillars and low jumpable hurdles easy to read.
+	_box(Vector3(size.x + 0.2, 0.18, size.z + 0.2),
+		center + Vector3(0, size.y * 0.5, 0), _neon(Color(1.0, 0.73, 0.23)))
 	var area := Area3D.new()
+	area.name = "Obstacle"
+	area.add_to_group("obstacle_hazards")
 	area.collision_layer = 0
 	area.collision_mask = 2
 	area.monitoring = true
+	var shape := BoxShape3D.new()
+	shape.size = size
 	var collider := CollisionShape3D.new()
-	var b := BoxShape3D.new()
-	b.size = Vector3(5.5, 4.0, 15.5)
-	collider.shape = b
+	collider.shape = shape
 	area.add_child(collider)
-	area.position = Vector3(x, h + 1.1, 0)
+	area.position = center
 	add_child(area)
-	area.body_entered.connect(_on_boost_body)
+	area.body_entered.connect(_on_hazard_body_entered)
 
-func _on_boost_body(body: Node3D) -> void:
-	if body.has_method("add_boost"):
-		body.add_boost(18.0)
+func _on_hazard_body_entered(body: Node3D) -> void:
+	if body is CharacterBody3D:
+		hazard_hit.emit(body)
 
 func _build_decorations() -> void:
+	# Wide luminous gates indicate progress; only the marked hazard blocks hurt.
 	for x in [50.0, 180.0, 350.0, 540.0, 735.0, 950.0]:
 		_gate(x, Color(0.94, 0.13, 0.64) if int(x) % 2 == 0 else Color(0.1, 0.96, 1.0))
-	for x in [115.0, 310.0, 495.0, 685.0, 865.0]:
-		_boost(x)
-	# A brighter finish gate with a wide line painted across the track.
+	
+	# Alternating single pillars force lane changes. Each leaves several exits.
+	var pillars: Array[Vector2] = [
+		Vector2(110.0, 0.0), Vector2(162.0, -11.0),
+		Vector2(163.0, 11.0), Vector2(288.0, 8.0),
+		Vector2(354.0, -4.0), Vector2(432.0, -13.0),
+		Vector2(434.0, 10.0), Vector2(575.0, -7.0),
+		Vector2(646.0, 9.0), Vector2(719.0, -13.0),
+		Vector2(720.0, 13.0), Vector2(793.0, 0.0),
+		Vector2(884.0, 12.0), Vector2(968.0, -7.0)
+	]
+	for p in pillars:
+		_hazard(p.x, p.y, Vector3(3.4, 6.0, 4.2), Color(1.0, 0.19, 0.41))
+	
+	# Wide barriers are avoidable by steering, while short hurdles can be jumped.
+	_hazard(228.0, -13.0, Vector3(3.2, 5.8, 15.0), Color(0.94, 0.11, 0.58))
+	_hazard(503.0, 0.0, Vector3(3.0, 1.7, 12.0), Color(1.0, 0.44, 0.11))
+	_hazard(685.0, 14.0, Vector3(3.0, 5.8, 14.0), Color(0.94, 0.11, 0.58))
+	_hazard(925.0, 0.0, Vector3(3.0, 1.8, 15.0), Color(1.0, 0.44, 0.11))
+	
 	_gate(LENGTH - 15.0, Color(1.0, 0.83, 0.25))
-	_box(Vector3(1.4, 0.12, 44.0), Vector3(LENGTH - 15.0, surface_height(LENGTH - 15.0, 0) + 0.14, 0), _neon(Color(1.0, 0.8, 0.25)))
-	# Distant minimal vector pillars define the scale without expensive textures.
+	_box(Vector3(1.4, 0.12, 44.0), Vector3(LENGTH - 15.0,
+		surface_height(LENGTH - 15.0, 0.0) + 0.14, 0.0), _neon(Color(1.0, 0.8, 0.25)))
+	
+	# Background vector pillars provide scale without texture dependencies.
 	var cyan := _neon(Color(0.06, 0.53, 0.83))
 	for i in range(16):
 		var x := 60.0 + float(i) * 61.0
 		for side in [-1.0, 1.0]:
 			var z: float = side * 39.0
-			_box(Vector3(0.35, 16.0 + float(i % 4) * 6.0, 0.35), Vector3(x, surface_height(x, z) + 8.0, z), cyan)
+			_box(Vector3(0.35, 16.0 + float(i % 4) * 6.0, 0.35),
+				Vector3(x, surface_height(x, z) + 8.0, z), cyan)
