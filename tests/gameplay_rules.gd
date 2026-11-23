@@ -1,72 +1,83 @@
 extends SceneTree
-## Regression tests for slide-only speed, hazards, and accelerating storm.
-## Runs with: godot --headless --path . --script res://tests/gameplay_rules.gd
 
 func _initialize() -> void:
 	call_deferred("_run_tests")
 
 func _run_tests() -> void:
-	var scene := load("res://scenes/main.tscn") as PackedScene
-	if scene == null:
-		_fail("Main scene could not load.")
-		return
-	var game := scene.instantiate() as Node3D
+	var packed := load("res://scenes/main.tscn") as PackedScene
+	var game := packed.instantiate() as Node3D
 	root.add_child(game)
 	await physics_frame
-	var runner := game.get("runner") as CharacterBody3D
-	var storm := game.get("storm") as Node3D
-	if runner == null or storm == null:
-		_fail("Player or storm was not created.")
+	game.set_physics_process(false)
+	var runner: Node3D = game.get("runner")
+	var storm: Node3D = game.get("storm")
+	var course: Node3D = game.get("course")
+	if not bool(runner.call("can_slide_on_grade", 0.25)):
+		_fail("Uphill sliding must be available.")
 		return
-	
-	# Holding slide uphill must NOT give any speed.
-	if bool(runner.call("can_slide_on_grade", 0.10)):
-		_fail("Sliding is incorrectly available on an uphill incline.")
+	if float(runner.call("step_speed", 80.0, 0.2, true, true, 1.0)) > 50.0:
+		_fail("Uphill sliding must cause a substantial loss of speed.")
 		return
-	if not bool(runner.call("can_slide_on_grade", -0.10)):
-		_fail("Descending terrain incorrectly blocks sliding.")
+	if float(runner.call("step_speed", 25.0, -0.2, true, false, 1.0)) >= 25.0:
+		_fail("Non-sliding downhill movement must not increase speed.")
 		return
-	if float(runner.call("step_speed", 25.0, -0.20, true, false, 1.0)) >= 25.0:
-		_fail("Walking downhill increases speed without sliding.")
+	if float(runner.call("step_speed", 25.0, -0.2, false, true, 1.0)) >= 25.0:
+		_fail("Airborne movement must not increase speed.")
 		return
-	if float(runner.call("step_speed", 25.0, 0.10, true, true, 1.0)) >= 25.0:
-		_fail("Holding slide while going uphill increases speed.")
+	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
+		_fail("Sliding unexpectedly has a maximum speed.")
 		return
-	if float(runner.call("step_speed", 25.0, -0.20, false, true, 1.0)) >= 25.0:
-		_fail("Sliding in midair increases speed.")
+	var bank: Transform3D = course.call("sample", 288.0)
+	var inversion: Transform3D = course.call("sample", 480.0)
+	var entry: Transform3D = course.call("sample", 192.0)
+	var exit_frame: Transform3D = course.call("sample", 384.0)
+	if absf(bank.basis.x.y) < 0.35 or inversion.basis.y.y > -0.8 or entry.basis.z.dot(exit_frame.basis.z) > 0.94:
+		_fail("Bank, inversion, or turn geometry was not generated.")
 		return
-	if float(runner.call("step_speed", 25.0, -0.20, true, true, 1.0)) <= 25.0:
-		_fail("Downhill sliding fails to gain speed.")
+	for i in range(1, 5):
+		var a: Transform3D = course.call("sample", float(i) * 192.0 - 0.01)
+		var b: Transform3D = course.call("sample", float(i) * 192.0 + 0.01)
+		if a.origin.distance_to(b.origin) > 0.1 or a.basis.z.dot(b.basis.z) < 0.99:
+			_fail("Track seam is discontinuous.")
+			return
+	var chunks: Dictionary = course.get("chunks")
+	var hazards: Array[Dictionary] = chunks[0]["hazards"]
+	var hazard: Dictionary = hazards[0]
+	var at: float = hazard["s"]
+	var lane: float = hazard["lane"]
+	if int(course.call("swept_obstacles", at - 8.0, at + 8.0, lane, lane, 0.0, 0.0)) != 1:
+		_fail("High-speed obstacle sweep missed a hazard.")
 		return
-	if float(runner.call("step_speed", 100000.0, 0.0, true, true, 1.0)) <= 100000.0:
-		_fail("Speed unexpectedly has an upper limit.")
+	if int(course.call("swept_obstacles", at - 8.0, at + 8.0, lane, lane, 0.0, 0.0)) != 0:
+		_fail("One obstacle hit applied more than once.")
 		return
-	
-	var hazards := get_nodes_in_group("obstacle_hazards")
-	if hazards.size() < 15:
-		_fail("Expected a course with multiple real obstacles; found %d." % hazards.size())
+	runner.set("speed", 80.0)
+	runner.call("apply_obstacle_hit")
+	if float(runner.get("speed")) >= 40.0 or bool(game.get("run_finished")):
+		_fail("Obstacle should drain momentum without ending the run.")
 		return
-	
-	# Make the baseline deterministic: _process has already advanced the storm one frame.
+	course.call("stream", 6500.0)
+	chunks = course.get("chunks")
+	if chunks.size() > 8 or not bool(course.call("has_distance", 6700.0)) or chunks.has(0):
+		_fail("Endless streaming failed to recycle old track chunks.")
+		return
 	game.call("_restart")
-	var original_speed: float = float(storm.get("speed"))
-	var original_x: float = float(storm.get("front_x"))
+	var original_speed: float = storm.get("speed")
+	var original_s: float = storm.get("front_s")
 	storm.call("advance", 10.0)
-	if float(storm.get("speed")) <= original_speed or float(storm.get("front_x")) <= original_x:
-		_fail("Storm must move forward and accelerate over time.")
+	if float(storm.get("speed")) <= original_speed or float(storm.get("front_s")) <= original_s:
+		_fail("Storm must advance and accelerate.")
 		return
-	
-	# An obstacle must actually end a run, and restart must reset the storm.
-	game.call("_on_hazard_hit", runner)
+	game.call("_lose", "TEST")
 	if not bool(game.get("run_finished")):
-		_fail("Hazard collision did not end the run.")
+		_fail("Storm failure did not finish the run.")
 		return
 	game.call("_restart")
-	if bool(game.get("run_finished")) or absf(float(storm.get("speed")) - original_speed) > 0.001:
-		_fail("Restart state mismatch: run_finished=%s, storm start=%.6f, actual=%.6f" % [str(game.get("run_finished")), original_speed, float(storm.get("speed"))])
+	if bool(game.get("run_finished")) or absf(float(storm.get("speed")) - original_speed) > 0.001 or absf(float(storm.get("front_s")) - original_s) > 0.001:
+		_fail("Restart did not restore the storm.")
 		return
-	
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
+	print("PASS: banked turns, true inversions, seamless endless streaming, nonfatal obstacles")
 	game.queue_free()
 	quit(0)
 

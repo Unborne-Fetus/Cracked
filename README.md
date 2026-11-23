@@ -1,51 +1,27 @@
 # Cracked — VECTOR VELOCITY
 
-**A playable 3D momentum-running prototype in Godot 4.7.2**, designed for WebGL 2 browsers. Inspired by the *feel* of downhill speedrunners and the simplicity of vector arcade visuals, but with original movement code and generated geometry.
+An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 
-## ▶ Browser build
-
-Once the **Build & Publish Browser Prototype** GitHub Action succeeds and GitHub Pages is set to **GitHub Actions**:
-
-**https://unborne-fetus.github.io/Cracked/**
-
-The workflow also produces a downloadable \`vector-velocity-web\` artifact. The web build uses the Godot **Compatibility** renderer with **threads disabled**, so it can run on standard HTTPS GitHub Pages without COOP/COEP headers.
-
-> If Pages is not yet enabled, open **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+**Play:** https://unborne-fetus.github.io/Cracked/
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| A / D or ← / → | Steer sideways |
+| A / D or Left / Right | Steer across the track |
+| Hold Shift, Ctrl, S or Down | Slide |
 | Space | Jump |
-| V or C | Toggle first-person / third-person |
-| Hold Shift, Ctrl, S or ↓ | Slide on flat/downhill ground; uphill sliding is blocked |
+| V or C | First-person / third-person |
 | R | Restart |
-| Controller left stick | Steer |
-| Controller A | Jump |
-| Hold controller B | Slide |
-| Touch arrows, SLIDE, JUMP, VIEW | Mobile / tablet browsers |
+| Controller left stick / A / B | Steer / jump / slide |
+| Touch buttons | Steer, slide, jump, camera |
 
-You move automatically in the +X direction. **Hold slide on flat or downhill terrain to gain speed**. Running, jumping, and landing do not grant horizontal speed. **Uphill inclines disable sliding**, and friction slows you down when not sliding. There is **no upper speed cap**. Avoid glowing columns and barriers (or jump over the short hurdles). A translucent neon storm starts behind you and **accelerates over time**; it ends the run if it catches you. Reach the gold gate at 1035 meters to set a time. Your best time is saved locally in the browser.
+Sliding on flat or downhill track builds momentum. Sliding uphill is allowed but rapidly drains speed. Running and jumping do not accelerate the player. There is no maximum speed. Obstacles take away 70% of current speed without ending the run. Jump over low barriers or steer around taller ones. The pursuing storm continuously accelerates; being caught ends the run.
 
-## Technical features
+## Endless track
 
-- 3D \`CharacterBody3D\` player with uncapped horizontal speed, slide-only acceleration on flat/downhill slopes, uphill slide lockout, air steering and speed-dependent camera field of view.
-- Dynamically generated dark terrain mesh; neon grid lines and physics collision share one mathematical height function.
-- Lightweight unshaded materials; no external models, images or commercial assets.
-- First-person and third-person follow cameras.
-- Neon obstacle hazards with continuous movement collision sweep, glowing course arches, a finish gate, on-screen HUD, touch buttons and saved best times.
-- A visible storm wall that chases the player and increases its speed continuously, restarting from its initial speed with each run.
-- GitHub Actions CI: import check, startup smoke test, terrain grounding regression, slide/storm/obstacle regression, Web export and GitHub Pages deployment.
+The course is generated in connected 192-meter sections. Hills, sweeping turns, steeply banked corners and full vertical inversions are generated from continuous local frames. After an introductory sequence, the track uses seeded random sections. The runner adheres to the track in its local orientation, including upside down. Track chunks are created ahead and removed behind; world coordinates are periodically rebased to keep precision stable. The storm follows arc-length progress instead of world X. Records track longest distance.
 
-## Open locally
+## Development
 
-1. Install **Godot 4.7.2 (standard, not .NET)**.
-2. Clone this repository and open \`project.godot\`.
-3. Press **F6** or **F5** to play (F5 runs the main scene).
-4. To export manually: install the matching **Web export templates**, choose **Project → Export → Web**, and export to \`build/web/index.html\`.
-5. Serve the \`build/web\` directory over HTTP(S); opening \`index.html\` directly as a \`file://\` URL will not work.
-
-### Prototype scope / known limitations
-
-This is a first-pass movement test with one handcrafted mathematical terrain profile (not infinite procedural generation). Multiplayer, menus, audio, graphical postprocessing, and level selection are future work. Desktop keyboard or controller is the recommended first test; mobile uses basic button controls.
+Open project.godot with Godot 4.7.2 and press F5. The Web export uses Compatibility rendering and single-threaded templates. GitHub Actions checks startup, ground contact, inversion orientation, track seams, endless chunk recycling, momentum, obstacle and storm rules before deploying a unique versioned browser build to GitHub Pages.

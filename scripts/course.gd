@@ -1,92 +1,145 @@
 extends Node3D
+## Endless ribbon generator. Progress is arc length, not world X.
+## Each chunk owns its mesh, collision surface and obstacles.
 
-signal hazard_hit(body: Node3D)
-## Procedural static test course. A visible grid and the physics collider are
-## built from the same height function, so the wireframe matches every slope.
+const CHUNK_LENGTH := 192.0
+const STEP := 2.0
+const STEPS := 96
+const HALF_WIDTH := 9.0
+const AHEAD := 5
+const BEHIND := 2
+const REBASE_DISTANCE := 2048.0
 
-const LENGTH := 1050.0
-const HALF_WIDTH := 24.0
-const STEP_X := 4.0
-const STEP_Z := 3.0
-
-var surface_material: StandardMaterial3D
-var line_material: StandardMaterial3D
+var chunks: Dictionary = {}
+var next_index := 0
+var tail := Vector3.ZERO
+var yaw := 0.0
+var rng := RandomNumberGenerator.new()
+var surface_mat: StandardMaterial3D
+var line_mat: StandardMaterial3D
+var hazard_mat: StandardMaterial3D
+var stripe_mat: StandardMaterial3D
+var origin_shift := Vector3.ZERO
 
 func _ready() -> void:
-	_make_materials()
-	_build_ground()
-	_build_decorations()
+	surface_mat = _material(Color(0.012, 0.018, 0.062))
+	line_mat = _material(Color.WHITE)
+	line_mat.vertex_color_use_as_albedo = true
+	hazard_mat = _material(Color(1.0, 0.12, 0.36))
+	stripe_mat = _material(Color(1.0, 0.77, 0.22))
+	reset_course(4731)
 
-func surface_height(x: float, z: float) -> float:
-	var bank: float = pow(absf(z) / HALF_WIDTH, 2.0) * 2.6
-	return -0.065 * x + sin(x * 0.023) * 5.8 + sin(x * 0.064) * 1.65 + bank
+func _material(color: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = color
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
 
-func _make_materials() -> void:
-	surface_material = StandardMaterial3D.new()
-	surface_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	surface_material.albedo_color = Color(0.009, 0.015, 0.052)
-	surface_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	line_material = StandardMaterial3D.new()
-	line_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	line_material.vertex_color_use_as_albedo = true
-	line_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+func reset_course(seed_value: int) -> void:
+	for data in chunks.values():
+		var node: Node3D = data["node"]
+		remove_child(node)
+		node.queue_free()
+	chunks.clear()
+	next_index = 0
+	tail = Vector3.ZERO
+	yaw = 0.0
+	origin_shift = Vector3.ZERO
+	rng.seed = seed_value
+	stream(0.0)
 
-func _point(x: float, z: float, offset: float = 0.0) -> Vector3:
-	return Vector3(x, surface_height(x, z) + offset, z)
+func _kind(index: int) -> String:
+	# Opening sequence introduces each mechanic; thereafter seeded variety.
+	if index == 0:
+		return "HILLS"
+	if index == 1:
+		return "BANKED TURN"
+	if index == 2:
+		return "INVERSION"
+	if index == 3:
+		return "TURN"
+	var choice: int = rng.randi_range(0, 4)
+	var kinds: Array[String] = ["HILLS", "TURN", "BANKED TURN", "INVERSION", "HILLS"]
+	return kinds[choice]
 
-func _build_ground() -> void:
-	var fill := SurfaceTool.new()
-	fill.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var collision_vertices := PackedVector3Array()
-	var nx := int(LENGTH / STEP_X)
-	var nz := int(HALF_WIDTH * 2.0 / STEP_Z)
-	for ix in range(nx):
-		var x := float(ix) * STEP_X
-		for iz in range(nz):
-			var z := -HALF_WIDTH + float(iz) * STEP_Z
-			var a := _point(x, z)
-			var b := _point(x + STEP_X, z)
-			var c := _point(x, z + STEP_Z)
-			var d := _point(x + STEP_X, z + STEP_Z)
-			for v in [a, c, b, b, c, d]:
-				fill.add_vertex(v)
-				collision_vertices.append(v)
-	fill.generate_normals()
-	var ground := MeshInstance3D.new()
-	ground.mesh = fill.commit()
-	ground.material_override = surface_material
-	add_child(ground)
-	var physics_body := StaticBody3D.new()
-	physics_body.collision_layer = 1
-	physics_body.collision_mask = 0
-	var collider := CollisionShape3D.new()
-	var shape := ConcavePolygonShape3D.new()
-	# Terrain triangles may be approached from either side during high-speed landings.
-	# Without backface collisions, the body can pass through one-sided faces.
-	shape.backface_collision = true
-	shape.set_faces(collision_vertices)
-	collider.shape = shape
-	physics_body.add_child(collider)
-	add_child(physics_body)
-	
-	var grid := SurfaceTool.new()
-	grid.begin(Mesh.PRIMITIVE_LINES)
-	for ix in range(nx + 1):
-		var x := float(ix) * STEP_X
-		var tint := Color(0.96, 0.12, 0.62) if ix % 10 == 0 else Color(0.05, 0.66, 0.91)
-		for iz in range(nz):
-			var z := -HALF_WIDTH + float(iz) * STEP_Z
-			_line(grid, _point(x, z, 0.10), _point(x, z + STEP_Z, 0.10), tint)
-	for iz in range(nz + 1):
-		var z := -HALF_WIDTH + float(iz) * STEP_Z
-		var tint := Color(0.99, 0.20, 0.64) if iz == 0 or iz == nz else Color(0.05, 0.52, 0.82)
-		for ix in range(nx):
-			var x := float(ix) * STEP_X
-			_line(grid, _point(x, z, 0.10), _point(x + STEP_X, z, 0.10), tint)
-	var grid_visual := MeshInstance3D.new()
-	grid_visual.mesh = grid.commit()
-	grid_visual.material_override = line_material
-	add_child(grid_visual)
+func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float) -> Basis:
+	var angle := lerpf(start_yaw, target_yaw, smoothstep(0.0, 1.0, u))
+	var pitch := 0.0
+	var roll := 0.0
+	if kind == "HILLS":
+		pitch = -0.32 * sin(TAU * u) - 0.15 * sin(PI * u)
+	elif kind == "BANKED TURN":
+		roll = signf(target_yaw - start_yaw) * 0.78 * sin(PI * u)
+	elif kind == "TURN":
+		roll = signf(target_yaw - start_yaw) * 0.22 * sin(PI * u)
+	elif kind == "INVERSION":
+		pitch = TAU * u
+	var heading := Vector3(cos(angle), 0, sin(angle))
+	var side := Vector3(-sin(angle), 0, cos(angle))
+	var forward := heading * cos(pitch) + Vector3.UP * sin(pitch)
+	if kind == "INVERSION":
+		# Offset the loop sideways so its exit does not overlap the entrance.
+		forward += side * (0.34 * sin(PI * u) * sin(PI * u))
+	forward = forward.normalized()
+	var right := (side - forward * side.dot(forward)).normalized().rotated(forward, roll)
+	var up := right.cross(forward).normalized()
+	return Basis(right, up, -forward).orthonormalized()
+
+func _build_chunk(index: int) -> void:
+	var kind := _kind(index)
+	var start_yaw := yaw
+	var target_yaw := yaw
+	if kind == "TURN" or kind == "BANKED TURN":
+		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
+		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 1.35), -1.25, 1.25)
+	var node := Node3D.new()
+	node.name = "Track_%d" % index
+	node.position = tail
+	add_child(node)
+	var points: Array[Transform3D] = []
+	var p := Vector3.ZERO
+	for i in range(STEPS + 1):
+		var u := float(i) / float(STEPS)
+		var basis := _orientation(kind, u, start_yaw, target_yaw)
+		points.append(Transform3D(basis, p))
+		if i < STEPS:
+			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw)
+			p += -mid.z * STEP
+	tail += p
+	yaw = target_yaw
+	var hazards: Array[Dictionary] = []
+	_build_mesh(node, points)
+	# Leave space before the first obstacle and between hazards.
+	var positions: Array[float] = [60.0, 115.0, 157.0]
+	if index == 0:
+		positions = [82.0, 137.0]
+	for i in range(positions.size()):
+		var at := positions[i]
+		var lane := float(rng.randi_range(-2, 2)) * 3.0
+		var width := 2.7 if i % 2 == 0 else 4.2
+		var height := 3.0 if i % 2 == 0 else 1.1
+		var hazard := {"s": float(index) * CHUNK_LENGTH + at, "lane": lane, "width": width, "height": height, "used": false}
+		hazards.append(hazard)
+		var frame: Transform3D = points[int(at / STEP)]
+		# Use the exact interpolated frame for the rendered obstacle.
+		frame = frame.interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
+		var center := frame.origin + frame.basis.x * lane + frame.basis.y * (height * 0.5)
+		_add_box(node, Transform3D(frame.basis, center), Vector3(width, height, 2.4), hazard_mat)
+		_add_box(node, Transform3D(frame.basis, center + frame.basis.y * (height * 0.5)), Vector3(width + 0.12, 0.13, 2.5), stripe_mat)
+	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards}
+
+func _add_box(parent: Node3D, frame: Transform3D, size: Vector3, mat: Material) -> void:
+	var box := BoxMesh.new()
+	box.size = size
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = box
+	mesh.material_override = mat
+	mesh.transform = frame
+	parent.add_child(mesh)
+
+func _vertex(frame: Transform3D, lateral: float, lift: float = 0.0) -> Vector3:
+	return frame.origin + frame.basis.x * lateral + frame.basis.y * lift
 
 func _line(tool: SurfaceTool, a: Vector3, b: Vector3, color: Color) -> void:
 	tool.set_color(color)
@@ -94,92 +147,114 @@ func _line(tool: SurfaceTool, a: Vector3, b: Vector3, color: Color) -> void:
 	tool.set_color(color)
 	tool.add_vertex(b)
 
-func _neon(color: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.albedo_color = color
-	m.emission_enabled = true
-	m.emission = color
-	m.emission_energy_multiplier = 1.5
-	return m
-
-func _box(size: Vector3, where: Vector3, material: Material) -> void:
-	var visual := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	visual.mesh = mesh
-	visual.position = where
-	visual.material_override = material
-	add_child(visual)
-
-func _gate(x: float, color: Color) -> void:
-	var mat := _neon(color)
-	var left_y := surface_height(x, -21.0)
-	var right_y := surface_height(x, 21.0)
-	_box(Vector3(0.55, 13.0, 0.55), Vector3(x, left_y + 6.5, -21), mat)
-	_box(Vector3(0.55, 13.0, 0.55), Vector3(x, right_y + 6.5, 21), mat)
-	_box(Vector3(0.7, 0.55, 42.5), Vector3(x, maxf(left_y, right_y) + 13.0, 0), mat)
-
-func _hazard(x: float, z: float, size: Vector3, color: Color) -> void:
-	# Obstacle visuals and trigger share exactly the same dimensions.
-	# Area3D hazards are reliable even when the player is moving very fast.
-	var center := Vector3(x, surface_height(x, z) + size.y * 0.5 + 0.05, z)
-	_box(size, center, _neon(color))
-	# Top stripe makes tall pillars and low jumpable hurdles easy to read.
-	_box(Vector3(size.x + 0.2, 0.18, size.z + 0.2),
-		center + Vector3(0, size.y * 0.5, 0), _neon(Color(1.0, 0.73, 0.23)))
-	var area := Area3D.new()
-	area.name = "Obstacle"
-	area.add_to_group("obstacle_hazards")
-	area.collision_layer = 4
-	area.collision_mask = 2
-	area.monitoring = true
-	var shape := BoxShape3D.new()
-	shape.size = size
+func _build_mesh(node: Node3D, points: Array[Transform3D]) -> void:
+	var fill := SurfaceTool.new()
+	fill.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var faces := PackedVector3Array()
+	var grid := SurfaceTool.new()
+	grid.begin(Mesh.PRIMITIVE_LINES)
+	var blue := Color(0.08, 0.65, 0.94)
+	var pink := Color(0.99, 0.12, 0.59)
+	for i in range(STEPS):
+		var a := _vertex(points[i], -HALF_WIDTH)
+		var b := _vertex(points[i], HALF_WIDTH)
+		var c := _vertex(points[i+1], -HALF_WIDTH)
+		var d := _vertex(points[i+1], HALF_WIDTH)
+		for v: Vector3 in [a, c, b, b, c, d]:
+			fill.add_vertex(v)
+			faces.append(v)
+		for lane in range(7):
+			var z := -HALF_WIDTH + float(lane) * HALF_WIDTH / 3.0
+			_line(grid, _vertex(points[i], z, 0.035), _vertex(points[i+1], z, 0.035), pink if lane == 0 or lane == 6 else blue)
+		if i % 2 == 0:
+			_line(grid, _vertex(points[i], -HALF_WIDTH, 0.04), _vertex(points[i], HALF_WIDTH, 0.04), pink if i % 12 == 0 else blue)
+	var solid := MeshInstance3D.new()
+	solid.mesh = fill.commit()
+	solid.material_override = surface_mat
+	node.add_child(solid)
+	var wire := MeshInstance3D.new()
+	wire.mesh = grid.commit()
+	wire.material_override = line_mat
+	node.add_child(wire)
+	# Collider exists for world queries and tools. The arcade runner follows
+	# the same ribbon parametrically, so inversion contact is deterministic.
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.collision_mask = 0
 	var collider := CollisionShape3D.new()
+	var shape := ConcavePolygonShape3D.new()
+	shape.backface_collision = true
+	shape.set_faces(faces)
 	collider.shape = shape
-	area.add_child(collider)
-	area.position = center
-	add_child(area)
-	area.body_entered.connect(_on_hazard_body_entered)
+	body.add_child(collider)
+	node.add_child(body)
 
-func _on_hazard_body_entered(body: Node3D) -> void:
-	if body is CharacterBody3D:
-		hazard_hit.emit(body)
+func stream(distance: float) -> void:
+	var current := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	while next_index <= current + AHEAD:
+		_build_chunk(next_index)
+		next_index += 1
+	for key in chunks.keys():
+		if int(key) < current - BEHIND:
+			var node: Node3D = chunks[key]["node"]
+			remove_child(node)
+			node.queue_free()
+			chunks.erase(key)
+	# Keep floating-point coordinates small even during very long runs.
+	var frame := sample(distance)
+	if frame.origin.length() > REBASE_DISTANCE:
+		var shift := frame.origin
+		for data in chunks.values():
+			var node: Node3D = data["node"]
+			node.position -= shift
+		tail -= shift
+		origin_shift += shift
 
-func _build_decorations() -> void:
-	# Wide luminous gates indicate progress; only the marked hazard blocks hurt.
-	for x in [50.0, 180.0, 350.0, 540.0, 735.0, 950.0]:
-		_gate(x, Color(0.94, 0.13, 0.64) if int(x) % 2 == 0 else Color(0.1, 0.96, 1.0))
-	
-	# Alternating single pillars force lane changes. Each leaves several exits.
-	var pillars: Array[Vector2] = [
-		Vector2(110.0, 0.0), Vector2(162.0, -11.0),
-		Vector2(163.0, 11.0), Vector2(288.0, 8.0),
-		Vector2(354.0, -4.0), Vector2(432.0, -13.0),
-		Vector2(434.0, 10.0), Vector2(575.0, -7.0),
-		Vector2(646.0, 9.0), Vector2(719.0, -13.0),
-		Vector2(720.0, 13.0), Vector2(793.0, 0.0),
-		Vector2(884.0, 12.0), Vector2(968.0, -7.0)
-	]
-	for p in pillars:
-		_hazard(p.x, p.y, Vector3(3.4, 6.0, 4.2), Color(1.0, 0.19, 0.41))
-	
-	# Wide barriers are avoidable by steering, while short hurdles can be jumped.
-	_hazard(228.0, -13.0, Vector3(3.2, 5.8, 15.0), Color(0.94, 0.11, 0.58))
-	_hazard(503.0, 0.0, Vector3(3.0, 1.7, 12.0), Color(1.0, 0.44, 0.11))
-	_hazard(685.0, 14.0, Vector3(3.0, 5.8, 14.0), Color(0.94, 0.11, 0.58))
-	_hazard(925.0, 0.0, Vector3(3.0, 1.8, 15.0), Color(1.0, 0.44, 0.11))
-	
-	_gate(LENGTH - 15.0, Color(1.0, 0.83, 0.25))
-	_box(Vector3(1.4, 0.12, 44.0), Vector3(LENGTH - 15.0,
-		surface_height(LENGTH - 15.0, 0.0) + 0.14, 0.0), _neon(Color(1.0, 0.8, 0.25)))
-	
-	# Background vector pillars provide scale without texture dependencies.
-	var cyan := _neon(Color(0.06, 0.53, 0.83))
-	for i in range(16):
-		var x := 60.0 + float(i) * 61.0
-		for side in [-1.0, 1.0]:
-			var z: float = side * 39.0
-			_box(Vector3(0.35, 16.0 + float(i % 4) * 6.0, 0.35),
-				Vector3(x, surface_height(x, z) + 8.0, z), cyan)
+func has_distance(distance: float) -> bool:
+	return chunks.has(maxi(0, int(floor(distance / CHUNK_LENGTH))))
+
+func sample(distance: float) -> Transform3D:
+	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	if not chunks.has(index):
+		return Transform3D.IDENTITY
+	var data: Dictionary = chunks[index]
+	var points: Array[Transform3D] = data["points"]
+	var node: Node3D = data["node"]
+	var local_distance := distance - float(index) * CHUNK_LENGTH
+	if local_distance < 0.0:
+		var first := points[0]
+		first.origin += node.position - first.basis.z * local_distance
+		return first
+	var unit := clampf(local_distance / STEP, 0.0, float(STEPS))
+	var i := mini(int(floor(unit)), STEPS - 1)
+	var frame := points[i].interpolate_with(points[i+1], unit - float(i))
+	frame.origin += node.position
+	return frame
+
+func section_name(distance: float) -> String:
+	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	if not chunks.has(index):
+		return "TRACK"
+	return str(chunks[index]["kind"])
+
+func swept_obstacles(from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float) -> int:
+	var count := 0
+	if to_s <= from_s:
+		return count
+	for index in range(maxi(0, int(floor((from_s - 2.0) / CHUNK_LENGTH))), int(floor((to_s + 2.0) / CHUNK_LENGTH)) + 1):
+		if not chunks.has(index):
+			continue
+		var hazards: Array[Dictionary] = chunks[index]["hazards"]
+		for hazard in hazards:
+			if bool(hazard["used"]):
+				continue
+			var hs: float = hazard["s"]
+			if to_s < hs - 1.7 or from_s > hs + 1.7:
+				continue
+			var t := clampf((hs - from_s) / (to_s - from_s), 0.0, 1.0)
+			var lane := lerpf(from_lane, to_lane, t)
+			var height := lerpf(from_height, to_height, t)
+			if absf(lane - float(hazard["lane"])) <= float(hazard["width"]) * 0.5 + 0.55 and height < float(hazard["height"]):
+				hazard["used"] = true
+				count += 1
+	return count
