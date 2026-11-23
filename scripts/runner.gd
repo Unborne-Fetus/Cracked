@@ -19,6 +19,7 @@ var queued_jump := false
 var jump_held := false
 var grounded_last_frame := false
 var is_sliding := false
+var slide_blocked := false
 var touch_slide := false
 var gameplay_seconds := 0.0
 var avatar: Node3D
@@ -80,6 +81,7 @@ func reset_run(spawn_position: Vector3) -> void:
 	jump_held = false
 	grounded_last_frame = false
 	is_sliding = false
+	slide_blocked = false
 	touch_slide = false
 	gameplay_seconds = 0.0
 	set_physics_process(true)
@@ -138,6 +140,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.y -= GRAVITY * delta
 	is_sliding = grounded and slide_requested and can_slide_on_grade(grade)
+	slide_blocked = grounded and slide_requested and not can_slide_on_grade(grade)
 	speed = step_speed(speed, grade, grounded, slide_requested, delta)
 	# No propulsion, boost pads, collision bonuses, or upper velocity clamp.
 	velocity.x = speed
