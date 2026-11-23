@@ -56,6 +56,11 @@ jobs:
           set -euo pipefail
           godot --headless --path . --script res://tests/ground_contact.gd 2>&1 | tee /tmp/godot-collision.log
           grep -F 'PASS: terrain raycast hit and player grounded' /tmp/godot-collision.log
+      - name: Verify sliding, obstacles, and storm rules
+        run: |
+          set -euo pipefail
+          godot --headless --path . --script res://tests/gameplay_rules.gd 2>&1 | tee /tmp/godot-gameplay.log
+          grep -F 'PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm' /tmp/godot-gameplay.log
       - name: Export HTML5
         run: |
           set -euo pipefail
