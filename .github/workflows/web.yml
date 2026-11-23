@@ -51,6 +51,11 @@ jobs:
             echo "::error::Godot encountered script/runtime errors during startup"
             exit 1
           fi
+      - name: Verify the player lands on the collision mesh
+        run: |
+          set -euo pipefail
+          godot --headless --path . --script res://tests/ground_contact.gd 2>&1 | tee /tmp/godot-collision.log
+          grep -F 'PASS: terrain raycast hit and player grounded' /tmp/godot-collision.log
       - name: Export HTML5
         run: |
           set -euo pipefail
