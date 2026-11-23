@@ -21,6 +21,9 @@ var camera_label: Label
 var slide_label: Label
 var camera_track_s := 0.0
 var camera_track_clearance := 0.0
+var camera_rotation_ready := false
+var camera_goal := Basis.IDENTITY
+var camera_height := 0.0
 var storm_label: Label
 var section_label: Label
 var message_label: Label
@@ -54,6 +57,8 @@ func _ready() -> void:
 func _restart() -> void:
 	run_finished = false
 	run_time = 0.0
+	camera_rotation_ready = false
+	camera_height = 0.0
 	run_seed = randi()
 	course.reset_course(run_seed)
 	runner.reset_run(course)
@@ -86,9 +91,14 @@ func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> b
 		var t := float(i) / 16.0
 		var frame: Transform3D = course.sample(lerpf(from_s, to_s, t))
 		var point := a.lerp(b, t) - frame.origin
-		if absf(point.dot(frame.basis.x)) <= float(course.lane_limit()) + 1.0 and point.dot(frame.basis.y) < 0.55:
+		if absf(point.dot(frame.basis.x)) <= float(course.lane_limit(lerpf(from_s, to_s, t))) + 1.0 and point.dot(frame.basis.y) < 0.55:
 			return false
 	return true
+
+func _aim_camera(target: Vector3, up: Vector3) -> void:
+	var direction := target - view_camera.position
+	if direction.length_squared() > 0.0001:
+		camera_goal = Basis.looking_at(direction.normalized(), up)
 
 func _update_camera(delta: float) -> void:
 	var player_s: float = runner.distance
@@ -97,10 +107,13 @@ func _update_camera(delta: float) -> void:
 	var up := frame.basis.y
 	var forward := -frame.basis.z
 	var pos: Vector3 = runner.position
+	# Camera stays on the correct side of the road; only orientation and
+	# the additional chase height are damped, never the bank-relative base.
+	camera_height = lerpf(camera_height, float(runner.height), 1.0 - exp(-delta * 8.0))
 	if first_person:
 		camera_track_s = player_s
 		view_camera.position = pos + up * 1.55
-		view_camera.look_at(view_camera.position + forward * 25.0, up)
+		_aim_camera(view_camera.position + forward * 25.0, up)
 	else:
 		var focus := pos + up * 1.35
 		# Sample the track AT the camera's trailing distance. Using the
@@ -110,21 +123,29 @@ func _update_camera(delta: float) -> void:
 		for trail: float in [11.0, 8.0, 5.0, 3.0]:
 			var s := maxf(0.0, player_s - trail)
 			var rear: Transform3D = course.sample(s)
-			var candidate := rear.origin + rear.basis.x * player_lane + rear.basis.y * (5.4 + float(runner.height))
+			var candidate := rear.origin + rear.basis.x * clampf(player_lane, -float(course.lane_limit(s)), float(course.lane_limit(s))) + rear.basis.y * (5.4 + camera_height)
 			if _camera_line_clear(candidate, focus, s, player_s):
 				camera_track_s = s
 				view_camera.position = candidate
-				view_camera.look_at(focus + forward * 0.8, rear.basis.y)
+				_aim_camera(focus + forward * 0.8, rear.basis.y)
 				selected = true
 				break
 		if not selected:
 			# Local fallback cannot be on the underside, even on a full roll.
 			camera_track_s = player_s
 			view_camera.position = pos + up * 3.6
-			view_camera.look_at(view_camera.position + forward * 22.0, up)
+			_aim_camera(view_camera.position + forward * 22.0, up)
 	var camera_frame: Transform3D = course.sample(camera_track_s)
 	camera_track_clearance = (view_camera.position - camera_frame.origin).dot(camera_frame.basis.y)
-	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.15, 78.0, 108.0), minf(delta * 7.0, 1.0))
+	# Quaternion interpolation avoids Euler flips near 180/360 degrees.
+	# A short time constant removes sudden orientation kicks without a
+	# long lag that would point the camera back through the ribbon.
+	if not camera_rotation_ready:
+		view_camera.basis = camera_goal
+		camera_rotation_ready = true
+	else:
+		view_camera.basis = view_camera.basis.slerp(camera_goal, 1.0 - exp(-delta * 11.0)).orthonormalized()
+	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.10, 78.0, 98.0), 1.0 - exp(-delta * 4.0))
 
 func _update_hud() -> void:
 	speed_label.text = "%d" % int(runner.speed * 3.6)
@@ -162,6 +183,7 @@ func _lose(reason: String) -> void:
 
 func _toggle_camera() -> void:
 	first_person = not first_person
+	camera_rotation_ready = false
 	runner.set_first_person(first_person)
 	_update_camera(1.0)
 

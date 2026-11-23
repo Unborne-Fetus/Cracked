@@ -21,6 +21,8 @@ var rng := RandomNumberGenerator.new()
 var surface_mat: StandardMaterial3D
 var line_mat: StandardMaterial3D
 var origin_shift := Vector3.ZERO
+var terrain_bag: Array[String] = []
+var last_kind := ""
 
 func _ready() -> void:
 	surface_mat = _material(Color.WHITE)
@@ -47,6 +49,8 @@ func reset_course(seed_value: int) -> void:
 	yaw = 0.0
 	origin_shift = Vector3.ZERO
 	rng.seed = seed_value
+	terrain_bag.clear()
+	last_kind = ""
 	stream(0.0)
 
 func _kind(index: int) -> String:
@@ -63,10 +67,52 @@ func _kind(index: int) -> String:
 		return "180 BANK"
 	if index == 5:
 		return "360 BANK"
-	var kinds: Array[String] = ["HILLS", "TURN", "BANKED TURN", "HILLS", "180 BANK", "360 BANK", "BANKED TURN"]
-	return kinds[rng.randi_range(0, kinds.size() - 1)]
+	# Seeded shuffle bag avoids repeated runs of the same terrain. The
+	# two extreme banks occur much less often than the everyday profiles.
+	if index == 6:
+		return "LONG DESCENT"
+	if index == 7:
+		return "S CURVE"
+	if index == 8:
+		return "NARROW BRIDGE"
+	if index == 9:
+		return "ROLLING RIDGES"
+	if index == 10:
+		return "CAMBER WAVE"
+	if index == 11:
+		return "STEEP CLIMB"
+	if index == 12:
+		return "DROP AND RECOVERY"
+	if index == 13:
+		return "BANKED DESCENT"
+	if index == 14:
+		return "WIDE BASIN"
+	if index == 15:
+		return "CHICANE"
+	if terrain_bag.is_empty():
+		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK"])
+	var choice := rng.randi_range(0, terrain_bag.size() - 1)
+	if terrain_bag.size() > 1 and terrain_bag[choice] == last_kind:
+		choice = (choice + 1) % terrain_bag.size()
+	var result: String = terrain_bag[choice]
+	terrain_bag.remove_at(choice)
+	return result
 
-func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, bank_sign: float = 1.0) -> Basis:
+func width_for_kind(kind: String, u: float) -> float:
+	var envelope := smoothstep(0.0, 0.25, u) * (1.0 - smoothstep(0.75, 1.0, u))
+	if kind == "NARROW BRIDGE":
+		return lerpf(HALF_WIDTH, 11.0, envelope)
+	if kind == "WIDE BASIN":
+		return lerpf(HALF_WIDTH, 31.0, envelope)
+	return HALF_WIDTH
+
+func half_width_at(distance: float) -> float:
+	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	var kind := section_name(distance)
+	var u := clampf((distance - float(index) * CHUNK_LENGTH) / CHUNK_LENGTH, 0.0, 1.0)
+	return width_for_kind(kind, u)
+
+func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, bank_sign: float = 1.0, strength: float = 1.0) -> Basis:
 	var angle := lerpf(start_yaw, target_yaw, smoothstep(0.0, 1.0, u))
 	var pitch := 0.0
 	var roll := 0.0
@@ -76,6 +122,28 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 		roll = signf(target_yaw - start_yaw) * 0.78 * sin(PI * u)
 	elif kind == "TURN":
 		roll = signf(target_yaw - start_yaw) * 0.22 * sin(PI * u)
+	elif kind == "LONG DESCENT":
+		pitch = -0.44 * sin(PI * u) * strength
+	elif kind == "STEEP CLIMB":
+		pitch = 0.39 * sin(PI * u) * strength
+	elif kind == "ROLLING RIDGES":
+		pitch = 0.23 * sin(TAU * 2.0 * u) * strength
+	elif kind == "DROP AND RECOVERY":
+		pitch = (-0.62 * exp(-pow((u - 0.28) / 0.15, 2.0)) + 0.30 * exp(-pow((u - 0.68) / 0.17, 2.0))) * sin(PI * u) * strength
+	elif kind == "S CURVE":
+		angle = clampf(start_yaw + bank_sign * 0.78 * sin(TAU * u) * sin(PI * u) * strength, -1.25, 1.25)
+		roll = bank_sign * 0.42 * sin(TAU * u) * sin(PI * u)
+	elif kind == "CHICANE":
+		angle = clampf(start_yaw + bank_sign * 0.58 * sin(TAU * 2.0 * u) * sin(PI * u) * strength, -1.25, 1.25)
+		roll = bank_sign * 0.32 * sin(TAU * 2.0 * u) * sin(PI * u)
+	elif kind == "CAMBER WAVE":
+		roll = bank_sign * 0.63 * sin(TAU * u) * sin(PI * u) * strength
+		pitch = -0.10 * sin(TAU * u)
+	elif kind == "BANKED DESCENT":
+		pitch = -0.34 * sin(PI * u) * strength
+		roll = signf(target_yaw - start_yaw) * 0.68 * sin(PI * u)
+	elif kind == "WIDE BASIN":
+		pitch = -0.20 * sin(TAU * u) * strength
 	elif kind == "180 BANK":
 		# A smooth half-roll to an inverted stretch, then unwind.
 		# Entry and exit are both upright so neighboring chunks join cleanly.
@@ -93,10 +161,12 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 
 func _build_chunk(index: int) -> void:
 	var kind := _kind(index)
+	last_kind = kind
+	var strength := 1.0 if index < 6 else rng.randf_range(0.78, 1.16)
 	var start_yaw := yaw
 	var target_yaw := yaw
 	var bank_sign := -1.0 if rng.randf() < 0.5 else 1.0
-	if kind == "TURN" or kind == "BANKED TURN":
+	if kind == "TURN" or kind == "BANKED TURN" or kind == "BANKED DESCENT":
 		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
 		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 1.35), -1.25, 1.25)
 	var node := Node3D.new()
@@ -107,21 +177,24 @@ func _build_chunk(index: int) -> void:
 	var p := Vector3.ZERO
 	for i in range(STEPS + 1):
 		var u := float(i) / float(STEPS)
-		var basis := _orientation(kind, u, start_yaw, target_yaw, bank_sign)
+		var basis := _orientation(kind, u, start_yaw, target_yaw, bank_sign, strength)
 		points.append(Transform3D(basis, p))
 		if i < STEPS:
-			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw, bank_sign)
+			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw, bank_sign, strength)
 			p += -mid.z * STEP
 	tail += p
 	yaw = target_yaw
 	var hazards: Array[Dictionary] = []
-	_build_mesh(node, points, float(index) * CHUNK_LENGTH)
-	# Leave space before the first obstacle and between hazards.
+	_build_mesh(node, points, float(index) * CHUNK_LENGTH, kind)
+	# Leave room to experience the geometry itself, without filling every
+	# new terrain feature with barriers.
 	var positions: Array[float] = [35.0, 72.0, 108.0, 144.0, 174.0]
 	if index == 0:
 		positions = [82.0, 137.0]
+	elif kind == "NARROW BRIDGE" or kind == "ROLLING RIDGES" or kind == "DROP AND RECOVERY" or kind == "CHICANE":
+		positions = []
 	elif index >= 2 and kind != "180 BANK" and kind != "360 BANK":
-		positions = [18.0, 40.0, 140.0, 161.0, 180.0]
+		positions = [18.0, 40.0, 140.0, 161.0, 180.0] if index < 6 else [32.0, 156.0]
 	elif kind == "180 BANK" or kind == "360 BANK":
 		positions = [30.0, 160.0]
 	for i in range(positions.size()):
@@ -139,7 +212,7 @@ func _build_chunk(index: int) -> void:
 		_spawn_obstacle(node, hazards, frame, float(index) * CHUNK_LENGTH + at, lane, shape_id)
 	# Route gates have a guaranteed opening, but it moves across the track.
 	# Wide tall walls discourage jumping over every obstacle instead of steering.
-	if index >= 2 and kind != "180 BANK" and kind != "360 BANK":
+	if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and (index < 6 or (kind == "HILLS" or kind == "TURN") and index % 3 == 0):
 		var gate_at := 94.0
 		var gate_frame := points[int(gate_at / STEP)]
 		var opening := -10.0 if index % 2 == 0 else 10.0
@@ -230,8 +303,8 @@ func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transfor
 		edge_mesh.transform = Transform3D(frame.basis, frame.origin + frame.basis.x * edge + frame.basis.y * wall_height * 0.5)
 		node.add_child(edge_mesh)
 
-func lane_limit() -> float:
-	return HALF_WIDTH - 0.75
+func lane_limit(distance: float = -1.0) -> float:
+	return (HALF_WIDTH if distance < 0.0 else half_width_at(distance)) - 0.75
 
 func _vertex(frame: Transform3D, lateral: float, lift: float = 0.0) -> Vector3:
 	return frame.origin + frame.basis.x * lateral + frame.basis.y * lift
@@ -255,7 +328,7 @@ func _quad(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, ca
 	_tri(tool, a, c, b, ca, cb, ca)
 	_tri(tool, b, c, d, ca, cb, cb)
 
-func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float) -> void:
+func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind: String) -> void:
 	var fill := SurfaceTool.new()
 	fill.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var faces := PackedVector3Array()
@@ -264,36 +337,41 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float) -> vo
 	for i in range(STEPS):
 		var s0 := start_s + float(i) * STEP
 		var s1 := s0 + STEP
+		var width0 := width_for_kind(kind, float(i) / float(STEPS))
+		var width1 := width_for_kind(kind, float(i + 1) / float(STEPS))
 		var dark0 := track_color(s0, 0.0, 0.72, 0.105)
 		var dark1 := track_color(s1, 0.0, 0.72, 0.105)
 		var underside0 := track_color(s0, 0.02, 0.65, 0.065)
 		var underside1 := track_color(s1, 0.02, 0.65, 0.065)
 		for j in range(CROSS_STEPS):
-			var z0 := lerpf(-HALF_WIDTH, HALF_WIDTH, float(j) / float(CROSS_STEPS))
-			var z1 := lerpf(-HALF_WIDTH, HALF_WIDTH, float(j + 1) / float(CROSS_STEPS))
+			var z0 := lerpf(-width0, width0, float(j) / float(CROSS_STEPS))
+			var z1 := lerpf(-width0, width0, float(j + 1) / float(CROSS_STEPS))
+			var next_z0 := lerpf(-width1, width1, float(j) / float(CROSS_STEPS))
+			var next_z1 := lerpf(-width1, width1, float(j + 1) / float(CROSS_STEPS))
 			var a := _vertex(points[i], z0)
 			var b := _vertex(points[i], z1)
-			var c := _vertex(points[i+1], z0)
-			var d := _vertex(points[i+1], z1)
+			var c := _vertex(points[i+1], next_z0)
+			var d := _vertex(points[i+1], next_z1)
 			_quad(fill, a, b, c, d, dark0, dark1)
 			for v: Vector3 in [a, c, b, b, c, d]:
 				faces.append(v)
 			var ba := _vertex(points[i], z0, -THICKNESS)
 			var bb := _vertex(points[i], z1, -THICKNESS)
-			var bc := _vertex(points[i+1], z0, -THICKNESS)
-			var bd := _vertex(points[i+1], z1, -THICKNESS)
+			var bc := _vertex(points[i+1], next_z0, -THICKNESS)
+			var bd := _vertex(points[i+1], next_z1, -THICKNESS)
 			_quad(fill, bb, ba, bd, bc, underside0, underside1)
 			# Both running-surface grid and collider use the same tessellation.
 			if i % 4 == 0:
 				_line(grid, _vertex(points[i], z0, 0.075), _vertex(points[i], z1, 0.075), track_color(s0, 0.0, 0.8, 0.7), track_color(s0, 0.0, 0.8, 0.7))
 		for j in range(CROSS_STEPS + 1):
-			var z := lerpf(-HALF_WIDTH, HALF_WIDTH, float(j) / float(CROSS_STEPS))
+			var z := lerpf(-width0, width0, float(j) / float(CROSS_STEPS))
+			var next_z := lerpf(-width1, width1, float(j) / float(CROSS_STEPS))
 			var edge := j == 0 or j == CROSS_STEPS
 			var ca := track_color(s0, 0.19 if edge else 0.0)
 			var cb := track_color(s1, 0.19 if edge else 0.0)
-			_line(grid, _vertex(points[i], z, 0.075), _vertex(points[i+1], z, 0.075), ca, cb)
-		for side: float in [-HALF_WIDTH, HALF_WIDTH]:
-			_quad(fill, _vertex(points[i], side), _vertex(points[i], side, -THICKNESS), _vertex(points[i+1], side), _vertex(points[i+1], side, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))
+			_line(grid, _vertex(points[i], z, 0.075), _vertex(points[i+1], next_z, 0.075), ca, cb)
+		for side: float in [-1.0, 1.0]:
+			_quad(fill, _vertex(points[i], side * width0), _vertex(points[i], side * width0, -THICKNESS), _vertex(points[i+1], side * width1), _vertex(points[i+1], side * width1, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))
 	var solid := MeshInstance3D.new()
 	solid.mesh = fill.commit()
 	solid.material_override = surface_mat

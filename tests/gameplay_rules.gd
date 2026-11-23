@@ -62,14 +62,15 @@ func _run_tests() -> void:
 	# The opening hill has negative normal curvature at 16 m.
 	# Slow players follow it, fast players leave the track without jumping.
 	var slow_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 22.0)
-	var fast_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 45.0)
-	if slow_normal >= 0.0 or fast_normal <= 0.5 or float(runner.call("natural_lift_impulse", fast_normal, 45.0)) < 3.5:
+	var fast_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 65.0)
+	var lift: float = runner.call("natural_lift_impulse", fast_normal, 65.0)
+	if slow_normal >= 0.0 or fast_normal <= 1.5 or lift <= 0.0 or lift > 2.6:
 		_fail("Terrain curvature did not distinguish low-speed contact from high-speed lift-off.")
 		return
 	runner.set("distance", 16.0)
 	runner.set("lane", 0.0)
 	runner.set("height", 0.0)
-	runner.set("speed", 45.0)
+	runner.set("speed", 65.0)
 	runner.set("vertical_speed", 0.0)
 	runner.set("queued_jump", false)
 	runner.call("sync_pose", course)
@@ -80,12 +81,18 @@ func _run_tests() -> void:
 		peak = maxf(peak, float(runner.get("height")))
 		if not bool(runner.call("is_grounded")):
 			airborne_frames += 1
-	if peak < 0.5 or airborne_frames < 12:
-		_fail("Natural takeoff did not produce meaningful airtime at 45 m/s.")
+	if peak < 0.1 or peak > 6.0 or airborne_frames < 6:
+		_fail("Natural takeoff is missing or excessively strong.")
 		return
 	if float(runner.call("landing_speed", 80.0, 35.0)) >= 70.0 or absf(float(runner.call("landing_speed", 80.0, 4.0)) - 80.0) > 0.001:
 		_fail("Hard landings must lose momentum while gentle landings preserve it.")
 		return
+	# Roll curvature is not a launch ramp, even near the edge at high speed.
+	for s in [780.0, 810.0, 864.0, 1000.0, 1056.0, 1100.0]:
+		for edge: float in [-20.0, 20.0]:
+			if float(runner.call("relative_normal_acceleration", course, s, edge, 250.0, 25.0)) > 0.0:
+				_fail("High-degree banking generates false lift.")
+				return
 	game.call("_restart")
 	# Faster launches produce higher jumps, without changing forward speed.
 	var low_jump: float = runner.call("jump_impulse_for_speed", 22.0)
@@ -183,6 +190,31 @@ func _run_tests() -> void:
 	if float(runner.get("speed")) >= 40.0 or bool(game.get("run_finished")):
 		_fail("Obstacle should drain momentum without ending the run.")
 		return
+	# Stream the new terrain showcase in order, verifying geometry and width.
+	for index in range(6, 16):
+		course.call("stream", float(index) * 192.0)
+		var kind: String = course.call("section_name", float(index) * 192.0 + 96.0)
+		var start_s := float(index) * 192.0
+		var expected: Array[String] = ["LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE"]
+		if kind != expected[index - 6]:
+			_fail("Missing terrain profile: " + expected[index - 6])
+			return
+		var middle: Transform3D = course.call("sample", start_s + 96.0)
+		if kind == "LONG DESCENT" and -middle.basis.z.y > -0.25:
+			_fail("Descent has no downhill grade.")
+			return
+		if kind == "STEEP CLIMB" and -middle.basis.z.y < 0.25:
+			_fail("Climb has no uphill grade.")
+			return
+		var width: float = course.call("lane_limit", start_s + 96.0)
+		if (kind == "NARROW BRIDGE" and width > 12.0) or (kind == "WIDE BASIN" and width < 29.0):
+			_fail("Variable width terrain was not generated.")
+			return
+		var left: Transform3D = course.call("sample", start_s - 0.01)
+		var right: Transform3D = course.call("sample", start_s + 0.01)
+		if left.origin.distance_to(right.origin) > 0.1 or left.basis.y.dot(right.basis.y) < 0.99:
+			_fail("New profile has a discontinuous seam.")
+			return
 	course.call("stream", 6500.0)
 	chunks = course.get("chunks")
 	if chunks.size() > 8 or not bool(course.call("has_distance", 6700.0)) or chunks.has(0):

@@ -15,12 +15,12 @@ const JUMP_SPEED_GAIN := 1.55
 const MAX_JUMP_IMPULSE := 45.0
 const GRAVITY := 24.0
 const CONTACT_PROBE := 3.0
-const CURVATURE_GAIN := 1.6
-const TAKEOFF_THRESHOLD := 0.5
-const MIN_TAKEOFF_SPEED := 30.0
-const NORMAL_ACCEL_LIMIT := 100.0
-const NATURAL_LIFT_MIN := 3.5
-const NATURAL_LIFT_MAX := 12.0
+const CURVATURE_GAIN := 1.05
+const TAKEOFF_THRESHOLD := 1.5
+const MIN_TAKEOFF_SPEED := 38.0
+const NORMAL_ACCEL_LIMIT := 32.0
+const NATURAL_LIFT_MIN := 0.6
+const NATURAL_LIFT_MAX := 2.6
 const SLIDE_KEYS: Array[int] = [KEY_SHIFT, KEY_CTRL, KEY_C, KEY_S, KEY_DOWN]
 const SOFT_LANDING_SPEED := 9.0
 const HARD_LANDING_SCALE := 0.014
@@ -109,34 +109,25 @@ func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta
 	# No cap; the low-speed walking floor cannot increase a slower value.
 	return maxf(minf(current, MIN_SPEED), current + change * delta)
 
-func _surface_point(course: Node3D, at: float, across: float) -> Vector3:
+func relative_normal_acceleration(course: Node3D, at: float, _across: float, forward_speed: float, _side_speed: float = 0.0) -> float:
+	# Only the change in longitudinal pitch can launch the runner.
+	# Roll and lateral steering must not create artificial vertical force.
 	var frame: Transform3D = course.call("sample", at)
-	return frame.origin + frame.basis.x * across
-
-func relative_normal_acceleration(course: Node3D, at: float, across: float, forward_speed: float, side_speed: float = 0.0) -> float:
-	# The local normal rotates through banks, preserving the arcade track
-	# coordinate system. The surface can push outward but cannot pull us in.
-	# Curvature acceleration scales with speed squared: a crest that a slow
-	# runner can follow will naturally launch a fast runner.
-	var frame: Transform3D = course.call("sample", at)
-	var ds := CONTACT_PROBE
-	var side_delta := side_speed / maxf(forward_speed, 1.0) * ds
-	var limit: float = course.call("lane_limit")
-	var before := _surface_point(course, at - ds, clampf(across - side_delta, -limit, limit))
-	var center := _surface_point(course, at, across)
-	var after := _surface_point(course, at + ds, clampf(across + side_delta, -limit, limit))
-	var normal_curvature := (before - center * 2.0 + after).dot(frame.basis.y) / (ds * ds)
-	# A slightly exaggerated curvature response makes natural lift-off
-	# readable at ordinary play speeds. Limit only normal acceleration,
-	# never forward speed, so extreme banks remain numerically stable.
-	return clampf(-GRAVITY - normal_curvature * forward_speed * forward_speed * CURVATURE_GAIN, -NORMAL_ACCEL_LIMIT, NORMAL_ACCEL_LIMIT)
+	var before: Transform3D = course.call("sample", at - CONTACT_PROBE)
+	var after: Transform3D = course.call("sample", at + CONTACT_PROBE)
+	var curvature := (-after.basis.z.y + before.basis.z.y) / (2.0 * CONTACT_PROBE)
+	var upright := smoothstep(0.25, 0.90, frame.basis.y.y)
+	var kind: String = course.call("section_name", at)
+	if kind == "180 BANK" or kind == "360 BANK":
+		upright = 0.0
+	# A gentle, bounded relative acceleration prevents violent launches at
+	# uncapped speeds. Manual jumping still works through the banks.
+	return clampf(-GRAVITY - curvature * forward_speed * forward_speed * CURVATURE_GAIN * upright, -NORMAL_ACCEL_LIMIT, NORMAL_ACCEL_LIMIT)
 
 func natural_lift_impulse(normal_accel: float, forward_speed: float) -> float:
 	if forward_speed < MIN_TAKEOFF_SPEED or normal_accel <= TAKEOFF_THRESHOLD:
 		return 0.0
-	# A small separation velocity prevents imperceptible one-frame hops.
-	# It scales with the force that would otherwise be needed to tether us.
-	return clampf(NATURAL_LIFT_MIN + (normal_accel - TAKEOFF_THRESHOLD) * 0.14, NATURAL_LIFT_MIN, NATURAL_LIFT_MAX)
+	return clampf(NATURAL_LIFT_MIN + (normal_accel - TAKEOFF_THRESHOLD) * 0.075, NATURAL_LIFT_MIN, NATURAL_LIFT_MAX)
 
 func is_slide_key(code: int) -> bool:
 	return SLIDE_KEYS.has(code)
@@ -214,7 +205,8 @@ func tick(delta: float, course: Node3D) -> void:
 	# Standing gives precise lane changes; sliding trades control for speed.
 	var steering_factor := 0.62 if is_sliding else (0.72 if not ground else 1.0)
 	lateral_speed = move_toward(lateral_speed, steer * steer_speed * steering_factor, 82.0 * delta * steering_factor)
-	var limit: float = course.call("lane_limit")
+	var next_s := distance + speed * delta
+	var limit: float = course.call("lane_limit", next_s)
 	lane = clampf(lane + lateral_speed * delta, -limit, limit)
 	if not ground:
 		# Integrate the gap from the moving surface, including curvature.
