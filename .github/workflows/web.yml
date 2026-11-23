@@ -27,6 +27,14 @@ jobs:
           version: 4.7.2
           use-dotnet: false
           include-templates: true
+      - name: Inspect Web export prerequisites
+        run: |
+          echo "Godot editor version:"
+          godot --version
+          echo "Godot Web export template files:"
+          find "${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates" -maxdepth 2 -type f -name 'web*zip' -print 2>/dev/null || true
+          echo "Web export preset:"
+          grep -E '^(name=|platform=|variant/thread_support=|vram_texture_compression/for_mobile=)' export_presets.cfg
       - name: Import and validate project
         run: |
           set -euo pipefail
