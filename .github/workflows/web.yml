@@ -62,15 +62,58 @@ jobs:
           set -euo pipefail
           godot --headless --path . --script res://tests/gameplay_rules.gd 2>&1 | tee /tmp/godot-gameplay.log
           grep -F 'PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm' /tmp/godot-gameplay.log
-      - name: Export HTML5
+      - name: Export HTML5 with a unique release path
+        env:
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          mkdir -p build/web
-          godot --headless --path . --export-release "Web" build/web/index.html 2>&1 | tee /tmp/godot-export.log
-          test -s build/web/index.html
-          test -s build/web/index.wasm
-          test -s build/web/index.pck
+          SHORT_SHA="${RELEASE_SHA:0:12}"
+          RELEASE_DIR="build/web/releases/$SHORT_SHA"
+          mkdir -p "$RELEASE_DIR"
+          godot --headless --path . --export-release "Web" "$RELEASE_DIR/index.html" 2>&1 | tee /tmp/godot-export.log
+          test -s "$RELEASE_DIR/index.html"
+          test -s "$RELEASE_DIR/index.js"
+          test -s "$RELEASE_DIR/index.wasm"
+          test -s "$RELEASE_DIR/index.pck"
+          # Keep the same relative engine filenames INSIDE a unique build path.
+          # This avoids stale WebAssembly, JavaScript, and PCK responses being
+          # served from the browser cache after a successful Pages deployment.
+          cat > build/web/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+          <title>Vector Velocity · $SHORT_SHA</title>
+          <style>body{background:#070819;color:#e8faff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;text-align:center}a{color:#2aebff}</style>
+          </head>
+          <body>
+          <main><h1>VECTOR VELOCITY</h1><p>Loading build $SHORT_SHA…</p><p><a href="./releases/$SHORT_SHA/index.html">Launch this version directly</a></p></main>
+          <script>location.replace("./releases/$SHORT_SHA/index.html" + location.search);</script>
+          </body>
+          </html>
+          EOF
+          # Insert a persistent build ID into the real game page.
+          python3 - "$RELEASE_DIR/index.html" "$SHORT_SHA" <<'PY'
+          import pathlib, sys
+          page = pathlib.Path(sys.argv[1])
+          sha = sys.argv[2]
+          html = page.read_text(encoding="utf-8")
+          badge = (f'<aside id="build-id" aria-label="Game version" style="position:fixed;'
+                   f'top:8px;right:10px;z-index:100;pointer-events:none;'
+                   f'background:rgba(2,8,26,.7);color:#a9faff;padding:4px 8px;'
+                   f'font:12px monospace;border:1px solid #31748e;'
+                   f'border-radius:4px">BUILD {sha}</aside>')
+          if '</body>' not in html:
+              raise SystemExit("Cannot find closing body in exported Godot HTML")
+          page.write_text(html.replace('</body>', badge + '</body>', 1), encoding="utf-8")
+          PY
+          printf '%s\n' "$SHORT_SHA" > build/web/version.txt
           touch build/web/.nojekyll
+          test -s build/web/index.html
+          test -s build/web/version.txt
+          echo "Published release URL: https://unborne-fetus.github.io/Cracked/releases/$SHORT_SHA/index.html"
       - name: Publish readable CI result to commit status
         if: always()
         env:
