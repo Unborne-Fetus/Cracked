@@ -3,10 +3,12 @@ extends Node3D
 
 const CourseScript = preload("res://scripts/course.gd")
 const RunnerScript = preload("res://scripts/runner.gd")
+const StormScript = preload("res://scripts/storm.gd")
 const COURSE_LENGTH := 1050.0
 
 var course
 var runner
+var storm
 var view_camera: Camera3D
 var first_person := false
 var run_finished := false
@@ -17,6 +19,8 @@ var distance_label: Label
 var clock_label: Label
 var record_label: Label
 var camera_label: Label
+var slide_label: Label
+var storm_label: Label
 var message_label: Label
 var restart_button: Button
 
@@ -26,6 +30,9 @@ func _ready() -> void:
 	add_child(course)
 	runner = RunnerScript.new()
 	add_child(runner)
+	course.hazard_hit.connect(_on_hazard_hit)
+	storm = StormScript.new()
+	add_child(storm)
 	view_camera = Camera3D.new()
 	view_camera.current = true
 	view_camera.fov = 82.0
@@ -53,6 +60,8 @@ func _restart() -> void:
 	run_time = 0.0
 	runner.reset_run(Vector3(8.0, course.surface_height(8.0, 0.0) + 1.25, 0.0))
 	runner.set_first_person(first_person)
+	storm.reset(runner.global_position.x)
+	storm.position.y = course.surface_height(0.0, 0.0)
 	if message_label != null:
 		message_label.visible = false
 	if restart_button != null:
@@ -61,9 +70,13 @@ func _restart() -> void:
 func _process(delta: float) -> void:
 	if not run_finished:
 		run_time += delta
-		if runner.global_position.y < course.surface_height(clampf(runner.global_position.x, 0, COURSE_LENGTH), 0.0) - 32.0 or absf(runner.global_position.z) > 48.0:
-			_restart()
-		if runner.global_position.x >= COURSE_LENGTH - 15.0:
+		storm.advance(delta)
+		storm.position.y = course.surface_height(clampf(storm.front_x, 0.0, COURSE_LENGTH), 0.0)
+		if runner.global_position.y < course.surface_height(clampf(runner.global_position.x, 0.0, COURSE_LENGTH), 0.0) - 32.0 or absf(runner.global_position.z) > 48.0:
+			_lose("FELL OFF THE COURSE")
+		elif storm.gap_to(runner.global_position.x) <= 1.0:
+			_lose("THE STORM CAUGHT YOU")
+		elif runner.global_position.x >= COURSE_LENGTH - 15.0:
 			_finish()
 	_update_camera(delta)
 	_update_hud()
@@ -91,14 +104,26 @@ func _update_hud() -> void:
 	clock_label.text = "TIME  " + _clock(run_time)
 	record_label.text = "BEST  " + ("--:--" if best_time <= 0.0 else _clock(best_time))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
-	if not run_finished and runner.gameplay_seconds - runner.last_boost_time < 1.1:
-		message_label.visible = true
-		message_label.text = "BOOST +18"
-	elif not run_finished:
-		message_label.visible = false
+	slide_label.text = "SLIDING  // GAINING SPEED" if runner.is_sliding else "HOLD SHIFT / S TO SLIDE"
+	var gap: float = maxf(float(storm.gap_to(runner.global_position.x)), 0.0)
+	storm_label.text = "STORM  %d m  //  %d km/h" % [int(gap), int(storm.speed * 3.6)]
+	storm_label.add_theme_color_override("font_color", Color(1.0, 0.21, 0.38) if gap < 40.0 else Color(0.96, 0.53, 0.72))
 
 func _clock(seconds: float) -> String:
 	return "%02d:%05.2f" % [int(seconds / 60.0), fmod(seconds, 60.0)]
+
+func _on_hazard_hit(body: Node3D) -> void:
+	if body == runner and not run_finished:
+		_lose("OBSTACLE HIT")
+
+func _lose(reason: String) -> void:
+	if run_finished:
+		return
+	run_finished = true
+	runner.set_physics_process(false)
+	message_label.text = reason + "  //  RUN AGAIN"
+	message_label.visible = true
+	restart_button.visible = true
 
 func _finish() -> void:
 	run_finished = true
@@ -174,6 +199,10 @@ func _create_hud() -> void:
 	stack.add_child(record_label)
 	camera_label = _label("", 14, Color(0.68, 0.74, 0.95))
 	stack.add_child(camera_label)
+	slide_label = _label("", 16, Color(0.40, 0.96, 0.90))
+	stack.add_child(slide_label)
+	storm_label = _label("", 18, Color(1.0, 0.33, 0.50))
+	stack.add_child(storm_label)
 	
 	message_label = _label("", 27, Color(1.0, 0.84, 0.30))
 	message_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -185,7 +214,7 @@ func _create_hud() -> void:
 	message_label.visible = false
 	root.add_child(message_label)
 	
-	var hint := _label("A / D or arrows · steer     SPACE / A · jump     V · camera     R · restart     S / B · brake", 15, Color(0.70, 0.83, 0.96))
+	var hint := _label("A / D steer     SPACE / A jump     HOLD SHIFT / S / B slide (not uphill)     V camera     R retry", 15, Color(0.70, 0.83, 0.96))
 	hint.anchor_top = 1.0
 	hint.anchor_bottom = 1.0
 	hint.anchor_right = 1.0
@@ -204,6 +233,10 @@ func _create_hud() -> void:
 	root.add_child(right_button)
 	right_button.button_down.connect(func() -> void: runner.touch_axis += 1.0)
 	right_button.button_up.connect(func() -> void: runner.touch_axis -= 1.0)
+	var slide_button := _button("SLIDE", 20, 190, 204)
+	root.add_child(slide_button)
+	slide_button.button_down.connect(func() -> void: runner.touch_slide = true)
+	slide_button.button_up.connect(func() -> void: runner.touch_slide = false)
 	var jump_button := _button("JUMP", -138, -20, 124)
 	jump_button.anchor_left = 1.0
 	jump_button.anchor_right = 1.0
