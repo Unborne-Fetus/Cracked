@@ -194,6 +194,23 @@ func _run_tests() -> void:
 	if new_arm.distance_to(previous_arm) > 0.2:
 		_fail("Camera arm snapped at takeoff.")
 		return
+	# First-person sliding has a distinct visual cue and lowered eye height.
+	game.call("_restart")
+	game.set("first_person", true)
+	runner.set("is_sliding", true)
+	game.call("_update_camera", 1.0)
+	game.call("_update_hud")
+	var cue: Control = game.get("slide_indicator")
+	if not cue.visible or float(game.get("slide_eye_height")) > 0.9:
+		_fail("First-person slide indication is missing.")
+		return
+	runner.set("is_sliding", false)
+	game.call("_update_camera", 1.0)
+	game.call("_update_hud")
+	if cue.visible or float(game.get("slide_eye_height")) < 1.5:
+		_fail("Slide indication did not clear after standing.")
+		return
+	game.set("first_person", false)
 	# Crossing a road edge must detach instead of clamping the lane.
 	game.call("_restart")
 	runner.set("lane", float(course.call("half_width_at", 8.0)) - 0.1)
@@ -264,7 +281,7 @@ func _run_tests() -> void:
 	if shapes.size() != 11:
 		_fail("Opening sections did not introduce all ten obstacle shapes and route gates.")
 		return
-	if float(course.call("lane_limit")) < 35.0:
+	if float(course.call("lane_limit")) < 59.0:
 		_fail("Track steering width was not expanded.")
 		return
 	var color_a: Color = course.call("track_color", 191.99)
@@ -336,7 +353,7 @@ func _run_tests() -> void:
 			_fail("Climb has no uphill grade.")
 			return
 		var width: float = course.call("lane_limit", start_s + 96.0)
-		if (kind == "NARROW BRIDGE" and width > 18.0) or (kind == "WIDE BASIN" and width < 46.0):
+		if (kind == "NARROW BRIDGE" and (width < 29.0 or width > 30.0)) or (kind == "WIDE BASIN" and width < 77.0):
 			_fail("Variable width terrain was not generated.")
 			return
 		var left: Transform3D = course.call("sample", start_s - 0.01)

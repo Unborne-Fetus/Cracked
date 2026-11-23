@@ -31,6 +31,8 @@ var camera_track_clearance := 0.0
 var camera_rotation_ready := false
 var camera_goal := Basis.IDENTITY
 var camera_height := 0.0
+var slide_eye_height := 1.55
+var slide_indicator: PanelContainer
 var camera_offset := Vector3.ZERO
 var takeoff_camera_offset := Vector3.ZERO
 var camera_was_grounded := true
@@ -73,6 +75,7 @@ func _restart() -> void:
 	run_time = 0.0
 	camera_rotation_ready = false
 	camera_height = 0.0
+	slide_eye_height = 1.55
 	camera_offset = Vector3.ZERO
 	camera_was_grounded = true
 	run_seed = randi()
@@ -130,6 +133,8 @@ func _update_camera(delta: float) -> void:
 	var up := frame.basis.y
 	var forward := -frame.basis.z
 	var pos: Vector3 = runner.position
+	var actively_sliding: bool = runner.is_grounded() and runner.is_sliding
+	slide_eye_height = lerpf(slide_eye_height, 0.85 if actively_sliding else 1.55, 1.0 - exp(-delta * 10.0))
 	# Camera stays on the correct side of the road; only orientation and
 	# the additional chase height are damped, never the bank-relative base.
 	camera_height = lerpf(camera_height, maxf(0.0, float(runner.height) * float(runner.surface_side)), 1.0 - exp(-delta * 8.0))
@@ -152,7 +157,7 @@ func _update_camera(delta: float) -> void:
 		view_camera.position = pos + takeoff_camera_offset.lerp(view_camera.position - pos, blend)
 	elif first_person:
 		camera_track_s = player_s
-		view_camera.position = pos + up * 1.55
+		view_camera.position = pos + up * slide_eye_height
 		_aim_camera(view_camera.position + forward * 25.0, up)
 	else:
 		var focus := pos + up * 1.35
@@ -228,6 +233,7 @@ func _distance_display(meters: float) -> String:
 	return "%d m" % int(meters)
 
 func _update_hud() -> void:
+	slide_indicator.visible = first_person and runner.is_grounded() and runner.is_sliding and not run_finished
 	speed_label.text = "%d" % _speed_display(runner.speed)
 	speed_unit_label.text = _speed_units()
 	distance_label.text = "DISTANCE  " + _distance_display(maxf(0.0, runner.distance - 8.0))
@@ -322,6 +328,25 @@ func _create_hud() -> void:
 	layer.add_child(root)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slide_indicator = PanelContainer.new()
+	root.add_child(slide_indicator)
+	slide_indicator.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	slide_indicator.offset_left = -120
+	slide_indicator.offset_right = 120
+	slide_indicator.offset_top = -104
+	slide_indicator.offset_bottom = -62
+	slide_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var slide_style := StyleBoxFlat.new()
+	slide_style.bg_color = Color(0.015, 0.09, 0.15, 0.87)
+	slide_style.border_color = Color(0.1, 0.95, 1.0)
+	slide_style.set_border_width_all(2)
+	slide_style.set_corner_radius_all(5)
+	slide_indicator.add_theme_stylebox_override("panel", slide_style)
+	var slide_text := _label("»  SLIDING  «", 23, Color(0.25, 0.98, 1.0))
+	slide_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	slide_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	slide_indicator.add_child(slide_text)
+	slide_indicator.visible = false
 	var stack := VBoxContainer.new()
 	stack.position = Vector2(22, 18)
 	stack.add_theme_constant_override("separation", 2)

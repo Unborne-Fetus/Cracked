@@ -5,8 +5,8 @@ extends Node3D
 const CHUNK_LENGTH := 192.0
 const STEP := 1.0
 const STEPS := 192
-const HALF_WIDTH := 36.0
-const CROSS_STEPS := 24
+const HALF_WIDTH := 60.0
+const CROSS_STEPS := 30
 const THICKNESS := 0.45
 const COLOR_CYCLE := 12000.0
 const AHEAD := 5
@@ -101,9 +101,9 @@ func _kind(index: int) -> String:
 func width_for_kind(kind: String, u: float) -> float:
 	var envelope := smoothstep(0.0, 0.25, u) * (1.0 - smoothstep(0.75, 1.0, u))
 	if kind == "NARROW BRIDGE":
-		return lerpf(HALF_WIDTH, 18.0, envelope)
+		return lerpf(HALF_WIDTH, 30.0, envelope)
 	if kind == "WIDE BASIN":
-		return lerpf(HALF_WIDTH, 48.0, envelope)
+		return lerpf(HALF_WIDTH, 78.0, envelope)
 	return HALF_WIDTH
 
 func half_width_at(distance: float) -> float:
@@ -132,10 +132,10 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	elif kind == "DROP AND RECOVERY":
 		pitch = (-0.62 * exp(-pow((u - 0.28) / 0.15, 2.0)) + 0.30 * exp(-pow((u - 0.68) / 0.17, 2.0))) * sin(PI * u) * strength
 	elif kind == "S CURVE":
-		angle = clampf(start_yaw + bank_sign * 0.55 * sin(TAU * u) * sin(PI * u) * strength, -1.25, 1.25)
+		angle = clampf(start_yaw + bank_sign * 0.33 * sin(TAU * u) * sin(PI * u) * strength, -1.25, 1.25)
 		roll = bank_sign * 0.42 * sin(TAU * u) * sin(PI * u)
 	elif kind == "CHICANE":
-		angle = clampf(start_yaw + bank_sign * 0.29 * sin(TAU * 2.0 * u) * sin(PI * u) * strength, -1.25, 1.25)
+		angle = clampf(start_yaw + bank_sign * 0.18 * sin(TAU * 2.0 * u) * sin(PI * u) * strength, -1.25, 1.25)
 		roll = bank_sign * 0.32 * sin(TAU * 2.0 * u) * sin(PI * u)
 	elif kind == "CAMBER WAVE":
 		roll = bank_sign * 0.63 * sin(TAU * u) * sin(PI * u) * strength
@@ -169,7 +169,7 @@ func _build_chunk(index: int) -> void:
 	var bank_sign := -1.0 if rng.randf() < 0.5 else 1.0
 	if kind == "TURN" or kind == "BANKED TURN" or kind == "BANKED DESCENT":
 		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
-		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 1.35), -1.25, 1.25)
+		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 0.98), -1.25, 1.25)
 	var node := Node3D.new()
 	node.name = "Track_%d" % index
 	node.position = tail
@@ -205,12 +205,14 @@ func _build_chunk(index: int) -> void:
 		positions = [30.0, 160.0]
 	for i in range(positions.size()):
 		var at: float = positions[i]
-		var lane := float(rng.randi_range(-8, 8)) * 3.2
+		var lane := float(rng.randi_range(-8, 8)) * 4.8
 		if _ramp_lift(index, kind, at, lane) > 0.02:
 			lane = -ramp_center(index)
 		# Keep the approach and immediate exit from route gates navigable.
 		if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and at >= 130.0 and at <= 150.0:
-			lane = 10.0 if index % 2 == 0 else -10.0
+			lane = 14.0 if index % 2 == 0 else -14.0
+		var lane_bound := width_for_kind(kind, at / CHUNK_LENGTH) - 6.0
+		lane = clampf(lane, -lane_bound, lane_bound)
 		var shape_id := (index * 5 + i) % 10
 		if index > 5:
 			shape_id = rng.randi_range(0, 9)
@@ -224,8 +226,8 @@ func _build_chunk(index: int) -> void:
 	if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and (index < 6 or (kind == "HILLS" or kind == "TURN") and index % 3 == 0):
 		var gate_at := 94.0
 		var gate_frame := points[int(gate_at / STEP)]
-		var opening := -10.0 if index % 2 == 0 else 10.0
-		var gap_width := maxf(9.0, 13.0 - float(index) * 0.12)
+		var opening := -14.0 if index % 2 == 0 else 14.0
+		var gap_width := maxf(18.0, 24.0 - float(index) * 0.12)
 		_spawn_route_gate(node, hazards, gate_frame, float(index) * CHUNK_LENGTH + gate_at, opening, gap_width)
 	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards}
 
@@ -313,7 +315,7 @@ func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transfor
 		node.add_child(edge_mesh)
 
 func ramp_center(index: int) -> float:
-	return 18.0 if index % 2 == 1 else -18.0
+	return 28.0 if index % 2 == 1 else -28.0
 
 func _ramp_lift(index: int, kind: String, local_s: float, across: float) -> float:
 	# A local rise, crest and runout occupying only a portion of the road.
