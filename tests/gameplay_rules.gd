@@ -253,6 +253,15 @@ func _run_tests() -> void:
 	if absf(bank.basis.x.y) < 0.35 or entry.basis.z.dot(exit_frame.basis.z) > 0.94:
 		_fail("Bank or turn geometry was not generated.")
 		return
+	# Roll progression must retain full rotations with a lower peak rate.
+	var max_roll_step := 0.0
+	for i in range(1, 193):
+		var before_roll: Transform3D = course.call("sample", 768.0 + float(i - 1))
+		var after_roll: Transform3D = course.call("sample", 768.0 + float(i))
+		max_roll_step = maxf(max_roll_step, before_roll.basis.y.angle_to(after_roll.basis.y))
+	if max_roll_step > 0.047:
+		_fail("180 bank rotates too abruptly per metre.")
+		return
 	# Verify both new roll geometries and their upright seams.
 	var half_bank: Transform3D = course.call("sample", 864.0)
 	var full_bank: Transform3D = course.call("sample", 1056.0)

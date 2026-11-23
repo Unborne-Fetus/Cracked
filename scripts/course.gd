@@ -137,6 +137,20 @@ func half_width_at(distance: float) -> float:
 	var u := clampf((distance - float(index) * CHUNK_LENGTH) / CHUNK_LENGTH, 0.0, 1.0)
 	return width_for_kind(kind, u)
 
+func _roll_ease(u: float) -> float:
+	# Integrate a softly eased angular velocity with a long constant-rate
+	# middle. Unlike cubic smoothstep, this avoids a sharp peak roll rate.
+	var t := clampf(u, 0.0, 1.0)
+	var ramp := 0.18
+	var scale := 1.0 - ramp
+	if t < ramp:
+		var x := t / ramp
+		return 0.5 * ramp * (x - sin(PI * x) / PI) / scale
+	if t > 1.0 - ramp:
+		var x := (1.0 - t) / ramp
+		return 1.0 - 0.5 * ramp * (x - sin(PI * x) / PI) / scale
+	return (t - ramp * 0.5) / scale
+
 func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, bank_sign: float = 1.0, strength: float = 1.0) -> Basis:
 	var angle := lerpf(start_yaw, target_yaw, smoothstep(0.0, 1.0, u))
 	var pitch := 0.0
@@ -144,9 +158,9 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	if kind == "HILLS":
 		pitch = -0.32 * sin(TAU * u) - 0.15 * sin(PI * u)
 	elif kind == "BANKED TURN":
-		roll = signf(target_yaw - start_yaw) * 0.78 * sin(PI * u)
+		roll = signf(target_yaw - start_yaw) * 0.64 * sin(PI * u) * sin(PI * u)
 	elif kind == "TURN":
-		roll = signf(target_yaw - start_yaw) * 0.22 * sin(PI * u)
+		roll = signf(target_yaw - start_yaw) * 0.18 * sin(PI * u) * sin(PI * u)
 	elif kind == "LONG DESCENT":
 		pitch = -0.44 * sin(PI * u) * strength
 	elif kind == "STEEP CLIMB":
@@ -158,33 +172,33 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 		pitch = (-0.62 * exp(-pow((u - 0.28) / 0.15, 2.0)) + 0.30 * exp(-pow((u - 0.68) / 0.17, 2.0))) * sin(PI * u) * strength
 	elif kind == "S CURVE":
 		angle = clampf(start_yaw + bank_sign * 0.33 * sin(TAU * u) * sin(PI * u) * strength, -1.25, 1.25)
-		roll = bank_sign * 0.42 * sin(TAU * u) * sin(PI * u)
+		roll = bank_sign * 0.32 * sin(TAU * u) * sin(PI * u)
 	elif kind == "CHICANE":
 		angle = clampf(start_yaw + bank_sign * 0.18 * sin(TAU * 2.0 * u) * sin(PI * u) * strength, -1.25, 1.25)
-		roll = bank_sign * 0.32 * sin(TAU * 2.0 * u) * sin(PI * u)
+		roll = bank_sign * 0.23 * sin(TAU * 2.0 * u) * sin(PI * u)
 	elif kind == "CAMBER WAVE":
-		roll = bank_sign * 0.63 * sin(TAU * u) * sin(PI * u) * strength
+		roll = bank_sign * 0.46 * sin(TAU * u) * sin(PI * u) * strength
 		pitch = -0.10 * sin(TAU * u)
 	elif kind == "BANKED DESCENT":
 		pitch = -0.34 * sin(PI * u) * strength
-		roll = signf(target_yaw - start_yaw) * 0.68 * sin(PI * u)
+		roll = signf(target_yaw - start_yaw) * 0.52 * sin(PI * u) * sin(PI * u)
 	elif kind == "WIDE BASIN":
 		pitch = -0.20 * sin(TAU * u) * strength
 	elif is_sustained_roll(kind):
 		var target_roll := PI * 0.5 if kind.begins_with("WALL ") else PI
 		var progress := 1.0
 		if kind.ends_with("ENTRY"):
-			progress = smoothstep(0.0, 0.85, u)
+			progress = _roll_ease(u)
 		elif kind.ends_with("EXIT"):
-			progress = 1.0 - smoothstep(0.15, 1.0, u)
+			progress = 1.0 - _roll_ease(u)
 		roll = bank_sign * target_roll * progress
 	elif kind == "180 BANK":
 		# A smooth half-roll to an inverted stretch, then unwind.
 		# Entry and exit are both upright so neighboring chunks join cleanly.
-		roll = bank_sign * PI * smoothstep(0.0, 0.36, u) * (1.0 - smoothstep(0.64, 1.0, u))
+		roll = bank_sign * PI * _roll_ease(u / 0.44) * (1.0 - _roll_ease((u - 0.56) / 0.44))
 	elif kind == "360 BANK":
 		# Continuous barrel roll with zero roll rate at both seams.
-		roll = bank_sign * TAU * smoothstep(0.0, 1.0, u)
+		roll = bank_sign * TAU * _roll_ease(u)
 	var heading := Vector3(cos(angle), 0, sin(angle))
 	var side := Vector3(-sin(angle), 0, cos(angle))
 	var forward := heading * cos(pitch) + Vector3.UP * sin(pitch)
