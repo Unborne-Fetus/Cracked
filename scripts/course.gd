@@ -15,6 +15,7 @@ const REBASE_DISTANCE := 2048.0
 
 var chunks: Dictionary = {}
 var next_index := 0
+var chunk_starts: Array[float] = [0.0]
 var tail := Vector3.ZERO
 var yaw := 0.0
 var rng := RandomNumberGenerator.new()
@@ -47,6 +48,7 @@ func reset_course(seed_value: int) -> void:
 		node.queue_free()
 	chunks.clear()
 	next_index = 0
+	chunk_starts.assign([0.0])
 	tail = Vector3.ZERO
 	yaw = 0.0
 	origin_shift = Vector3.ZERO
@@ -131,10 +133,20 @@ func width_for_kind(kind: String, u: float) -> float:
 		return lerpf(HALF_WIDTH, 78.0, envelope)
 	return HALF_WIDTH
 
+func chunk_index_at(distance: float) -> int:
+	return clampi(chunk_starts.bsearch(maxf(0.0, distance), false) - 1, 0, maxi(0, next_index - 1))
+
+func bank_length(kind: String, planned_speed: float) -> float:
+	if is_extreme_bank(kind) or kind in ["BANKED TURN", "TURN", "BANKED DESCENT", "S CURVE", "CHICANE", "CAMBER WAVE"]:
+		# Scale length, not roll angle; no change to already generated road.
+		return CHUNK_LENGTH * clampf(planned_speed / 65.0, 1.0, 8.0)
+	return CHUNK_LENGTH
+
 func half_width_at(distance: float) -> float:
-	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	var index := chunk_index_at(distance)
 	var kind := section_name(distance)
-	var u := clampf((distance - float(index) * CHUNK_LENGTH) / CHUNK_LENGTH, 0.0, 1.0)
+	var length := chunk_starts[index + 1] - chunk_starts[index]
+	var u := clampf((distance - chunk_starts[index]) / length, 0.0, 1.0)
 	return width_for_kind(kind, u)
 
 func _roll_ease(u: float) -> float:
@@ -207,9 +219,15 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	var up := right.cross(forward).normalized()
 	return Basis(right, up, -forward).orthonormalized()
 
-func _build_chunk(index: int) -> void:
+func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 	var kind := _kind(index)
 	last_kind = kind
+	var start_s := chunk_starts[index]
+	var length := bank_length(kind, planned_speed)
+	# Keep a constant number of cross-sections; long banks have lower
+	# curvature so this retains the same angular tessellation resolution.
+	var step_length := length / float(STEPS)
+	chunk_starts.append(start_s + length)
 	var strength := 1.0 if index < 6 else rng.randf_range(0.78, 1.16)
 	var start_yaw := yaw
 	var target_yaw := yaw
@@ -233,11 +251,11 @@ func _build_chunk(index: int) -> void:
 		points.append(Transform3D(basis, p))
 		if i < STEPS:
 			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw, bank_sign, strength)
-			p += -mid.z * STEP
+			p += -mid.z * step_length
 	tail += p
 	yaw = target_yaw
 	var hazards: Array[Dictionary] = []
-	_build_mesh(node, points, float(index) * CHUNK_LENGTH, kind)
+	_build_mesh(node, points, start_s, kind, index, step_length)
 	# Leave room to experience the geometry itself, without filling every
 	# new terrain feature with barriers.
 	var positions: Array[float] = [35.0, 72.0, 108.0, 144.0, 174.0]
@@ -271,7 +289,7 @@ func _build_chunk(index: int) -> void:
 			shape_id = 0
 		var frame := points[int(at / STEP)].interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
 		frame.origin += frame.basis.y * _ramp_lift(index, kind, at, lane)
-		_spawn_obstacle(node, hazards, frame, float(index) * CHUNK_LENGTH + at, lane, shape_id)
+		_spawn_obstacle(node, hazards, frame, start_s + at * step_length, lane, shape_id)
 	# Route gates have a guaranteed opening, but it moves across the track.
 	# Wide tall walls discourage jumping over every obstacle instead of steering.
 	if index >= 2 and not is_extreme_bank(kind) and (index < 6 or (kind == "HILLS" or kind == "TURN") and index % 3 == 0):
@@ -279,7 +297,7 @@ func _build_chunk(index: int) -> void:
 		var gate_frame := points[int(gate_at / STEP)]
 		var opening := -14.0 if index % 2 == 0 else 14.0
 		var gap_width := maxf(18.0, 24.0 - float(index) * 0.12)
-		_spawn_route_gate(node, hazards, gate_frame, float(index) * CHUNK_LENGTH + gate_at, opening, gap_width)
+		_spawn_route_gate(node, hazards, gate_frame, start_s + gate_at * step_length, opening, gap_width)
 	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards}
 
 func track_color(distance: float, accent: float = 0.0, saturation: float = 0.84, value: float = 0.95) -> Color:
@@ -379,8 +397,11 @@ func _ramp_lift(index: int, kind: String, local_s: float, across: float) -> floa
 	return (5.0 + float(index % 3)) * lateral * rise * runout
 
 func surface_lift(distance: float, across: float) -> float:
-	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
-	return _ramp_lift(index, section_name(distance), distance - float(index) * CHUNK_LENGTH, across)
+	var index := chunk_index_at(distance)
+	if not chunks.has(index):
+		return 0.0
+	var local_s := (distance - chunk_starts[index]) * CHUNK_LENGTH / (chunk_starts[index + 1] - chunk_starts[index])
+	return _ramp_lift(index, section_name(distance), local_s, across)
 
 func surface_frame(distance: float, across: float, side: int = 1) -> Transform3D:
 	var frame := sample(distance)
@@ -423,16 +444,15 @@ func _quad(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, ca
 	_tri(tool, a, c, b, ca, cb, ca)
 	_tri(tool, b, c, d, ca, cb, cb)
 
-func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind: String) -> void:
+func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind: String, index: int, step_length: float) -> void:
 	var fill := SurfaceTool.new()
 	fill.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var faces := PackedVector3Array()
 	var grid := SurfaceTool.new()
 	grid.begin(Mesh.PRIMITIVE_LINES)
-	var index := int(round(start_s / CHUNK_LENGTH))
 	for i in range(STEPS):
-		var s0 := start_s + float(i) * STEP
-		var s1 := s0 + STEP
+		var s0 := start_s + float(i) * step_length
+		var s1 := s0 + step_length
 		var width0 := width_for_kind(kind, float(i) / float(STEPS))
 		var width1 := width_for_kind(kind, float(i + 1) / float(STEPS))
 		var dark0 := track_color(s0, 0.0, 0.72, 0.105)
@@ -497,10 +517,13 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 	body.add_child(collider)
 	node.add_child(body)
 
-func stream(distance: float) -> void:
-	var current := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+func stream(distance: float, planned_speed: float = 22.0) -> void:
+	while next_index == 0 or distance >= chunk_starts[-1]:
+		_build_chunk(next_index, planned_speed)
+		next_index += 1
+	var current := chunk_index_at(distance)
 	while next_index <= current + AHEAD:
-		_build_chunk(next_index)
+		_build_chunk(next_index, planned_speed)
 		next_index += 1
 	for key in chunks.keys():
 		if int(key) < current - BEHIND:
@@ -519,21 +542,21 @@ func stream(distance: float) -> void:
 		origin_shift += shift
 
 func has_distance(distance: float) -> bool:
-	return chunks.has(maxi(0, int(floor(distance / CHUNK_LENGTH))))
+	return distance < chunk_starts[-1] and chunks.has(chunk_index_at(distance))
 
 func sample(distance: float) -> Transform3D:
-	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	var index := chunk_index_at(distance)
 	if not chunks.has(index):
 		return Transform3D.IDENTITY
 	var data: Dictionary = chunks[index]
 	var points: Array[Transform3D] = data["points"]
 	var node: Node3D = data["node"]
-	var local_distance := distance - float(index) * CHUNK_LENGTH
+	var local_distance := distance - chunk_starts[index]
 	if local_distance < 0.0:
 		var first := points[0]
 		first.origin += node.position - first.basis.z * local_distance
 		return first
-	var unit := clampf(local_distance / STEP, 0.0, float(STEPS))
+	var unit := clampf(local_distance * float(STEPS) / (chunk_starts[index + 1] - chunk_starts[index]), 0.0, float(STEPS))
 	var i := mini(int(floor(unit)), STEPS - 1)
 	var frame := points[i].interpolate_with(points[i+1], unit - float(i))
 	frame.origin += node.position
@@ -560,7 +583,7 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 	return Vector3(s, offset.dot(local_frame.basis.x), offset.dot(local_frame.basis.y))
 
 func section_name(distance: float) -> String:
-	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	var index := chunk_index_at(distance)
 	if not chunks.has(index):
 		return "TRACK"
 	return str(chunks[index]["kind"])
@@ -569,7 +592,7 @@ func swept_obstacles(from_s: float, to_s: float, from_lane: float, to_lane: floa
 	var count := 0
 	if to_s <= from_s:
 		return count
-	for index in range(maxi(0, int(floor((from_s - 4.0) / CHUNK_LENGTH))), int(floor((to_s + 4.0) / CHUNK_LENGTH)) + 1):
+	for index in range(chunk_index_at(from_s - 4.0), chunk_index_at(to_s + 4.0) + 1):
 		if not chunks.has(index):
 			continue
 		var hazards: Array[Dictionary] = chunks[index]["hazards"]

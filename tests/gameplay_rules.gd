@@ -439,7 +439,7 @@ func _run_tests() -> void:
 	var original_speed: float = storm.get("speed")
 	var original_s: float = storm.get("front_s")
 	storm.call("advance", 10.0)
-	if float(storm.get("speed")) <= original_speed or float(storm.get("front_s")) <= original_s:
+	if float(storm.get("speed")) < original_speed + 17.0 or float(storm.get("front_s")) <= original_s:
 		_fail("Storm must advance and accelerate.")
 		return
 	game.call("_lose", "TEST")
@@ -449,6 +449,22 @@ func _run_tests() -> void:
 	game.call("_restart")
 	if bool(game.get("run_finished")) or absf(float(storm.get("speed")) - original_speed) > 0.001 or absf(float(storm.get("front_s")) - original_s) > 0.001:
 		_fail("Restart did not restore the storm.")
+		return
+	# Exercise adaptive generation independently of the fixed-speed intro.
+	if float(course.call("bank_length", "360 BANK", 195.0)) < 575.0 or float(course.call("bank_length", "HILLS", 195.0)) != 192.0:
+		_fail("High-speed banking length does not scale.")
+		return
+	course.call("stream", 384.0, 195.0)
+	var starts: Array[float] = course.get("chunk_starts")
+	# Index 7 is an S-curve generated at the higher speed.
+	if starts[8] - starts[7] < 575.0:
+		_fail("New high-speed bank did not stretch.")
+		return
+	var seam_s: float = starts[8]
+	var before_seam: Transform3D = course.call("sample", seam_s - 0.01)
+	var after_seam: Transform3D = course.call("sample", seam_s + 0.01)
+	if before_seam.origin.distance_to(after_seam.origin) > 0.1 or before_seam.basis.y.dot(after_seam.basis.y) < 0.999:
+		_fail("Stretched bank seam is discontinuous.")
 		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")

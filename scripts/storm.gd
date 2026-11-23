@@ -2,8 +2,9 @@ extends Node3D
 ## Pursuit is measured along the same endless track as the player.
 
 const INITIAL_GAP := 92.0
-const INITIAL_SPEED := 11.0
-const ACCELERATION := 0.72
+const INITIAL_SPEED := 14.0
+const ACCELERATION := 1.6
+const ACCELERATION_GROWTH := 0.035
 
 var front_s := -INITIAL_GAP
 var speed := INITIAL_SPEED
@@ -49,8 +50,9 @@ func reset(start_s: float) -> void:
 func advance(delta: float) -> void:
 	if delta <= 0.0:
 		return
-	front_s += speed * delta + 0.5 * ACCELERATION * delta * delta
-	speed += ACCELERATION * delta
+	var acceleration := ACCELERATION + ACCELERATION_GROWTH * elapsed
+	front_s += speed * delta + 0.5 * acceleration * delta * delta + ACCELERATION_GROWTH * delta * delta * delta / 6.0
+	speed += acceleration * delta + 0.5 * ACCELERATION_GROWTH * delta * delta
 	elapsed += delta
 
 func gap_to(player_s: float) -> float:

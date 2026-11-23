@@ -107,6 +107,8 @@ func reset_run(course: Node3D) -> void:
 	landing_from_basis = Basis.IDENTITY
 	hit_timer = 0.0
 	hits = 0
+	avatar.scale = Vector3.ONE
+	avatar.position = Vector3.ZERO
 	sync_pose(course)
 
 func request_jump() -> void:
@@ -279,7 +281,7 @@ func _body_sweep(course: Node3D, from_pos: Vector3, to_pos: Vector3, from_s: flo
 			# Do not reattach at the edge; head/torso contacts only deflect.
 			var face: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
 			best_fraction = fraction
-			best = {"fraction": fraction, "normal": face.basis.y}
+			best = {"fraction": fraction, "normal": face.basis.y, "side": side}
 	return best
 
 func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
@@ -308,7 +310,7 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	# free-flight positions too, otherwise they would jump by kilometres.
 	var old_origin: Vector3 = course.get("origin_shift")
 	var predicted_s := maxf(0.0, distance + air_velocity.dot(-old_frame.basis.z) * delta)
-	course.call("stream", maxf(distance, predicted_s))
+	course.call("stream", maxf(distance, predicted_s), speed)
 	var new_origin: Vector3 = course.get("origin_shift")
 	var shift := new_origin - old_origin
 	previous_pos -= shift
@@ -320,6 +322,19 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		# rather than allowing the feet to tunnel across the slab later.
 		next_pos = previous_pos.lerp(next_pos, float(body_contact["fraction"])) + normal * 0.08
 		var incoming := air_velocity.dot(normal)
+		# A torso corner can touch first during a normal landing on a
+		# slope. In that case settle the feet onto the same face instead
+		# of repeatedly bouncing. Head-first impacts still deflect.
+		var contact: Vector3 = course.call("project_position", next_pos, predicted_s)
+		if air_basis.y.dot(normal) > 0.55 and absf(contact.y) <= float(course.call("half_width_at", contact.x)) and incoming < 0.0:
+			distance = contact.x
+			lane = contact.y
+			surface_side = int(body_contact["side"])
+			var landing_frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
+			speed = landing_speed(minf(speed, maxf(0.0, air_velocity.dot(-landing_frame.basis.z))), -incoming)
+			lateral_speed = air_velocity.dot(landing_frame.basis.x) * float(surface_side)
+			_finish_landing(course)
+			return
 		if incoming < 0.0:
 			air_velocity -= normal * incoming * 1.2
 			speed = landing_speed(speed, -incoming)
@@ -417,7 +432,7 @@ func tick(delta: float, course: Node3D) -> void:
 			lateral_speed = move_toward(lateral_speed, steer * screen_steer_sign * steer_speed * steering_factor + wall_drift, 82.0 * delta * steering_factor)
 			var next_s := distance + speed * delta
 			var next_lane := lane + lateral_speed * delta
-			course.call("stream", next_s)
+			course.call("stream", next_s, speed)
 			var edge: float = course.call("half_width_at", next_s)
 			if absf(next_lane) > edge:
 				# No invisible walls. Start flight from the last supported
