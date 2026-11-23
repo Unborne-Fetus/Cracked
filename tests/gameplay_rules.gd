@@ -193,8 +193,14 @@ func _run_tests() -> void:
 	if float(game.get("camera_track_clearance")) < 0.5:
 		_fail("Camera clips through the underside.")
 		return
+	# The preceding underside test streamed to chunk 4, recycling chunk 1.
+	# Reload the opening course so we actually test a loaded ramp.
+	game.call("_restart")
 	# Ramp only occupies a side lane; centre and opposite side stay flat.
 	var ramp_s := 192.0 + 99.0
+	if not bool(course.call("has_distance", ramp_s)):
+		_fail("Ramp test did not load its target chunk.")
+		return
 	var ramp_lane: float = course.call("ramp_center", 1)
 	if float(course.call("surface_lift", ramp_s, ramp_lane)) < 5.0 or absf(float(course.call("surface_lift", ramp_s, -ramp_lane))) > 0.001 or absf(float(course.call("surface_lift", ramp_s, 0.0))) > 0.001:
 		_fail("Partial-width ramp does not leave a flat bypass.")

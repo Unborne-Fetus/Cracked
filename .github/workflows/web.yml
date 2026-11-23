@@ -68,7 +68,11 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA="${RELEASE_SHA:0:12}"
-          RELEASE_DIR="build/web/releases/$SHORT_SHA"
+          # Public version is readable and increments with each workflow run.
+          # Keep a private cache key so even reruns cannot reuse stale assets.
+          VERSION="0.${GITHUB_RUN_NUMBER}"
+          RELEASE_KEY="v${VERSION}-${SHORT_SHA}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_DIR="build/web/releases/$RELEASE_KEY"
           mkdir -p "$RELEASE_DIR"
           godot --headless --path . --export-release "Web" "$RELEASE_DIR/index.html" 2>&1 | tee /tmp/godot-export.log
           test -s "$RELEASE_DIR/index.html"
@@ -84,11 +88,11 @@ jobs:
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-          <title>Vector Velocity · $SHORT_SHA</title>
+          <title>Vector Velocity · V. $VERSION</title>
           <style>html,body{width:100%;height:100%;margin:0;background:#070819;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style>
           </head>
           <body>
-          <iframe id="game" title="Vector Velocity" src="./releases/$SHORT_SHA/index.html" allow="fullscreen; autoplay; gamepad" allowfullscreen tabindex="0"></iframe>
+          <iframe id="game" title="Vector Velocity" src="./releases/$RELEASE_KEY/index.html" allow="fullscreen; autoplay; gamepad" allowfullscreen tabindex="0"></iframe>
           <script>const game=document.getElementById('game');game.addEventListener('load',()=>{game.focus();});</script>
           </body>
           </html>
@@ -105,33 +109,35 @@ jobs:
           <style>body{background:#070819;color:#e8faff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;text-align:center}a{color:#2aebff}</style>
           </head>
           <body>
-          <main><h1>VECTOR VELOCITY</h1><p>This release has been replaced.</p><p><a href="/Cracked/?v=$SHORT_SHA">Open the latest build</a></p></main>
-          <script>if(location.pathname.startsWith('/Cracked/releases/'))location.replace('/Cracked/?v=$SHORT_SHA');</script>
+          <main><h1>VECTOR VELOCITY</h1><p>This release has been replaced.</p><p><a href="/Cracked/?v=$RELEASE_KEY">Open the latest build</a></p></main>
+          <script>if(location.pathname.startsWith('/Cracked/releases/'))location.replace('/Cracked/?v=$RELEASE_KEY');</script>
           </body>
           </html>
           EOF
           # Insert a persistent build ID into the real game page.
-          python3 - "$RELEASE_DIR/index.html" "$SHORT_SHA" <<'PY'
+          python3 - "$RELEASE_DIR/index.html" "$VERSION" <<'PY'
           import pathlib, sys
           page = pathlib.Path(sys.argv[1])
-          sha = sys.argv[2]
+          version = sys.argv[2]
           html = page.read_text(encoding="utf-8")
           badge = (f'<aside id="build-id" aria-label="Game version" style="position:fixed;'
                    f'top:8px;right:10px;z-index:100;pointer-events:none;'
                    f'background:rgba(2,8,26,.7);color:#a9faff;padding:4px 8px;'
                    f'font:12px monospace;border:1px solid #31748e;'
-                   f'border-radius:4px">BUILD {sha}</aside>')
+                   f'border-radius:4px">V. {version}</aside>')
           if '</body>' not in html:
               raise SystemExit("Cannot find closing body in exported Godot HTML")
           page.write_text(html.replace('</body>', badge + '</body>', 1), encoding="utf-8")
           PY
-          printf '%s\n' "$SHORT_SHA" > build/web/version.txt
+          printf 'V. %s\n' "$VERSION" > build/web/version.txt
           touch build/web/.nojekyll
           test -s build/web/index.html
           test -s build/web/version.txt
+          grep -Fx "V. $VERSION" build/web/version.txt
+          grep -F "V. $VERSION</aside>" "$RELEASE_DIR/index.html"
           test -s build/web/404.html
-          grep -F "./releases/$SHORT_SHA/index.html" build/web/index.html
-          echo "Published stable URL: https://unborne-fetus.github.io/Cracked/?v=$SHORT_SHA"
+          grep -F "./releases/$RELEASE_KEY/index.html" build/web/index.html
+          echo "Published stable URL: https://unborne-fetus.github.io/Cracked/?v=$RELEASE_KEY"
       - name: Publish readable CI result to commit status
         if: always()
         env:
