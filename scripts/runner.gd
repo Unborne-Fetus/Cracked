@@ -7,9 +7,6 @@ const SLIDE_BASE_ACCEL := 3.0
 const SLIDE_DOWNHILL_ACCEL := 55.0
 const SLIDE_UPHILL_DRAG := 25.0
 const UPHILL_GRADE_DRAG := 52.0
-const INVERSION_UPHILL_DRAG := 3.0
-const INVERSION_GRADE_DRAG := 7.0
-const INVERSION_RUN_GRADE_DRAG := 1.8
 const RUN_DRAG := 1.2
 const AIR_DRAG := 0.4
 const JUMP_IMPULSE := 12.5
@@ -30,7 +27,6 @@ var queued_jump := false
 var jump_held := false
 var is_sliding := false
 var uphill := false
-var in_inversion := false
 var hit_timer := 0.0
 var hits := 0
 var avatar: Node3D
@@ -73,7 +69,6 @@ func reset_run(course: Node3D) -> void:
 	jump_held = false
 	is_sliding = false
 	uphill = false
-	in_inversion = false
 	hit_timer = 0.0
 	hits = 0
 	sync_pose(course)
@@ -87,18 +82,15 @@ func set_first_person(enabled: bool) -> void:
 func can_slide_on_grade(_grade: float) -> bool:
 	return true
 
-func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float, inversion: bool = false) -> float:
+func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float) -> float:
 	var change := 0.0
 	if grounded and slide:
 		if grade > 0.025:
-			if inversion:
-				change = -INVERSION_UPHILL_DRAG - grade * INVERSION_GRADE_DRAG
-			else:
-				change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
+			change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
 		else:
 			change = SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
 	elif grounded:
-		change = -RUN_DRAG - maxf(grade, 0.0) * (INVERSION_RUN_GRADE_DRAG if inversion else 14.0)
+		change = -RUN_DRAG - maxf(grade, 0.0) * 14.0
 	else:
 		change = -AIR_DRAG
 	# No cap; the low-speed walking floor cannot increase a slower value.
@@ -144,14 +136,15 @@ func tick(delta: float, course: Node3D) -> void:
 	var grade := -frame.basis.z.y
 	is_sliding = ground and slide
 	uphill = grade > 0.025
-	in_inversion = str(course.call("section_name", distance)) == "INVERSION"
-	speed = step_speed(speed, grade, ground, slide, delta, in_inversion)
+	speed = step_speed(speed, grade, ground, slide, delta)
 	var old_s := distance
 	var old_lane := lane
 	var old_height := height
-	lateral_speed = move_toward(lateral_speed, steer * 15.0, 55.0 * delta)
-	# Keep the player's feet on the ribbon; side steering works through loops.
-	lane = clampf(lane + lateral_speed * delta, -8.25, 8.25)
+	# Wider track needs stronger steering, especially at high forward speeds.
+	var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
+	lateral_speed = move_toward(lateral_speed, steer * steer_speed, 82.0 * delta)
+	var limit: float = course.call("lane_limit")
+	lane = clampf(lane + lateral_speed * delta, -limit, limit)
 	if not ground:
 		vertical_speed -= GRAVITY * delta
 		height = maxf(0.0, height + vertical_speed * delta)
@@ -160,7 +153,7 @@ func tick(delta: float, course: Node3D) -> void:
 	hit_timer = maxf(0.0, hit_timer - delta)
 	distance += speed * delta
 	course.call("stream", distance)
-	var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_height, height)
+	var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_height, height, 0.95 if is_sliding else 1.7)
 	for _i in range(count):
 		apply_obstacle_hit()
 	sync_pose(course)

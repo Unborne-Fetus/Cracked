@@ -27,12 +27,6 @@ func _run_tests() -> void:
 	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
 		_fail("Sliding unexpectedly has a maximum speed.")
 		return
-	# Inversions retain far more momentum than ordinary uphill slopes.
-	var loop_speed: float = runner.call("step_speed", 80.0, 0.5, true, true, 1.0, true)
-	var uphill_speed: float = runner.call("step_speed", 80.0, 0.5, true, true, 1.0, false)
-	if loop_speed < 70.0 or loop_speed <= uphill_speed or loop_speed >= 80.0:
-		_fail("Inversion uphill drag must be gentler without granting acceleration.")
-		return
 	# Faster launches produce higher jumps, without changing forward speed.
 	var low_jump: float = runner.call("jump_impulse_for_speed", 22.0)
 	var fast_jump: float = runner.call("jump_impulse_for_speed", 80.0)
@@ -41,11 +35,10 @@ func _run_tests() -> void:
 		_fail("Jump launch strength does not increase sufficiently with speed.")
 		return
 	var bank: Transform3D = course.call("sample", 288.0)
-	var inversion: Transform3D = course.call("sample", 480.0)
 	var entry: Transform3D = course.call("sample", 192.0)
 	var exit_frame: Transform3D = course.call("sample", 384.0)
-	if absf(bank.basis.x.y) < 0.35 or inversion.basis.y.y > -0.8 or entry.basis.z.dot(exit_frame.basis.z) > 0.94:
-		_fail("Bank, inversion, or turn geometry was not generated.")
+	if absf(bank.basis.x.y) < 0.35 or entry.basis.z.dot(exit_frame.basis.z) > 0.94:
+		_fail("Bank or turn geometry was not generated.")
 		return
 	# Verify both new roll geometries and their upright seams.
 	var half_bank: Transform3D = course.call("sample", 864.0)
@@ -64,6 +57,26 @@ func _run_tests() -> void:
 			_fail("Track seam is discontinuous.")
 			return
 	var chunks: Dictionary = course.get("chunks")
+	# All ten shapes must exist in the opening sequence; no vertical loops.
+	var shapes := {}
+	for data in chunks.values():
+		if str(data["kind"]) == "INVERSION":
+			_fail("Vertical loops must no longer generate.")
+			return
+		for piece in data["hazards"]:
+			shapes[int(piece["group"]["shape"])] = true
+	if shapes.size() != 10:
+		_fail("Opening sections did not introduce all ten obstacle shapes.")
+		return
+	if float(course.call("lane_limit")) < 20.0:
+		_fail("Track steering width was not expanded.")
+		return
+	var color_a: Color = course.call("track_color", 191.99)
+	var color_b: Color = course.call("track_color", 192.01)
+	var color_far: Color = course.call("track_color", 3000.0)
+	if absf(color_a.r - color_b.r) + absf(color_a.g - color_b.g) + absf(color_a.b - color_b.b) > 0.002 or color_a.is_equal_approx(color_far):
+		_fail("Distance-based colors are discontinuous or do not change.")
+		return
 	var hazards: Array[Dictionary] = chunks[0]["hazards"]
 	var hazard: Dictionary = hazards[0]
 	var at: float = hazard["s"]
@@ -100,7 +113,7 @@ func _run_tests() -> void:
 		_fail("Restart did not restore the storm.")
 		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
-	print("PASS: banked turns, true inversions, seamless endless streaming, nonfatal obstacles")
+	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")
 	game.queue_free()
 	quit(0)
 

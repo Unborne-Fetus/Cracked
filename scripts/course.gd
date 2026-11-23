@@ -3,9 +3,12 @@ extends Node3D
 ## Each chunk owns its mesh, collision surface and obstacles.
 
 const CHUNK_LENGTH := 192.0
-const STEP := 2.0
-const STEPS := 96
-const HALF_WIDTH := 9.0
+const STEP := 1.0
+const STEPS := 192
+const HALF_WIDTH := 22.0
+const CROSS_STEPS := 12
+const THICKNESS := 0.45
+const COLOR_CYCLE := 12000.0
 const AHEAD := 5
 const BEHIND := 2
 const REBASE_DISTANCE := 2048.0
@@ -17,16 +20,13 @@ var yaw := 0.0
 var rng := RandomNumberGenerator.new()
 var surface_mat: StandardMaterial3D
 var line_mat: StandardMaterial3D
-var hazard_mat: StandardMaterial3D
-var stripe_mat: StandardMaterial3D
 var origin_shift := Vector3.ZERO
 
 func _ready() -> void:
-	surface_mat = _material(Color(0.012, 0.018, 0.062))
+	surface_mat = _material(Color.WHITE)
+	surface_mat.vertex_color_use_as_albedo = true
 	line_mat = _material(Color.WHITE)
 	line_mat.vertex_color_use_as_albedo = true
-	hazard_mat = _material(Color(1.0, 0.12, 0.36))
-	stripe_mat = _material(Color(1.0, 0.77, 0.22))
 	reset_course(4731)
 
 func _material(color: Color) -> StandardMaterial3D:
@@ -56,14 +56,14 @@ func _kind(index: int) -> String:
 	if index == 1:
 		return "BANKED TURN"
 	if index == 2:
-		return "INVERSION"
+		return "HILLS"
 	if index == 3:
 		return "TURN"
 	if index == 4:
 		return "180 BANK"
 	if index == 5:
 		return "360 BANK"
-	var kinds: Array[String] = ["HILLS", "TURN", "BANKED TURN", "INVERSION", "HILLS", "180 BANK", "360 BANK"]
+	var kinds: Array[String] = ["HILLS", "TURN", "BANKED TURN", "HILLS", "180 BANK", "360 BANK", "BANKED TURN"]
 	return kinds[rng.randi_range(0, kinds.size() - 1)]
 
 func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, bank_sign: float = 1.0) -> Basis:
@@ -83,15 +83,9 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	elif kind == "360 BANK":
 		# Continuous barrel roll with zero roll rate at both seams.
 		roll = bank_sign * TAU * smoothstep(0.0, 1.0, u)
-	elif kind == "INVERSION":
-		# Soften the entry and exit curvature without changing loop topology.
-		pitch = TAU * u - 0.30 * sin(TAU * u)
 	var heading := Vector3(cos(angle), 0, sin(angle))
 	var side := Vector3(-sin(angle), 0, cos(angle))
 	var forward := heading * cos(pitch) + Vector3.UP * sin(pitch)
-	if kind == "INVERSION":
-		# Offset the loop sideways so its exit does not overlap the entrance.
-		forward += side * (0.34 * sin(PI * u) * sin(PI * u))
 	forward = forward.normalized()
 	var right := (side - forward * side.dot(forward)).normalized().rotated(forward, roll)
 	var up := right.cross(forward).normalized()
@@ -121,69 +115,153 @@ func _build_chunk(index: int) -> void:
 	tail += p
 	yaw = target_yaw
 	var hazards: Array[Dictionary] = []
-	_build_mesh(node, points)
+	_build_mesh(node, points, float(index) * CHUNK_LENGTH)
 	# Leave space before the first obstacle and between hazards.
-	var positions: Array[float] = [60.0, 115.0, 157.0]
+	var positions: Array[float] = [35.0, 72.0, 108.0, 144.0, 174.0]
 	if index == 0:
 		positions = [82.0, 137.0]
-	elif kind == "INVERSION" or kind == "180 BANK" or kind == "360 BANK":
-		# Keep the inversion and roll apex clear; impacts should not erase
-		# momentum while the player is trying to enjoy the stunt.
-		positions = []
+	elif kind == "180 BANK" or kind == "360 BANK":
+		positions = [30.0, 160.0]
 	for i in range(positions.size()):
-		var at := positions[i]
-		var lane := float(rng.randi_range(-2, 2)) * 3.0
-		var width := 2.7 if i % 2 == 0 else 4.2
-		var height := 3.0 if i % 2 == 0 else 1.1
-		var hazard := {"s": float(index) * CHUNK_LENGTH + at, "lane": lane, "width": width, "height": height, "used": false}
-		hazards.append(hazard)
-		var frame: Transform3D = points[int(at / STEP)]
-		# Use the exact interpolated frame for the rendered obstacle.
-		frame = frame.interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
-		var center := frame.origin + frame.basis.x * lane + frame.basis.y * (height * 0.5)
-		_add_box(node, Transform3D(frame.basis, center), Vector3(width, height, 2.4), hazard_mat)
-		_add_box(node, Transform3D(frame.basis, center + frame.basis.y * (height * 0.5)), Vector3(width + 0.12, 0.13, 2.5), stripe_mat)
+		var at: float = positions[i]
+		var lane := float(rng.randi_range(-5, 5)) * 3.2
+		var shape_id := (index * 5 + i) % 10
+		if index > 5:
+			shape_id = rng.randi_range(0, 9)
+		if index == 0 and i == 0:
+			shape_id = 0
+		var frame := points[int(at / STEP)].interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
+		_spawn_obstacle(node, hazards, frame, float(index) * CHUNK_LENGTH + at, lane, shape_id)
 	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards}
 
-func _add_box(parent: Node3D, frame: Transform3D, size: Vector3, mat: Material) -> void:
-	var box := BoxMesh.new()
-	box.size = size
-	var mesh := MeshInstance3D.new()
-	mesh.mesh = box
-	mesh.material_override = mat
-	mesh.transform = frame
-	parent.add_child(mesh)
+func track_color(distance: float, accent: float = 0.0, saturation: float = 0.84, value: float = 0.95) -> Color:
+	# Absolute arc-length color: stable across chunk seams and origin rebases.
+	return Color.from_hsv(fposmod(0.54 + distance / COLOR_CYCLE + accent, 1.0), saturation, value)
+
+func _box_mesh(size: Vector3) -> BoxMesh:
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	return mesh
+
+func _round_mesh(top: float, bottom: float, height: float, sides: int) -> CylinderMesh:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = top
+	mesh.bottom_radius = bottom
+	mesh.height = height
+	mesh.radial_segments = sides
+	mesh.rings = 1
+	return mesh
+
+func _part(parent: Node3D, frame: Transform3D, lane: float, bottom: float, width: float, height: float, depth: float, mesh: Mesh, mat: Material, hazards: Array[Dictionary], at: float, group: Dictionary, profile: String = "BOX", tilt: float = 0.0) -> void:
+	var visual := MeshInstance3D.new()
+	visual.mesh = mesh
+	visual.material_override = mat
+	var basis := frame.basis.rotated(-frame.basis.z, tilt)
+	visual.transform = Transform3D(basis, frame.origin + frame.basis.x * lane + frame.basis.y * (bottom + height * 0.5))
+	parent.add_child(visual)
+	hazards.append({"s": at, "lane": lane, "width": width, "height": height, "bottom": bottom, "depth": depth, "profile": profile, "group": group})
+
+func _spawn_obstacle(node: Node3D, hazards: Array[Dictionary], frame: Transform3D, at: float, lane: float, shape_id: int) -> void:
+	var mat := _material(track_color(at, 0.40, 0.88, 1.0))
+	var accent := _material(track_color(at, 0.48, 0.42, 1.0))
+	var group := {"used": false, "shape": shape_id}
+	match shape_id:
+		0: # Tall rectangular block
+			_part(node, frame, lane, 0.0, 3.5, 5.0, 3.0, _box_mesh(Vector3(3.5, 5.0, 3.0)), mat, hazards, at, group)
+		1: # Round column
+			_part(node, frame, lane, 0.0, 4.0, 5.5, 4.0, _round_mesh(2.0, 2.0, 5.5, 12), mat, hazards, at, group, "ROUND")
+		2: # Cone
+			_part(node, frame, lane, 0.0, 5.0, 5.5, 5.0, _round_mesh(0.0, 2.5, 5.5, 12), mat, hazards, at, group, "CONE")
+		3: # Octahedral-style crystal, two tapered halves
+			_part(node, frame, lane, 0.0, 4.8, 2.4, 4.8, _round_mesh(2.4, 0.0, 2.4, 4), mat, hazards, at, group, "INVERSE_CONE")
+			_part(node, frame, lane, 2.4, 4.8, 3.0, 4.8, _round_mesh(0.0, 2.4, 3.0, 4), accent, hazards, at, group, "CONE")
+		4: # Sphere
+			var sphere := SphereMesh.new()
+			sphere.radius = 2.1
+			sphere.height = 4.2
+			sphere.radial_segments = 16
+			sphere.rings = 8
+			_part(node, frame, lane, 0.0, 4.2, 4.2, 4.2, sphere, mat, hazards, at, group, "SPHERE")
+		5: # Jumpable low hurdle
+			_part(node, frame, lane, 0.0, 9.0, 1.35, 2.0, _box_mesh(Vector3(9.0, 1.35, 2.0)), mat, hazards, at, group)
+		6: # Arch with a real opening
+			_part(node, frame, lane - 3.4, 0.0, 1.5, 5.0, 2.2, _box_mesh(Vector3(1.5, 5.0, 2.2)), mat, hazards, at, group)
+			_part(node, frame, lane + 3.4, 0.0, 1.5, 5.0, 2.2, _box_mesh(Vector3(1.5, 5.0, 2.2)), mat, hazards, at, group)
+			_part(node, frame, lane, 3.4, 8.3, 1.6, 2.2, _box_mesh(Vector3(8.3, 1.6, 2.2)), accent, hazards, at, group)
+		7: # Stair-step barrier
+			_part(node, frame, lane - 2.8, 0.0, 2.8, 1.1, 2.8, _box_mesh(Vector3(2.8, 1.1, 2.8)), mat, hazards, at, group)
+			_part(node, frame, lane, 0.0, 2.8, 2.4, 2.8, _box_mesh(Vector3(2.8, 2.4, 2.8)), accent, hazards, at, group)
+			_part(node, frame, lane + 2.8, 0.0, 2.8, 3.8, 2.8, _box_mesh(Vector3(2.8, 3.8, 2.8)), mat, hazards, at, group)
+		8: # Hexagonal prism
+			_part(node, frame, lane, 0.0, 5.0, 3.6, 5.0, _round_mesh(2.5, 2.5, 3.6, 6), mat, hazards, at, group, "ROUND")
+		9: # Paired spires with a central path
+			_part(node, frame, lane - 3.6, 0.0, 3.0, 6.0, 3.0, _round_mesh(0.0, 1.5, 6.0, 5), mat, hazards, at, group, "CONE")
+			_part(node, frame, lane + 3.6, 0.0, 3.0, 6.0, 3.0, _round_mesh(0.0, 1.5, 6.0, 5), accent, hazards, at, group, "CONE")
+
+func lane_limit() -> float:
+	return HALF_WIDTH - 0.75
 
 func _vertex(frame: Transform3D, lateral: float, lift: float = 0.0) -> Vector3:
 	return frame.origin + frame.basis.x * lateral + frame.basis.y * lift
 
-func _line(tool: SurfaceTool, a: Vector3, b: Vector3, color: Color) -> void:
-	tool.set_color(color)
+func _line(tool: SurfaceTool, a: Vector3, b: Vector3, ca: Color, cb: Color) -> void:
+	tool.set_color(ca)
 	tool.add_vertex(a)
-	tool.set_color(color)
+	tool.set_color(cb)
 	tool.add_vertex(b)
 
-func _build_mesh(node: Node3D, points: Array[Transform3D]) -> void:
+func _tri(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	tool.set_color(ca)
+	tool.add_vertex(a)
+	tool.set_color(cb)
+	tool.add_vertex(b)
+	tool.set_color(cc)
+	tool.add_vertex(c)
+
+func _quad(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, ca: Color, cb: Color) -> void:
+	# a,b share the first cross-section; c,d share the next.
+	_tri(tool, a, c, b, ca, cb, ca)
+	_tri(tool, b, c, d, ca, cb, cb)
+
+func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float) -> void:
 	var fill := SurfaceTool.new()
 	fill.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var faces := PackedVector3Array()
 	var grid := SurfaceTool.new()
 	grid.begin(Mesh.PRIMITIVE_LINES)
-	var blue := Color(0.08, 0.65, 0.94)
-	var pink := Color(0.99, 0.12, 0.59)
 	for i in range(STEPS):
-		var a := _vertex(points[i], -HALF_WIDTH)
-		var b := _vertex(points[i], HALF_WIDTH)
-		var c := _vertex(points[i+1], -HALF_WIDTH)
-		var d := _vertex(points[i+1], HALF_WIDTH)
-		for v: Vector3 in [a, c, b, b, c, d]:
-			fill.add_vertex(v)
-			faces.append(v)
-		for lane in range(7):
-			var z := -HALF_WIDTH + float(lane) * HALF_WIDTH / 3.0
-			_line(grid, _vertex(points[i], z, 0.035), _vertex(points[i+1], z, 0.035), pink if lane == 0 or lane == 6 else blue)
-		if i % 2 == 0:
-			_line(grid, _vertex(points[i], -HALF_WIDTH, 0.04), _vertex(points[i], HALF_WIDTH, 0.04), pink if i % 12 == 0 else blue)
+		var s0 := start_s + float(i) * STEP
+		var s1 := s0 + STEP
+		var dark0 := track_color(s0, 0.0, 0.72, 0.105)
+		var dark1 := track_color(s1, 0.0, 0.72, 0.105)
+		var underside0 := track_color(s0, 0.02, 0.65, 0.065)
+		var underside1 := track_color(s1, 0.02, 0.65, 0.065)
+		for j in range(CROSS_STEPS):
+			var z0 := lerpf(-HALF_WIDTH, HALF_WIDTH, float(j) / float(CROSS_STEPS))
+			var z1 := lerpf(-HALF_WIDTH, HALF_WIDTH, float(j + 1) / float(CROSS_STEPS))
+			var a := _vertex(points[i], z0)
+			var b := _vertex(points[i], z1)
+			var c := _vertex(points[i+1], z0)
+			var d := _vertex(points[i+1], z1)
+			_quad(fill, a, b, c, d, dark0, dark1)
+			for v: Vector3 in [a, c, b, b, c, d]:
+				faces.append(v)
+			var ba := _vertex(points[i], z0, -THICKNESS)
+			var bb := _vertex(points[i], z1, -THICKNESS)
+			var bc := _vertex(points[i+1], z0, -THICKNESS)
+			var bd := _vertex(points[i+1], z1, -THICKNESS)
+			_quad(fill, bb, ba, bd, bc, underside0, underside1)
+			# Both running-surface grid and collider use the same tessellation.
+			if i % 4 == 0:
+				_line(grid, _vertex(points[i], z0, 0.075), _vertex(points[i], z1, 0.075), track_color(s0, 0.0, 0.8, 0.7), track_color(s0, 0.0, 0.8, 0.7))
+		for j in range(CROSS_STEPS + 1):
+			var z := lerpf(-HALF_WIDTH, HALF_WIDTH, float(j) / float(CROSS_STEPS))
+			var edge := j == 0 or j == CROSS_STEPS
+			var ca := track_color(s0, 0.19 if edge else 0.0)
+			var cb := track_color(s1, 0.19 if edge else 0.0)
+			_line(grid, _vertex(points[i], z, 0.075), _vertex(points[i+1], z, 0.075), ca, cb)
+		for side: float in [-HALF_WIDTH, HALF_WIDTH]:
+			_quad(fill, _vertex(points[i], side), _vertex(points[i], side, -THICKNESS), _vertex(points[i+1], side), _vertex(points[i+1], side, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))
 	var solid := MeshInstance3D.new()
 	solid.mesh = fill.commit()
 	solid.material_override = surface_mat
@@ -192,8 +270,6 @@ func _build_mesh(node: Node3D, points: Array[Transform3D]) -> void:
 	wire.mesh = grid.commit()
 	wire.material_override = line_mat
 	node.add_child(wire)
-	# Collider exists for world queries and tools. The arcade runner follows
-	# the same ribbon parametrically, so inversion contact is deterministic.
 	var body := StaticBody3D.new()
 	body.collision_layer = 1
 	body.collision_mask = 0
@@ -253,24 +329,40 @@ func section_name(distance: float) -> String:
 		return "TRACK"
 	return str(chunks[index]["kind"])
 
-func swept_obstacles(from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float) -> int:
+func swept_obstacles(from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float, player_height: float = 1.7) -> int:
 	var count := 0
 	if to_s <= from_s:
 		return count
-	for index in range(maxi(0, int(floor((from_s - 2.0) / CHUNK_LENGTH))), int(floor((to_s + 2.0) / CHUNK_LENGTH)) + 1):
+	for index in range(maxi(0, int(floor((from_s - 4.0) / CHUNK_LENGTH))), int(floor((to_s + 4.0) / CHUNK_LENGTH)) + 1):
 		if not chunks.has(index):
 			continue
 		var hazards: Array[Dictionary] = chunks[index]["hazards"]
 		for hazard in hazards:
-			if bool(hazard["used"]):
+			var group: Dictionary = hazard["group"]
+			if bool(group["used"]):
 				continue
 			var hs: float = hazard["s"]
-			if to_s < hs - 1.7 or from_s > hs + 1.7:
+			var depth: float = hazard["depth"]
+			if to_s < hs - depth * 0.5 - 0.5 or from_s > hs + depth * 0.5 + 0.5:
 				continue
 			var t := clampf((hs - from_s) / (to_s - from_s), 0.0, 1.0)
 			var lane := lerpf(from_lane, to_lane, t)
-			var height := lerpf(from_height, to_height, t)
-			if absf(lane - float(hazard["lane"])) <= float(hazard["width"]) * 0.5 + 0.55 and height < float(hazard["height"]):
-				hazard["used"] = true
+			var feet := lerpf(from_height, to_height, t)
+			var bottom: float = hazard["bottom"]
+			var h: float = hazard["height"]
+			if feet >= bottom + h or feet + player_height <= bottom:
+				continue
+			var radius: float = float(hazard["width"]) * 0.5
+			var profile: String = hazard["profile"]
+			if profile == "CONE":
+				radius *= 1.0 - clampf((feet - bottom) / h, 0.0, 1.0)
+			elif profile == "INVERSE_CONE":
+				radius *= clampf((feet + player_height - bottom) / h, 0.0, 1.0)
+			elif profile == "SPHERE":
+				var center_y := bottom + h * 0.5
+				var closest_y := clampf(center_y, feet, feet + player_height)
+				radius *= sqrt(maxf(0.0, 1.0 - pow((closest_y - center_y) / (h * 0.5), 2.0)))
+			if absf(lane - float(hazard["lane"])) <= radius + 0.55:
+				group["used"] = true
 				count += 1
 	return count

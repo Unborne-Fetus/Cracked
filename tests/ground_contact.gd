@@ -27,11 +27,11 @@ func _run_test() -> void:
 	if frames < 12:
 		_fail("Runner did not land on the generated track.")
 		return
-	# Inverted midpoint: feet must remain on the inverted ribbon surface.
-	runner.set("distance", 480.0)
+	# Inverted midpoint of the 180 bank, not a vertical loop.
+	runner.set("distance", 864.0)
 	runner.set("height", 0.0)
 	runner.call("sync_pose", course)
-	frame = course.call("sample", 480.0)
+	frame = course.call("sample", 864.0)
 	if frame.basis.y.y > -0.8 or runner.transform.basis.y.y > -0.8 or runner.position.distance_to(frame.origin + frame.basis.x * float(runner.get("lane"))) > 0.01:
 		_fail("Runner failed to align with an actual inverted track.")
 		return

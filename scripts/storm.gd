@@ -12,7 +12,7 @@ var elapsed := 0.0
 func _ready() -> void:
 	var fog := MeshInstance3D.new()
 	var quad := QuadMesh.new()
-	quad.size = Vector2(40.0, 31.0)
+	quad.size = Vector2(60.0, 40.0)
 	fog.mesh = quad
 	fog.position.y = 7.0
 	var mat := StandardMaterial3D.new()
@@ -24,14 +24,14 @@ func _ready() -> void:
 	add_child(fog)
 	var lines := SurfaceTool.new()
 	lines.begin(Mesh.PRIMITIVE_LINES)
-	for i in range(13):
-		var x := -19.0 + float(i) * 3.0
-		lines.add_vertex(Vector3(x, -8, 0))
-		lines.add_vertex(Vector3(x + 1.0, 22, 0))
+	for i in range(21):
+		var x := -30.0 + float(i) * 3.0
+		lines.add_vertex(Vector3(x, -13, 0))
+		lines.add_vertex(Vector3(x + 1.0, 27, 0))
 	for i in range(10):
 		var y := -8.0 + float(i) * 3.3
-		lines.add_vertex(Vector3(-20, y, 0))
-		lines.add_vertex(Vector3(20, y + 1, 0))
+		lines.add_vertex(Vector3(-30, y, 0))
+		lines.add_vertex(Vector3(30, y + 1, 0))
 	var lattice := MeshInstance3D.new()
 	lattice.mesh = lines.commit()
 	var grid := StandardMaterial3D.new()

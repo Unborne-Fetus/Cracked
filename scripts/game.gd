@@ -98,7 +98,7 @@ func _update_hud() -> void:
 	section_label.text = "TRACK  //  " + str(course.section_name(runner.distance))
 	if runner.is_sliding:
 		if runner.uphill:
-			slide_label.text = "LOOP SLIDE  //  MOMENTUM RETAINED" if runner.in_inversion else "UPHILL SLIDE  //  LOSING SPEED"
+			slide_label.text = "UPHILL SLIDE  //  LOSING SPEED"
 		else:
 			slide_label.text = "SLIDING  //  GAINING SPEED"
 	else:
