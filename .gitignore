@@ -1,0 +1,7 @@
+# Godot import cache
+.godot/
+# Generated web artifacts
+build/
+export/
+*.tmp
+.DS_Store
