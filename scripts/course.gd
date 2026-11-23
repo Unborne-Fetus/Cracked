@@ -16,7 +16,7 @@ func _ready() -> void:
 	_build_decorations()
 
 func surface_height(x: float, z: float) -> float:
-	var bank := powf(absf(z) / HALF_WIDTH, 2.0) * 2.6
+	var bank: float = pow(absf(z) / HALF_WIDTH, 2.0) * 2.6
 	return -0.065 * x + sin(x * 0.023) * 5.8 + sin(x * 0.064) * 1.65 + bank
 
 func _make_materials() -> void:
@@ -151,5 +151,5 @@ func _build_decorations() -> void:
 	for i in range(16):
 		var x := 60.0 + float(i) * 61.0
 		for side in [-1.0, 1.0]:
-			var z := side * 39.0
+			var z: float = side * 39.0
 			_box(Vector3(0.35, 16.0 + float(i % 4) * 6.0, 0.35), Vector3(x, surface_height(x, z) + 8.0, z), cyan)
