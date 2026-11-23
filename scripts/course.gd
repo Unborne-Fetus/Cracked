@@ -120,11 +120,16 @@ func _build_chunk(index: int) -> void:
 	var positions: Array[float] = [35.0, 72.0, 108.0, 144.0, 174.0]
 	if index == 0:
 		positions = [82.0, 137.0]
+	elif index >= 2 and kind != "180 BANK" and kind != "360 BANK":
+		positions = [18.0, 40.0, 140.0, 161.0, 180.0]
 	elif kind == "180 BANK" or kind == "360 BANK":
 		positions = [30.0, 160.0]
 	for i in range(positions.size()):
 		var at: float = positions[i]
 		var lane := float(rng.randi_range(-5, 5)) * 3.2
+		# Keep the approach and immediate exit from route gates navigable.
+		if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and at >= 130.0 and at <= 150.0:
+			lane = 10.0 if index % 2 == 0 else -10.0
 		var shape_id := (index * 5 + i) % 10
 		if index > 5:
 			shape_id = rng.randi_range(0, 9)
@@ -132,6 +137,14 @@ func _build_chunk(index: int) -> void:
 			shape_id = 0
 		var frame := points[int(at / STEP)].interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
 		_spawn_obstacle(node, hazards, frame, float(index) * CHUNK_LENGTH + at, lane, shape_id)
+	# Route gates have a guaranteed opening, but it moves across the track.
+	# Wide tall walls discourage jumping over every obstacle instead of steering.
+	if index >= 2 and kind != "180 BANK" and kind != "360 BANK":
+		var gate_at := 94.0
+		var gate_frame := points[int(gate_at / STEP)]
+		var opening := -10.0 if index % 2 == 0 else 10.0
+		var gap_width := maxf(9.0, 13.0 - float(index) * 0.12)
+		_spawn_route_gate(node, hazards, gate_frame, float(index) * CHUNK_LENGTH + gate_at, opening, gap_width)
 	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards}
 
 func track_color(distance: float, accent: float = 0.0, saturation: float = 0.84, value: float = 0.95) -> Color:
@@ -197,6 +210,25 @@ func _spawn_obstacle(node: Node3D, hazards: Array[Dictionary], frame: Transform3
 		9: # Paired spires with a central path
 			_part(node, frame, lane - 3.6, 0.0, 3.0, 6.0, 3.0, _round_mesh(0.0, 1.5, 6.0, 5), mat, hazards, at, group, "CONE")
 			_part(node, frame, lane + 3.6, 0.0, 3.0, 6.0, 3.0, _round_mesh(0.0, 1.5, 6.0, 5), accent, hazards, at, group, "CONE")
+
+func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transform3D, at: float, opening: float, gap_width: float) -> void:
+	var mat := _material(track_color(at, 0.40, 0.92, 0.85))
+	var group := {"used": false, "shape": 10, "gate": true, "opening": opening, "gap_width": gap_width}
+	var left_edge := opening - gap_width * 0.5
+	var right_edge := opening + gap_width * 0.5
+	var left_width := left_edge + HALF_WIDTH
+	var right_width := HALF_WIDTH - right_edge
+	var wall_height := 42.0
+	_part(node, frame, (-HALF_WIDTH + left_edge) * 0.5, 0.0, left_width, wall_height, 2.0, _box_mesh(Vector3(left_width, wall_height, 2.0)), mat, hazards, at, group)
+	_part(node, frame, (right_edge + HALF_WIDTH) * 0.5, 0.0, right_width, wall_height, 2.0, _box_mesh(Vector3(right_width, wall_height, 2.0)), mat, hazards, at, group)
+	# Contrasting edges visually identify the opening before the player reaches it.
+	var edge_mat := _material(track_color(at, 0.20, 0.52, 1.0))
+	for edge: float in [left_edge, right_edge]:
+		var edge_mesh := MeshInstance3D.new()
+		edge_mesh.mesh = _box_mesh(Vector3(0.18, wall_height, 2.15))
+		edge_mesh.material_override = edge_mat
+		edge_mesh.transform = Transform3D(frame.basis, frame.origin + frame.basis.x * edge + frame.basis.y * wall_height * 0.5)
+		node.add_child(edge_mesh)
 
 func lane_limit() -> float:
 	return HALF_WIDTH - 0.75

@@ -19,6 +19,9 @@ var clock_label: Label
 var record_label: Label
 var camera_label: Label
 var slide_label: Label
+var grip_label: Label
+var camera_track_s := 0.0
+var camera_track_clearance := 0.0
 var storm_label: Label
 var section_label: Label
 var message_label: Label
@@ -40,6 +43,7 @@ func _ready() -> void:
 	view_camera = Camera3D.new()
 	view_camera.current = true
 	view_camera.fov = 82.0
+	view_camera.near = 0.075
 	view_camera.far = 1600.0
 	add_child(view_camera)
 	_create_hud()
@@ -76,17 +80,51 @@ func _process(delta: float) -> void:
 	_update_camera(delta)
 	_update_hud()
 
+func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> bool:
+	# Check the actual bank frame along the sightline, not world-up.
+	# This also works during origin rebases and before physics colliders sync.
+	for i in range(1, 16):
+		var t := float(i) / 16.0
+		var frame: Transform3D = course.sample(lerpf(from_s, to_s, t))
+		var point := a.lerp(b, t) - frame.origin
+		if absf(point.dot(frame.basis.x)) <= float(course.lane_limit()) + 1.0 and point.dot(frame.basis.y) < 0.55:
+			return false
+	return true
+
 func _update_camera(delta: float) -> void:
-	var frame: Transform3D = runner.transform
-	var forward: Vector3 = -frame.basis.z
-	var up: Vector3 = frame.basis.y
-	var pos: Vector3 = frame.origin
+	var player_s: float = runner.distance
+	var player_lane: float = runner.lane
+	var frame: Transform3D = course.sample(player_s)
+	var up := frame.basis.y
+	var forward := -frame.basis.z
+	var pos: Vector3 = runner.position
 	if first_person:
-		view_camera.global_position = pos + up * 1.45 + forward * 0.3
-		view_camera.look_at(pos + up * 1.45 + forward * 25.0, up)
+		camera_track_s = player_s
+		view_camera.position = pos + up * 1.55
+		view_camera.look_at(view_camera.position + forward * 25.0, up)
 	else:
-		view_camera.global_position = pos - forward * 11.0 + up * 5.0
-		view_camera.look_at(pos + forward * 13.0 + up * 1.2, up)
+		var focus := pos + up * 1.35
+		# Sample the track AT the camera's trailing distance. Using the
+		# player's up vector eleven metres behind it crossed twisting banks.
+		# Shorten the arm if its sightline would cross the road.
+		var selected := false
+		for trail: float in [11.0, 8.0, 5.0, 3.0]:
+			var s := maxf(0.0, player_s - trail)
+			var rear: Transform3D = course.sample(s)
+			var candidate := rear.origin + rear.basis.x * player_lane + rear.basis.y * (5.4 + float(runner.height))
+			if _camera_line_clear(candidate, focus, s, player_s):
+				camera_track_s = s
+				view_camera.position = candidate
+				view_camera.look_at(focus + forward * 0.8, rear.basis.y)
+				selected = true
+				break
+		if not selected:
+			# Local fallback cannot be on the underside, even on a full roll.
+			camera_track_s = player_s
+			view_camera.position = pos + up * 3.6
+			view_camera.look_at(view_camera.position + forward * 22.0, up)
+	var camera_frame: Transform3D = course.sample(camera_track_s)
+	camera_track_clearance = (view_camera.position - camera_frame.origin).dot(camera_frame.basis.y)
 	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.15, 78.0, 108.0), minf(delta * 7.0, 1.0))
 
 func _update_hud() -> void:
@@ -99,10 +137,14 @@ func _update_hud() -> void:
 	if runner.is_sliding:
 		if runner.uphill:
 			slide_label.text = "UPHILL SLIDE  //  LOSING SPEED"
+		elif runner.slide_grip < 0.12:
+			slide_label.text = "SLIDE EXHAUSTED  //  RELEASE"
 		else:
-			slide_label.text = "SLIDING  //  GAINING SPEED"
+			slide_label.text = "SLIDING  //  BUILD MOMENTUM"
 	else:
-		slide_label.text = "HOLD SHIFT / S TO SLIDE"
+		slide_label.text = "RELEASE TO RECOVER GRIP" if runner.slide_grip < 0.95 else "HOLD SHIFT / S TO SLIDE"
+	grip_label.text = "SLIDE GRIP  %d%%" % int(runner.slide_grip * 100.0)
+	grip_label.add_theme_color_override("font_color", Color(1.0, 0.34, 0.38) if runner.slide_grip < 0.25 else Color(0.4, 0.96, 0.9))
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
 	storm_label.text = "STORM  %d m  //  %d km/h" % [int(gap), int(storm.speed * 3.6)]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
@@ -192,6 +234,8 @@ func _create_hud() -> void:
 	stack.add_child(section_label)
 	slide_label = _label("", 16, Color(0.4, 0.96, 0.9))
 	stack.add_child(slide_label)
+	grip_label = _label("", 16, Color(0.4, 0.96, 0.9))
+	stack.add_child(grip_label)
 	storm_label = _label("", 18, Color(1.0, 0.33, 0.50))
 	stack.add_child(storm_label)
 	message_label = _label("", 25, Color(1.0, 0.84, 0.3))

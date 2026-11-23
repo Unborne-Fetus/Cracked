@@ -8,7 +8,11 @@ const SLIDE_DOWNHILL_ACCEL := 55.0
 const SLIDE_UPHILL_DRAG := 25.0
 const UPHILL_GRADE_DRAG := 52.0
 const RUN_DRAG := 1.2
-const AIR_DRAG := 0.4
+const AIR_DRAG := 2.2
+const SLIDE_DRAIN := 0.42
+const SLIDE_RECOVERY := 0.65
+const EXHAUSTED_SLIDE_DRAG := 9.0
+const LANDING_RECOVERY := 0.18
 const JUMP_IMPULSE := 12.5
 const JUMP_SPEED_GAIN := 1.55
 const MAX_JUMP_IMPULSE := 45.0
@@ -27,6 +31,8 @@ var queued_jump := false
 var jump_held := false
 var is_sliding := false
 var uphill := false
+var slide_grip := 1.0
+var landing_timer := 0.0
 var hit_timer := 0.0
 var hits := 0
 var avatar: Node3D
@@ -69,6 +75,8 @@ func reset_run(course: Node3D) -> void:
 	jump_held = false
 	is_sliding = false
 	uphill = false
+	slide_grip = 1.0
+	landing_timer = 0.0
 	hit_timer = 0.0
 	hits = 0
 	sync_pose(course)
@@ -82,19 +90,29 @@ func set_first_person(enabled: bool) -> void:
 func can_slide_on_grade(_grade: float) -> bool:
 	return true
 
-func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float) -> float:
+func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float, grip: float = 1.0) -> float:
 	var change := 0.0
 	if grounded and slide:
 		if grade > 0.025:
 			change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
 		else:
-			change = SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
+			var traction := smoothstep(0.0, 0.30, grip)
+			var gain := SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
+			change = lerpf(-EXHAUSTED_SLIDE_DRAG, gain, traction)
 	elif grounded:
 		change = -RUN_DRAG - maxf(grade, 0.0) * 14.0
 	else:
 		change = -AIR_DRAG
 	# No cap; the low-speed walking floor cannot increase a slower value.
 	return maxf(minf(current, MIN_SPEED), current + change * delta)
+
+func update_slide_grip(delta: float, grounded: bool, slide: bool) -> void:
+	# Releasing slide on the ground restores traction. Holding it in the
+	# air does not reset the meter, so repeated jumps cannot bypass fatigue.
+	if grounded and slide:
+		slide_grip = maxf(0.0, slide_grip - SLIDE_DRAIN * delta)
+	elif grounded and not slide:
+		slide_grip = minf(1.0, slide_grip + SLIDE_RECOVERY * delta)
 
 func jump_impulse_for_speed(current: float) -> float:
 	# Square-root scaling rewards speed without making jumps unboundedly tall.
@@ -127,7 +145,8 @@ func tick(delta: float, course: Node3D) -> void:
 		queued_jump = true
 	jump_held = jump
 	var ground := is_grounded()
-	if ground and queued_jump:
+	landing_timer = maxf(0.0, landing_timer - delta)
+	if ground and queued_jump and landing_timer <= 0.0:
 		vertical_speed = jump_impulse_for_speed(speed)
 		height = 0.01
 		ground = false
@@ -136,13 +155,16 @@ func tick(delta: float, course: Node3D) -> void:
 	var grade := -frame.basis.z.y
 	is_sliding = ground and slide
 	uphill = grade > 0.025
-	speed = step_speed(speed, grade, ground, slide, delta)
+	update_slide_grip(delta, ground, slide)
+	speed = step_speed(speed, grade, ground, slide, delta, slide_grip)
 	var old_s := distance
 	var old_lane := lane
 	var old_height := height
 	# Wider track needs stronger steering, especially at high forward speeds.
 	var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
-	lateral_speed = move_toward(lateral_speed, steer * steer_speed, 82.0 * delta)
+	# Standing gives precise lane changes; sliding trades control for speed.
+	var steering_factor := 0.62 if is_sliding else (0.72 if not ground else 1.0)
+	lateral_speed = move_toward(lateral_speed, steer * steer_speed * steering_factor, 82.0 * delta * steering_factor)
 	var limit: float = course.call("lane_limit")
 	lane = clampf(lane + lateral_speed * delta, -limit, limit)
 	if not ground:
@@ -150,6 +172,8 @@ func tick(delta: float, course: Node3D) -> void:
 		height = maxf(0.0, height + vertical_speed * delta)
 		if height <= 0.0:
 			vertical_speed = 0.0
+			landing_timer = LANDING_RECOVERY
+			queued_jump = false
 	hit_timer = maxf(0.0, hit_timer - delta)
 	distance += speed * delta
 	course.call("stream", distance)

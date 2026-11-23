@@ -3,7 +3,7 @@ extends Node3D
 
 const INITIAL_GAP := 92.0
 const INITIAL_SPEED := 11.0
-const ACCELERATION := 0.44
+const ACCELERATION := 0.72
 
 var front_s := -INITIAL_GAP
 var speed := INITIAL_SPEED

@@ -27,6 +27,21 @@ func _run_tests() -> void:
 	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
 		_fail("Sliding unexpectedly has a maximum speed.")
 		return
+	# Holding slide drains traction; release restores it. Jumping cannot refill it.
+	runner.set("slide_grip", 1.0)
+	runner.call("update_slide_grip", 3.0, true, true)
+	var empty_grip: float = runner.get("slide_grip")
+	if empty_grip > 0.01 or float(runner.call("step_speed", 45.0, -0.2, true, true, 1.0, empty_grip)) >= 45.0:
+		_fail("Permanent sliding must not provide permanent acceleration.")
+		return
+	runner.call("update_slide_grip", 1.0, false, true)
+	if float(runner.get("slide_grip")) > 0.01:
+		_fail("Jumping incorrectly restores grip.")
+		return
+	runner.call("update_slide_grip", 2.0, true, false)
+	if float(runner.get("slide_grip")) < 0.99:
+		_fail("Releasing slide must restore grip.")
+		return
 	# Faster launches produce higher jumps, without changing forward speed.
 	var low_jump: float = runner.call("jump_impulse_for_speed", 22.0)
 	var fast_jump: float = runner.call("jump_impulse_for_speed", 80.0)
@@ -65,8 +80,8 @@ func _run_tests() -> void:
 			return
 		for piece in data["hazards"]:
 			shapes[int(piece["group"]["shape"])] = true
-	if shapes.size() != 10:
-		_fail("Opening sections did not introduce all ten obstacle shapes.")
+	if shapes.size() != 11:
+		_fail("Opening sections did not introduce all ten obstacle shapes and route gates.")
 		return
 	if float(course.call("lane_limit")) < 20.0:
 		_fail("Track steering width was not expanded.")
@@ -76,6 +91,37 @@ func _run_tests() -> void:
 	var color_far: Color = course.call("track_color", 3000.0)
 	if absf(color_a.r - color_b.r) + absf(color_a.g - color_b.g) + absf(color_a.b - color_b.b) > 0.002 or color_a.is_equal_approx(color_far):
 		_fail("Distance-based colors are discontinuous or do not change.")
+		return
+	# Check both camera modes through entire wide roll sections, at both edges.
+	for s in range(768, 1152, 3):
+		for lane_test: float in [-20.0, 0.0, 20.0]:
+			runner.set("distance", float(s))
+			runner.set("lane", lane_test)
+			runner.call("sync_pose", course)
+			for fp in [false, true]:
+				game.set("first_person", fp)
+				game.call("_update_camera", 1.0 / 60.0)
+				if float(game.get("camera_track_clearance")) < 1.0:
+					_fail("Camera crossed the running surface during a bank.")
+					return
+	game.set("first_person", false)
+	var gate_parts: Array[Dictionary] = chunks[2]["hazards"]
+	var gate: Dictionary = {}
+	for piece in gate_parts:
+		if bool(piece["group"].get("gate", false)):
+			gate = piece
+			break
+	if gate.is_empty():
+		_fail("A mandatory route gate is missing.")
+		return
+	var gate_s: float = gate["s"]
+	var open_lane: float = gate["group"]["opening"]
+	if int(course.call("swept_obstacles", gate_s - 3.0, gate_s + 3.0, open_lane, open_lane, 0.0, 0.0)) != 0:
+		_fail("The route gate opening is not traversable.")
+		return
+	var blocked_lane: float = gate["lane"]
+	if int(course.call("swept_obstacles", gate_s - 3.0, gate_s + 3.0, blocked_lane, blocked_lane, 0.0, 0.0)) != 1:
+		_fail("The route gate wall failed to penalize a bad lane.")
 		return
 	var hazards: Array[Dictionary] = chunks[0]["hazards"]
 	var hazard: Dictionary = hazards[0]
