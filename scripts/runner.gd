@@ -9,14 +9,15 @@ const SLIDE_UPHILL_DRAG := 25.0
 const UPHILL_GRADE_DRAG := 52.0
 const RUN_DRAG := 1.2
 const AIR_DRAG := 2.2
-const SLIDE_DRAIN := 0.42
-const SLIDE_RECOVERY := 0.65
-const EXHAUSTED_SLIDE_DRAG := 9.0
 const LANDING_RECOVERY := 0.18
 const JUMP_IMPULSE := 12.5
 const JUMP_SPEED_GAIN := 1.55
 const MAX_JUMP_IMPULSE := 45.0
 const GRAVITY := 27.0
+const CONTACT_PROBE := 2.0
+const TAKEOFF_THRESHOLD := 1.0
+const SOFT_LANDING_SPEED := 9.0
+const HARD_LANDING_SCALE := 0.014
 const OBSTACLE_RETAIN := 0.30
 
 var speed := START_SPEED
@@ -31,7 +32,6 @@ var queued_jump := false
 var jump_held := false
 var is_sliding := false
 var uphill := false
-var slide_grip := 1.0
 var landing_timer := 0.0
 var hit_timer := 0.0
 var hits := 0
@@ -75,7 +75,6 @@ func reset_run(course: Node3D) -> void:
 	jump_held = false
 	is_sliding = false
 	uphill = false
-	slide_grip = 1.0
 	landing_timer = 0.0
 	hit_timer = 0.0
 	hits = 0
@@ -90,15 +89,13 @@ func set_first_person(enabled: bool) -> void:
 func can_slide_on_grade(_grade: float) -> bool:
 	return true
 
-func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float, grip: float = 1.0) -> float:
+func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float) -> float:
 	var change := 0.0
 	if grounded and slide:
 		if grade > 0.025:
 			change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
 		else:
-			var traction := smoothstep(0.0, 0.30, grip)
-			var gain := SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
-			change = lerpf(-EXHAUSTED_SLIDE_DRAG, gain, traction)
+			change = SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
 	elif grounded:
 		change = -RUN_DRAG - maxf(grade, 0.0) * 14.0
 	else:
@@ -106,13 +103,30 @@ func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta
 	# No cap; the low-speed walking floor cannot increase a slower value.
 	return maxf(minf(current, MIN_SPEED), current + change * delta)
 
-func update_slide_grip(delta: float, grounded: bool, slide: bool) -> void:
-	# Releasing slide on the ground restores traction. Holding it in the
-	# air does not reset the meter, so repeated jumps cannot bypass fatigue.
-	if grounded and slide:
-		slide_grip = maxf(0.0, slide_grip - SLIDE_DRAIN * delta)
-	elif grounded and not slide:
-		slide_grip = minf(1.0, slide_grip + SLIDE_RECOVERY * delta)
+func _surface_point(course: Node3D, at: float, across: float) -> Vector3:
+	var frame: Transform3D = course.call("sample", at)
+	return frame.origin + frame.basis.x * across
+
+func relative_normal_acceleration(course: Node3D, at: float, across: float, forward_speed: float, side_speed: float = 0.0) -> float:
+	# The local normal rotates through banks, preserving the arcade track
+	# coordinate system. The surface can push outward but cannot pull us in.
+	# Curvature acceleration scales with speed squared: a crest that a slow
+	# runner can follow will naturally launch a fast runner.
+	var frame: Transform3D = course.call("sample", at)
+	var ds := CONTACT_PROBE
+	var side_delta := side_speed / maxf(forward_speed, 1.0) * ds
+	var limit: float = course.call("lane_limit")
+	var before := _surface_point(course, at - ds, clampf(across - side_delta, -limit, limit))
+	var center := _surface_point(course, at, across)
+	var after := _surface_point(course, at + ds, clampf(across + side_delta, -limit, limit))
+	var normal_curvature := (before - center * 2.0 + after).dot(frame.basis.y) / (ds * ds)
+	return -GRAVITY - normal_curvature * forward_speed * forward_speed
+
+func landing_speed(current: float, impact_speed: float) -> float:
+	# Gentle contact with a downhill slope preserves speed; hitting the
+	# surface hard costs momentum. No landing grants forward acceleration.
+	var loss := clampf((impact_speed - SOFT_LANDING_SPEED) * HARD_LANDING_SCALE, 0.0, 0.52)
+	return current * (1.0 - loss)
 
 func jump_impulse_for_speed(current: float) -> float:
 	# Square-root scaling rewards speed without making jumps unboundedly tall.
@@ -146,17 +160,22 @@ func tick(delta: float, course: Node3D) -> void:
 	jump_held = jump
 	var ground := is_grounded()
 	landing_timer = maxf(0.0, landing_timer - delta)
+	var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
 	if ground and queued_jump and landing_timer <= 0.0:
 		vertical_speed = jump_impulse_for_speed(speed)
 		height = 0.01
+		ground = false
+		queued_jump = false
+	elif ground and normal_accel > TAKEOFF_THRESHOLD:
+		# Natural lift-off: no button input or artificial jump impulse.
+		vertical_speed = 0.0
 		ground = false
 		queued_jump = false
 	var frame: Transform3D = course.call("sample", distance)
 	var grade := -frame.basis.z.y
 	is_sliding = ground and slide
 	uphill = grade > 0.025
-	update_slide_grip(delta, ground, slide)
-	speed = step_speed(speed, grade, ground, slide, delta, slide_grip)
+	speed = step_speed(speed, grade, ground, slide, delta)
 	var old_s := distance
 	var old_lane := lane
 	var old_height := height
@@ -168,12 +187,22 @@ func tick(delta: float, course: Node3D) -> void:
 	var limit: float = course.call("lane_limit")
 	lane = clampf(lane + lateral_speed * delta, -limit, limit)
 	if not ground:
-		vertical_speed -= GRAVITY * delta
-		height = maxf(0.0, height + vertical_speed * delta)
-		if height <= 0.0:
+		# Integrate the gap from the moving surface, including curvature.
+		# Unlike the old tether, the road falling away creates actual airtime.
+		var previous_normal_speed := vertical_speed
+		vertical_speed += normal_accel * delta
+		var next_height := height + (previous_normal_speed + vertical_speed) * 0.5 * delta
+		if next_height <= 0.0 and vertical_speed <= 0.0:
+			speed = landing_speed(speed, -vertical_speed)
+			height = 0.0
 			vertical_speed = 0.0
 			landing_timer = LANDING_RECOVERY
 			queued_jump = false
+		else:
+			height = maxf(0.0, next_height)
+	else:
+		height = 0.0
+		vertical_speed = 0.0
 	hit_timer = maxf(0.0, hit_timer - delta)
 	distance += speed * delta
 	course.call("stream", distance)

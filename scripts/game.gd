@@ -19,7 +19,6 @@ var clock_label: Label
 var record_label: Label
 var camera_label: Label
 var slide_label: Label
-var grip_label: Label
 var camera_track_s := 0.0
 var camera_track_clearance := 0.0
 var storm_label: Label
@@ -134,17 +133,12 @@ func _update_hud() -> void:
 	record_label.text = "BEST  %d m" % int(maxf(best_distance, runner.distance - 8.0))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
 	section_label.text = "TRACK  //  " + str(course.section_name(runner.distance))
-	if runner.is_sliding:
-		if runner.uphill:
-			slide_label.text = "UPHILL SLIDE  //  LOSING SPEED"
-		elif runner.slide_grip < 0.12:
-			slide_label.text = "SLIDE EXHAUSTED  //  RELEASE"
-		else:
-			slide_label.text = "SLIDING  //  BUILD MOMENTUM"
+	if not runner.is_grounded():
+		slide_label.text = "AIRBORNE  //  CARRY MOMENTUM"
+	elif runner.is_sliding:
+		slide_label.text = "UPHILL SLIDE  //  LOSING SPEED" if runner.uphill else "SLIDING  //  BUILD MOMENTUM"
 	else:
-		slide_label.text = "RELEASE TO RECOVER GRIP" if runner.slide_grip < 0.95 else "HOLD SHIFT / S TO SLIDE"
-	grip_label.text = "SLIDE GRIP  %d%%" % int(runner.slide_grip * 100.0)
-	grip_label.add_theme_color_override("font_color", Color(1.0, 0.34, 0.38) if runner.slide_grip < 0.25 else Color(0.4, 0.96, 0.9))
+		slide_label.text = "HOLD SHIFT / S TO SLIDE"
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
 	storm_label.text = "STORM  %d m  //  %d km/h" % [int(gap), int(storm.speed * 3.6)]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
@@ -234,8 +228,6 @@ func _create_hud() -> void:
 	stack.add_child(section_label)
 	slide_label = _label("", 16, Color(0.4, 0.96, 0.9))
 	stack.add_child(slide_label)
-	grip_label = _label("", 16, Color(0.4, 0.96, 0.9))
-	stack.add_child(grip_label)
 	storm_label = _label("", 18, Color(1.0, 0.33, 0.50))
 	stack.add_child(storm_label)
 	message_label = _label("", 25, Color(1.0, 0.84, 0.3))

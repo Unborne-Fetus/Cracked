@@ -27,21 +27,35 @@ func _run_tests() -> void:
 	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
 		_fail("Sliding unexpectedly has a maximum speed.")
 		return
-	# Holding slide drains traction; release restores it. Jumping cannot refill it.
-	runner.set("slide_grip", 1.0)
-	runner.call("update_slide_grip", 3.0, true, true)
-	var empty_grip: float = runner.get("slide_grip")
-	if empty_grip > 0.01 or float(runner.call("step_speed", 45.0, -0.2, true, true, 1.0, empty_grip)) >= 45.0:
-		_fail("Permanent sliding must not provide permanent acceleration.")
+	# Sustained grounded sliding must always retain full effectiveness.
+	var continuous_speed := 25.0
+	for i in range(600):
+		continuous_speed = float(runner.call("step_speed", continuous_speed, -0.2, true, true, 1.0 / 60.0))
+	if continuous_speed < 150.0:
+		_fail("Continuous downhill sliding incorrectly loses grip.")
 		return
-	runner.call("update_slide_grip", 1.0, false, true)
-	if float(runner.get("slide_grip")) > 0.01:
-		_fail("Jumping incorrectly restores grip.")
+	# The opening hill has negative normal curvature at 16 m.
+	# Slow players follow it, fast players leave the track without jumping.
+	var slow_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 22.0)
+	var fast_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 80.0)
+	if slow_normal >= 0.0 or fast_normal <= 1.0:
+		_fail("Terrain curvature did not distinguish low-speed contact from high-speed lift-off.")
 		return
-	runner.call("update_slide_grip", 2.0, true, false)
-	if float(runner.get("slide_grip")) < 0.99:
-		_fail("Releasing slide must restore grip.")
+	runner.set("distance", 16.0)
+	runner.set("lane", 0.0)
+	runner.set("height", 0.0)
+	runner.set("speed", 80.0)
+	runner.set("vertical_speed", 0.0)
+	runner.set("queued_jump", false)
+	runner.call("sync_pose", course)
+	runner.call("tick", 1.0 / 60.0, course)
+	if bool(runner.call("is_grounded")) or float(runner.get("height")) <= 0.0:
+		_fail("Fast runner remained tethered to the crest without a jump.")
 		return
+	if float(runner.call("landing_speed", 80.0, 35.0)) >= 70.0 or absf(float(runner.call("landing_speed", 80.0, 4.0)) - 80.0) > 0.001:
+		_fail("Hard landings must lose momentum while gentle landings preserve it.")
+		return
+	game.call("_restart")
 	# Faster launches produce higher jumps, without changing forward speed.
 	var low_jump: float = runner.call("jump_impulse_for_speed", 22.0)
 	var fast_jump: float = runner.call("jump_impulse_for_speed", 80.0)
