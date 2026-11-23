@@ -140,7 +140,7 @@ func relative_normal_acceleration(course: Node3D, at: float, _across: float, for
 	var curvature := (-after.basis.z.y + before.basis.z.y) / (2.0 * CONTACT_PROBE)
 	var upright := smoothstep(0.25, 0.90, frame.basis.y.y)
 	var kind: String = course.call("section_name", at)
-	if kind == "180 BANK" or kind == "360 BANK":
+	if bool(course.call("is_extreme_bank", kind)):
 		upright = 0.0
 	# A gentle, bounded relative acceleration prevents violent launches at
 	# uncapped speeds. Manual jumping still works through the banks.

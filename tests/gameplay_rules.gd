@@ -361,6 +361,46 @@ func _run_tests() -> void:
 		if left.origin.distance_to(right.origin) > 0.1 or left.basis.y.dot(right.basis.y) < 0.99:
 			_fail("New profile has a discontinuous seam.")
 			return
+	# Sustained sideways and upside-down straights retain an exact roll
+	# for a full chunk and across the adjacent transition seams.
+	for entry_index in [16, 19]:
+		var entry_s := float(entry_index) * 192.0
+		course.call("stream", entry_s + 192.0)
+		var expected_kind := "WALL RUN" if entry_index == 16 else "CEILING RUN"
+		var held: Transform3D = course.call("sample", entry_s + 192.0)
+		for offset in range(192, 385, 12):
+			var s := entry_s + float(offset)
+			var frame: Transform3D = course.call("sample", s)
+			if frame.basis.y.dot(held.basis.y) < 0.9999 or (entry_index == 16 and absf(frame.basis.y.y) > 0.001) or (entry_index == 19 and frame.basis.y.y > -0.999):
+				_fail("Sustained roll orientation was not held.")
+				return
+		if str(course.call("section_name", entry_s + 288.0)) != expected_kind:
+			_fail("Sustained roll section is missing.")
+			return
+		for boundary in [192.0, 384.0, 576.0]:
+			var before: Transform3D = course.call("sample", entry_s + boundary - 0.01)
+			var after: Transform3D = course.call("sample", entry_s + boundary + 0.01)
+			if before.origin.distance_to(after.origin) > 0.1 or before.basis.y.dot(after.basis.y) < 0.999:
+				_fail("Wall/ceiling transition seam is discontinuous.")
+				return
+		runner.set("distance", entry_s + 220.0)
+		runner.set("lane", 0.0)
+		runner.set("surface_side", 1)
+		runner.set("grounded", true)
+		runner.set("speed", 40.0)
+		runner.call("sync_pose", course)
+		for i in range(30):
+			runner.call("tick", 1.0 / 60.0, course)
+		if not bool(runner.call("is_grounded")) or runner.transform.basis.y.dot(held.basis.y) < 0.999:
+			_fail("Player cannot remain attached on sustained wall/ceiling run.")
+			return
+		for fp in [false, true]:
+			game.set("first_person", fp)
+			game.call("_update_camera", 1.0 / 60.0)
+			if float(game.get("camera_track_clearance")) < 0.8:
+				_fail("Camera crossed a sustained wall/ceiling surface.")
+				return
+	game.set("first_person", false)
 	course.call("stream", 6500.0)
 	chunks = course.get("chunks")
 	if chunks.size() > 8 or not bool(course.call("has_distance", 6700.0)) or chunks.has(0):

@@ -23,6 +23,8 @@ var line_mat: StandardMaterial3D
 var origin_shift := Vector3.ZERO
 var terrain_bag: Array[String] = []
 var last_kind := ""
+var sustained_roll_queue: Array[String] = []
+var sustained_roll_sign := 1.0
 
 func _ready() -> void:
 	surface_mat = _material(Color.WHITE)
@@ -51,6 +53,8 @@ func reset_course(seed_value: int) -> void:
 	rng.seed = seed_value
 	terrain_bag.clear()
 	last_kind = ""
+	sustained_roll_queue.clear()
+	sustained_roll_sign = 1.0
 	stream(0.0)
 
 func _kind(index: int) -> String:
@@ -89,14 +93,35 @@ func _kind(index: int) -> String:
 		return "WIDE BASIN"
 	if index == 15:
 		return "CHICANE"
+	# Long wall/ceiling sections have their own connected entrance,
+	# sustained straight, and exit. The orientation stays constant across
+	# the middle chunk instead of constantly twisting.
+	if not sustained_roll_queue.is_empty():
+		return sustained_roll_queue.pop_front()
+	if index == 16:
+		sustained_roll_queue.assign(["WALL RUN", "WALL EXIT"])
+		return "WALL ENTRY"
+	if index == 19:
+		sustained_roll_queue.assign(["CEILING RUN", "CEILING EXIT"])
+		return "CEILING ENTRY"
 	if terrain_bag.is_empty():
-		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK"])
+		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY"])
 	var choice := rng.randi_range(0, terrain_bag.size() - 1)
 	if terrain_bag.size() > 1 and terrain_bag[choice] == last_kind:
 		choice = (choice + 1) % terrain_bag.size()
 	var result: String = terrain_bag[choice]
 	terrain_bag.remove_at(choice)
+	if result == "WALL ENTRY":
+		sustained_roll_queue.assign(["WALL RUN", "WALL EXIT"])
+	elif result == "CEILING ENTRY":
+		sustained_roll_queue.assign(["CEILING RUN", "CEILING EXIT"])
 	return result
+
+func is_sustained_roll(kind: String) -> bool:
+	return kind.begins_with("WALL ") or kind.begins_with("CEILING ")
+
+func is_extreme_bank(kind: String) -> bool:
+	return kind == "180 BANK" or kind == "360 BANK" or is_sustained_roll(kind)
 
 func width_for_kind(kind: String, u: float) -> float:
 	var envelope := smoothstep(0.0, 0.25, u) * (1.0 - smoothstep(0.75, 1.0, u))
@@ -145,6 +170,14 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 		roll = signf(target_yaw - start_yaw) * 0.68 * sin(PI * u)
 	elif kind == "WIDE BASIN":
 		pitch = -0.20 * sin(TAU * u) * strength
+	elif is_sustained_roll(kind):
+		var target_roll := PI * 0.5 if kind.begins_with("WALL ") else PI
+		var progress := 1.0
+		if kind.ends_with("ENTRY"):
+			progress = smoothstep(0.0, 0.85, u)
+		elif kind.ends_with("EXIT"):
+			progress = 1.0 - smoothstep(0.15, 1.0, u)
+		roll = bank_sign * target_roll * progress
 	elif kind == "180 BANK":
 		# A smooth half-roll to an inverted stretch, then unwind.
 		# Entry and exit are both upright so neighboring chunks join cleanly.
@@ -167,6 +200,10 @@ func _build_chunk(index: int) -> void:
 	var start_yaw := yaw
 	var target_yaw := yaw
 	var bank_sign := -1.0 if rng.randf() < 0.5 else 1.0
+	if is_sustained_roll(kind):
+		if kind.ends_with("ENTRY"):
+			sustained_roll_sign = bank_sign
+		bank_sign = sustained_roll_sign
 	if kind == "TURN" or kind == "BANKED TURN" or kind == "BANKED DESCENT":
 		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
 		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 0.98), -1.25, 1.25)
@@ -192,8 +229,8 @@ func _build_chunk(index: int) -> void:
 	var positions: Array[float] = [35.0, 72.0, 108.0, 144.0, 174.0]
 	if index == 0:
 		positions = [82.0, 137.0]
-	elif kind == "NARROW BRIDGE" or kind == "ROLLING RIDGES" or kind == "DROP AND RECOVERY" or kind == "CHICANE":
-		positions = []
+	elif is_sustained_roll(kind) or kind == "NARROW BRIDGE" or kind == "ROLLING RIDGES" or kind == "DROP AND RECOVERY" or kind == "CHICANE":
+		positions.clear()
 	elif index >= 2 and kind != "180 BANK" and kind != "360 BANK":
 		# Conditional array literals are untyped Variants in GDScript.
 		# Explicit assignment converts the contents to Array[float].
@@ -223,7 +260,7 @@ func _build_chunk(index: int) -> void:
 		_spawn_obstacle(node, hazards, frame, float(index) * CHUNK_LENGTH + at, lane, shape_id)
 	# Route gates have a guaranteed opening, but it moves across the track.
 	# Wide tall walls discourage jumping over every obstacle instead of steering.
-	if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and (index < 6 or (kind == "HILLS" or kind == "TURN") and index % 3 == 0):
+	if index >= 2 and not is_extreme_bank(kind) and (index < 6 or (kind == "HILLS" or kind == "TURN") and index % 3 == 0):
 		var gate_at := 94.0
 		var gate_frame := points[int(gate_at / STEP)]
 		var opening := -14.0 if index % 2 == 0 else 14.0
@@ -320,7 +357,7 @@ func ramp_center(index: int) -> float:
 func _ramp_lift(index: int, kind: String, local_s: float, across: float) -> float:
 	# A local rise, crest and runout occupying only a portion of the road.
 	# The other lanes remain unchanged; no ramp on narrow or inverted banks.
-	if index == 0 or (index != 1 and index % 3 != 0) or kind == "NARROW BRIDGE" or kind == "180 BANK" or kind == "360 BANK":
+	if index == 0 or (index != 1 and index % 3 != 0) or kind == "NARROW BRIDGE" or is_extreme_bank(kind):
 		return 0.0
 	var lateral := 1.0 - smoothstep(5.0, 12.0, absf(across - ramp_center(index)))
 	var rise := smoothstep(58.0, 99.0, local_s)
