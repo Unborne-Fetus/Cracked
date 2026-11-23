@@ -59,6 +59,9 @@ func _build_ground() -> void:
 	physics_body.collision_mask = 0
 	var collider := CollisionShape3D.new()
 	var shape := ConcavePolygonShape3D.new()
+	# Terrain triangles may be approached from either side during high-speed landings.
+	# Without backface collisions, the body can pass through one-sided faces.
+	shape.backface_collision = true
 	shape.set_faces(collision_vertices)
 	collider.shape = shape
 	physics_body.add_child(collider)
