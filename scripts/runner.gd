@@ -143,7 +143,19 @@ func _physics_process(delta: float) -> void:
 	velocity.x = speed
 	var lateral_target := steer * minf(speed * 0.48, 19.0)
 	velocity.z = move_toward(velocity.z, lateral_target, 28.0 * delta)
+	var previous_position := global_position
 	move_and_slide()
+	# The player has no upper speed cap. Sweep each movement so narrow
+	# obstacles cannot be skipped by passing through between physics frames.
+	if global_position.distance_squared_to(previous_position) > 0.0001:
+		var query := PhysicsRayQueryParameters3D.create(previous_position, global_position, 4)
+		query.collide_with_areas = true
+		query.collide_with_bodies = false
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		if not hit.is_empty():
+			var hazard := hit.get("collider") as Area3D
+			if hazard != null and hazard.is_in_group("obstacle_hazards"):
+				hazard.get_parent().call("_on_hazard_body_entered", self)
 	grounded_last_frame = is_on_floor()
 	if avatar != null:
 		avatar.rotation.x = lerpf(avatar.rotation.x, -steer * 0.18, minf(delta * 8.0, 1.0))
