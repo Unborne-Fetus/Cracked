@@ -59,11 +59,14 @@ func _kind(index: int) -> String:
 		return "INVERSION"
 	if index == 3:
 		return "TURN"
-	var choice: int = rng.randi_range(0, 4)
-	var kinds: Array[String] = ["HILLS", "TURN", "BANKED TURN", "INVERSION", "HILLS"]
-	return kinds[choice]
+	if index == 4:
+		return "180 BANK"
+	if index == 5:
+		return "360 BANK"
+	var kinds: Array[String] = ["HILLS", "TURN", "BANKED TURN", "INVERSION", "HILLS", "180 BANK", "360 BANK"]
+	return kinds[rng.randi_range(0, kinds.size() - 1)]
 
-func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float) -> Basis:
+func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, bank_sign: float = 1.0) -> Basis:
 	var angle := lerpf(start_yaw, target_yaw, smoothstep(0.0, 1.0, u))
 	var pitch := 0.0
 	var roll := 0.0
@@ -73,8 +76,16 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float) -
 		roll = signf(target_yaw - start_yaw) * 0.78 * sin(PI * u)
 	elif kind == "TURN":
 		roll = signf(target_yaw - start_yaw) * 0.22 * sin(PI * u)
+	elif kind == "180 BANK":
+		# A smooth half-roll to an inverted stretch, then unwind.
+		# Entry and exit are both upright so neighboring chunks join cleanly.
+		roll = bank_sign * PI * smoothstep(0.0, 0.36, u) * (1.0 - smoothstep(0.64, 1.0, u))
+	elif kind == "360 BANK":
+		# Continuous barrel roll with zero roll rate at both seams.
+		roll = bank_sign * TAU * smoothstep(0.0, 1.0, u)
 	elif kind == "INVERSION":
-		pitch = TAU * u
+		# Soften the entry and exit curvature without changing loop topology.
+		pitch = TAU * u - 0.30 * sin(TAU * u)
 	var heading := Vector3(cos(angle), 0, sin(angle))
 	var side := Vector3(-sin(angle), 0, cos(angle))
 	var forward := heading * cos(pitch) + Vector3.UP * sin(pitch)
@@ -90,6 +101,7 @@ func _build_chunk(index: int) -> void:
 	var kind := _kind(index)
 	var start_yaw := yaw
 	var target_yaw := yaw
+	var bank_sign := -1.0 if rng.randf() < 0.5 else 1.0
 	if kind == "TURN" or kind == "BANKED TURN":
 		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
 		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 1.35), -1.25, 1.25)
@@ -101,10 +113,10 @@ func _build_chunk(index: int) -> void:
 	var p := Vector3.ZERO
 	for i in range(STEPS + 1):
 		var u := float(i) / float(STEPS)
-		var basis := _orientation(kind, u, start_yaw, target_yaw)
+		var basis := _orientation(kind, u, start_yaw, target_yaw, bank_sign)
 		points.append(Transform3D(basis, p))
 		if i < STEPS:
-			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw)
+			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw, bank_sign)
 			p += -mid.z * STEP
 	tail += p
 	yaw = target_yaw
@@ -114,6 +126,10 @@ func _build_chunk(index: int) -> void:
 	var positions: Array[float] = [60.0, 115.0, 157.0]
 	if index == 0:
 		positions = [82.0, 137.0]
+	elif kind == "INVERSION" or kind == "180 BANK" or kind == "360 BANK":
+		# Keep the inversion and roll apex clear; impacts should not erase
+		# momentum while the player is trying to enjoy the stunt.
+		positions = []
 	for i in range(positions.size()):
 		var at := positions[i]
 		var lane := float(rng.randi_range(-2, 2)) * 3.0

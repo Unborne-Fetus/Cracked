@@ -27,6 +27,19 @@ func _run_tests() -> void:
 	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
 		_fail("Sliding unexpectedly has a maximum speed.")
 		return
+	# Inversions retain far more momentum than ordinary uphill slopes.
+	var loop_speed: float = runner.call("step_speed", 80.0, 0.5, true, true, 1.0, true)
+	var uphill_speed: float = runner.call("step_speed", 80.0, 0.5, true, true, 1.0, false)
+	if loop_speed < 70.0 or loop_speed <= uphill_speed or loop_speed >= 80.0:
+		_fail("Inversion uphill drag must be gentler without granting acceleration.")
+		return
+	# Faster launches produce higher jumps, without changing forward speed.
+	var low_jump: float = runner.call("jump_impulse_for_speed", 22.0)
+	var fast_jump: float = runner.call("jump_impulse_for_speed", 80.0)
+	var extreme_jump: float = runner.call("jump_impulse_for_speed", 160.0)
+	if low_jump <= 0.0 or fast_jump < low_jump * 1.5 or extreme_jump <= fast_jump:
+		_fail("Jump launch strength does not increase sufficiently with speed.")
+		return
 	var bank: Transform3D = course.call("sample", 288.0)
 	var inversion: Transform3D = course.call("sample", 480.0)
 	var entry: Transform3D = course.call("sample", 192.0)
@@ -34,7 +47,17 @@ func _run_tests() -> void:
 	if absf(bank.basis.x.y) < 0.35 or inversion.basis.y.y > -0.8 or entry.basis.z.dot(exit_frame.basis.z) > 0.94:
 		_fail("Bank, inversion, or turn geometry was not generated.")
 		return
-	for i in range(1, 5):
+	# Verify both new roll geometries and their upright seams.
+	var half_bank: Transform3D = course.call("sample", 864.0)
+	var full_bank: Transform3D = course.call("sample", 1056.0)
+	var full_quarter: Transform3D = course.call("sample", 1008.0)
+	if str(course.call("section_name", 864.0)) != "180 BANK" or half_bank.basis.y.y > -0.9:
+		_fail("180-degree bank did not become fully inverted.")
+		return
+	if str(course.call("section_name", 1056.0)) != "360 BANK" or full_bank.basis.y.y > -0.9 or absf(full_quarter.basis.x.y) < 0.6:
+		_fail("360-degree barrel roll geometry is missing.")
+		return
+	for i in range(1, 6):
 		var a: Transform3D = course.call("sample", float(i) * 192.0 - 0.01)
 		var b: Transform3D = course.call("sample", float(i) * 192.0 + 0.01)
 		if a.origin.distance_to(b.origin) > 0.1 or a.basis.z.dot(b.basis.z) < 0.99:

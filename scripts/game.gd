@@ -97,7 +97,10 @@ func _update_hud() -> void:
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
 	section_label.text = "TRACK  //  " + str(course.section_name(runner.distance))
 	if runner.is_sliding:
-		slide_label.text = "UPHILL SLIDE  //  LOSING SPEED" if runner.uphill else "SLIDING  //  GAINING SPEED"
+		if runner.uphill:
+			slide_label.text = "LOOP SLIDE  //  MOMENTUM RETAINED" if runner.in_inversion else "UPHILL SLIDE  //  LOSING SPEED"
+		else:
+			slide_label.text = "SLIDING  //  GAINING SPEED"
 	else:
 		slide_label.text = "HOLD SHIFT / S TO SLIDE"
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)

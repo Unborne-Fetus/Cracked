@@ -16,11 +16,11 @@ An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 | Controller left stick / A / B | Steer / jump / slide |
 | Touch buttons | Steer, slide, jump, camera |
 
-Sliding on flat or downhill track builds momentum. Sliding uphill is allowed but rapidly drains speed. Running and jumping do not accelerate the player. There is no maximum speed. Obstacles take away 70% of current speed without ending the run. Jump over low barriers or steer around taller ones. The pursuing storm continuously accelerates; being caught ends the run.
+Sliding on flat or downhill track builds momentum. Sliding uphill is allowed but rapidly drains speed on ordinary hills. Vertical loops have much gentler uphill drag to preserve momentum. Faster movement produces higher jumps; jumping never adds forward speed. Running and jumping do not accelerate the player. There is no maximum speed. Obstacles take away 70% of current speed without ending the run. Jump over low barriers or steer around taller ones. The pursuing storm continuously accelerates; being caught ends the run.
 
 ## Endless track
 
-The course is generated in connected 192-meter sections. Hills, sweeping turns, steeply banked corners and full vertical inversions are generated from continuous local frames. After an introductory sequence, the track uses seeded random sections. The runner adheres to the track in its local orientation, including upside down. Track chunks are created ahead and removed behind; world coordinates are periodically rebased to keep precision stable. The storm follows arc-length progress instead of world X. Records track longest distance.
+The course is generated in connected 192-meter sections. Hills, sweeping turns, steeply banked corners, full vertical inversions, 180-degree half-roll banks with an upside-down stretch, and complete 360-degree barrel-roll banks are generated from continuous local frames. Stunt sections are kept clear of obstacles to preserve flow. After an introductory sequence, the track uses seeded random sections. The runner adheres to the track in its local orientation, including upside down. Track chunks are created ahead and removed behind; world coordinates are periodically rebased to keep precision stable. The storm follows arc-length progress instead of world X. Records track longest distance.
 
 ## Development
 
