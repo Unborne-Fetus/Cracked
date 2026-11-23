@@ -51,7 +51,7 @@ func _create_world() -> void:
 func _restart() -> void:
 	run_finished = false
 	run_time = 0.0
-	runner.reset_run(Vector3(8.0, course.surface_height(8.0, 0.0) + 2.6, 0.0))
+	runner.reset_run(Vector3(8.0, course.surface_height(8.0, 0.0) + 1.25, 0.0))
 	runner.set_first_person(first_person)
 	if message_label != null:
 		message_label.visible = false
