@@ -14,6 +14,13 @@ var run_time := 0.0
 var best_distance := 0.0
 var run_seed := 0
 var speed_label: Label
+var speed_unit_label: Label
+var paused := false
+var imperial := false
+var pause_overlay: Control
+var pause_page: VBoxContainer
+var options_page: VBoxContainer
+var units_picker: OptionButton
 var distance_label: Label
 var clock_label: Label
 var record_label: Label
@@ -49,12 +56,15 @@ func _ready() -> void:
 	view_camera.far = 1600.0
 	add_child(view_camera)
 	_create_hud()
+	_create_pause_menu()
+	_load_options()
 	var record := ConfigFile.new()
 	if record.load("user://endless_records.cfg") == OK:
 		best_distance = float(record.get_value("records", "best_distance", 0.0))
 	_restart()
 
 func _restart() -> void:
+	_set_paused(false)
 	run_finished = false
 	run_time = 0.0
 	camera_rotation_ready = false
@@ -71,7 +81,7 @@ func _restart() -> void:
 	_update_hud()
 
 func _physics_process(delta: float) -> void:
-	if run_finished:
+	if paused or run_finished:
 		return
 	run_time += delta
 	runner.tick(delta, course)
@@ -81,6 +91,8 @@ func _physics_process(delta: float) -> void:
 		_lose("THE STORM CAUGHT YOU")
 
 func _process(delta: float) -> void:
+	if paused:
+		return
 	_update_camera(delta)
 	_update_hud()
 
@@ -147,11 +159,25 @@ func _update_camera(delta: float) -> void:
 		view_camera.basis = view_camera.basis.slerp(camera_goal, 1.0 - exp(-delta * 11.0)).orthonormalized()
 	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.10, 78.0, 98.0), 1.0 - exp(-delta * 4.0))
 
+func _speed_display(meters_per_second: float) -> int:
+	return int(meters_per_second * (2.2369362921 if imperial else 3.6))
+
+func _speed_units() -> String:
+	return "MPH" if imperial else "KM/H"
+
+func _distance_display(meters: float) -> String:
+	if imperial:
+		if meters >= 1609.344:
+			return "%.2f mi" % (meters / 1609.344)
+		return "%d ft" % int(meters * 3.280839895)
+	return "%d m" % int(meters)
+
 func _update_hud() -> void:
-	speed_label.text = "%d" % int(runner.speed * 3.6)
-	distance_label.text = "DISTANCE  %d m" % int(maxf(0.0, runner.distance - 8.0))
+	speed_label.text = "%d" % _speed_display(runner.speed)
+	speed_unit_label.text = _speed_units()
+	distance_label.text = "DISTANCE  " + _distance_display(maxf(0.0, runner.distance - 8.0))
 	clock_label.text = "TIME  %02d:%05.2f" % [int(run_time / 60.0), fmod(run_time, 60.0)]
-	record_label.text = "BEST  %d m" % int(maxf(best_distance, runner.distance - 8.0))
+	record_label.text = "BEST  " + _distance_display(maxf(best_distance, runner.distance - 8.0))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
 	section_label.text = "TRACK  //  " + str(course.section_name(runner.distance))
 	if not runner.is_grounded():
@@ -161,7 +187,7 @@ func _update_hud() -> void:
 	else:
 		slide_label.text = "HOLD SHIFT / CTRL / C TO SLIDE"
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
-	storm_label.text = "STORM  %d m  //  %d km/h" % [int(gap), int(storm.speed * 3.6)]
+	storm_label.text = "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
 	if not run_finished:
 		message_label.visible = runner.hit_timer > 0.0
@@ -177,7 +203,7 @@ func _lose(reason: String) -> void:
 		var record := ConfigFile.new()
 		record.set_value("records", "best_distance", best_distance)
 		record.save("user://endless_records.cfg")
-	message_label.text = reason + "  //  %d m" % int(meters)
+	message_label.text = reason + "  //  " + _distance_display(meters)
 	message_label.visible = true
 	restart_button.visible = true
 
@@ -192,6 +218,15 @@ func _input(event: InputEvent) -> void:
 		return
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
+		return
+	if key.keycode == KEY_ESCAPE:
+		get_viewport().set_input_as_handled()
+		if paused and options_page.visible:
+			_show_options(false)
+		else:
+			_set_paused(not paused)
+		return
+	if paused:
 		return
 	if key.keycode == KEY_TAB:
 		# Consume Tab before UI focus navigation; C is exclusively slide.
@@ -240,7 +275,8 @@ func _create_hud() -> void:
 	stack.add_child(_label("VECTOR // VELOCITY", 23, Color(0.96, 0.19, 0.65)))
 	speed_label = _label("0", 58, Color(0.1, 0.95, 1.0))
 	stack.add_child(speed_label)
-	stack.add_child(_label("KM/H", 15, Color(0.62, 0.85, 0.95)))
+	speed_unit_label = _label("KM/H", 15, Color(0.62, 0.85, 0.95))
+	stack.add_child(speed_unit_label)
 	distance_label = _label("", 19, Color(0.8, 0.93, 0.99))
 	stack.add_child(distance_label)
 	clock_label = _label("", 19, Color(0.8, 0.93, 0.99))
@@ -264,7 +300,7 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  R retry", 15, Color(0.7, 0.83, 0.96))
+	var hint := _label("A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
 	hint.anchor_top = 1.0
 	hint.anchor_bottom = 1.0
@@ -303,3 +339,107 @@ func _create_hud() -> void:
 	restart_button.offset_bottom = 65
 	restart_button.visible = false
 	restart_button.pressed.connect(_restart)
+
+func _load_options() -> void:
+	var settings := ConfigFile.new()
+	if settings.load("user://velocity_options.cfg") == OK:
+		imperial = bool(settings.get_value("display", "imperial", false))
+	units_picker.select(1 if imperial else 0)
+
+func _set_units(index: int, persist: bool = true) -> void:
+	imperial = index == 1
+	units_picker.select(1 if imperial else 0)
+	if persist:
+		var settings := ConfigFile.new()
+		settings.set_value("display", "imperial", imperial)
+		settings.save("user://velocity_options.cfg")
+	_update_hud()
+	if run_finished:
+		# Preserve the original defeat reason while updating its distance.
+		var reason := message_label.text.get_slice("  //  ", 0)
+		message_label.text = reason + "  //  " + _distance_display(maxf(0.0, runner.distance - 8.0))
+
+func _set_paused(value: bool) -> void:
+	paused = value
+	pause_overlay.visible = value
+	_show_options(false)
+	if value:
+		# Avoid a stuck touch button if it was held when Escape was pressed.
+		runner.touch_slide = false
+		runner.touch_axis = 0.0
+		runner.queued_jump = false
+
+func _show_options(value: bool) -> void:
+	pause_page.visible = not value
+	options_page.visible = value
+
+func _menu_button(label_text: String) -> Button:
+	var button := Button.new()
+	button.text = label_text
+	button.custom_minimum_size = Vector2(260, 52)
+	button.add_theme_font_size_override("font_size", 20)
+	button.focus_mode = Control.FOCUS_NONE
+	return button
+
+func _create_pause_menu() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 20
+	add_child(layer)
+	pause_overlay = Control.new()
+	layer.add_child(pause_overlay)
+	pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var shade := ColorRect.new()
+	shade.color = Color(0.005, 0.008, 0.025, 0.84)
+	pause_overlay.add_child(shade)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var center := CenterContainer.new()
+	pause_overlay.add_child(center)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.026, 0.045, 0.086, 0.98)
+	style.border_color = Color(0.12, 0.77, 0.94)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(12)
+	style.content_margin_left = 32
+	style.content_margin_right = 32
+	style.content_margin_top = 28
+	style.content_margin_bottom = 28
+	panel.add_theme_stylebox_override("panel", style)
+	center.add_child(panel)
+	var pages := VBoxContainer.new()
+	pages.add_theme_constant_override("separation", 12)
+	panel.add_child(pages)
+	pause_page = VBoxContainer.new()
+	pause_page.add_theme_constant_override("separation", 14)
+	pages.add_child(pause_page)
+	var title := _label("PAUSED", 34, Color(0.1, 0.9, 1.0))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pause_page.add_child(title)
+	var resume := _menu_button("RESUME")
+	pause_page.add_child(resume)
+	resume.pressed.connect(func() -> void: _set_paused(false))
+	var options := _menu_button("OPTIONS")
+	pause_page.add_child(options)
+	options.pressed.connect(func() -> void: _show_options(true))
+	options_page = VBoxContainer.new()
+	options_page.add_theme_constant_override("separation", 14)
+	pages.add_child(options_page)
+	var options_title := _label("OPTIONS", 30, Color(0.1, 0.9, 1.0))
+	options_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	options_page.add_child(options_title)
+	options_page.add_child(_label("MEASUREMENT UNITS", 17, Color(0.75, 0.9, 1.0)))
+	units_picker = OptionButton.new()
+	units_picker.custom_minimum_size = Vector2(260, 48)
+	units_picker.add_theme_font_size_override("font_size", 19)
+	units_picker.add_item("Metric (km/h, m)")
+	units_picker.add_item("Imperial (mph, ft, mi)")
+	units_picker.item_selected.connect(func(index: int) -> void: _set_units(index))
+	options_page.add_child(units_picker)
+	var back := _menu_button("BACK")
+	options_page.add_child(back)
+	back.pressed.connect(func() -> void: _show_options(false))
+	_show_options(false)
+	pause_overlay.visible = false

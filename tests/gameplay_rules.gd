@@ -27,6 +27,36 @@ func _run_tests() -> void:
 	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
 		_fail("Sliding unexpectedly has a maximum speed.")
 		return
+	# Pause freezes all simulation state, including storm and timer.
+	var escape := InputEventKey.new()
+	escape.pressed = true
+	escape.keycode = KEY_ESCAPE
+	var before_distance: float = runner.get("distance")
+	var before_storm: float = storm.get("front_s")
+	var before_time: float = game.get("run_time")
+	game.call("_input", escape)
+	game.call("_physics_process", 1.0)
+	if not bool(game.get("paused")) or float(runner.get("distance")) != before_distance or float(storm.get("front_s")) != before_storm or float(game.get("run_time")) != before_time:
+		_fail("Pause did not freeze simulation.")
+		return
+	game.call("_show_options", true)
+	game.call("_set_units", 1, false)
+	if str(game.call("_speed_units")) != "MPH" or int(game.call("_speed_display", 10.0)) != 22 or str(game.call("_distance_display", 100.0)) != "328 ft" or str(game.call("_distance_display", 1609.344)) != "1.00 mi":
+		_fail("Imperial conversion failed.")
+		return
+	game.call("_input", escape)
+	var options_control: Control = game.get("options_page")
+	if options_control.visible or not bool(game.get("paused")):
+		_fail("Escape in options must return to pause menu.")
+		return
+	game.call("_set_units", 0, false)
+	if str(game.call("_speed_units")) != "KM/H" or int(game.call("_speed_display", 10.0)) != 36 or str(game.call("_distance_display", 100.0)) != "100 m":
+		_fail("Metric conversion failed.")
+		return
+	game.call("_input", escape)
+	if bool(game.get("paused")):
+		_fail("Escape did not resume the run.")
+		return
 	# Controls must remain independent: C slides, Tab toggles camera.
 	for code in [KEY_SHIFT, KEY_CTRL, KEY_C]:
 		if not bool(runner.call("is_slide_key", code)):

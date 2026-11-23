@@ -194,7 +194,12 @@ func _build_chunk(index: int) -> void:
 	elif kind == "NARROW BRIDGE" or kind == "ROLLING RIDGES" or kind == "DROP AND RECOVERY" or kind == "CHICANE":
 		positions = []
 	elif index >= 2 and kind != "180 BANK" and kind != "360 BANK":
-		positions = [18.0, 40.0, 140.0, 161.0, 180.0] if index < 6 else [32.0, 156.0]
+		# Conditional array literals are untyped Variants in GDScript.
+		# Explicit assignment converts the contents to Array[float].
+		if index < 6:
+			positions.assign([18.0, 40.0, 140.0, 161.0, 180.0])
+		else:
+			positions.assign([32.0, 156.0])
 	elif kind == "180 BANK" or kind == "360 BANK":
 		positions = [30.0, 160.0]
 	for i in range(positions.size()):

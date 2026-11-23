@@ -12,11 +12,16 @@ An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 | Hold Shift, Ctrl, C, S or Down | Slide |
 | Space | Jump |
 | Tab | First-person / third-person |
+| Escape | Pause / resume; return from Options |
 | R | Restart |
 | Controller left stick / A / B | Steer / jump / slide |
 | Touch buttons | Steer, slide, jump, camera |
 
 Sliding on flat or downhill track builds momentum rapidly and indefinitely, without a grip meter or fatigue. Flat acceleration is 8 m/s²; a 20% downhill grade adds 28 m/s² total. Air drag is reduced to preserve speed during jumps. Sliding trades lateral steering precision for speed. Sliding uphill is allowed but rapidly drains speed on ordinary hills. Faster movement produces higher jumps; jumping never adds forward speed. Running and jumping do not accelerate the player. There is no maximum speed. Obstacles take away 70% of current speed without ending the run. Jump over low barriers or steer around taller ones. The pursuing storm accelerates more aggressively; being caught ends the run. Tall route gates have alternating side openings that require steering rather than jumping. Air drag and brief landing recovery discourage repeated jumping.
+
+## Pause and Options
+
+Escape freezes the runner, storm, and clock. Resume continues the same run. Options lets you choose metric or imperial measurements, saved across sessions. Speed, distance, records, storm HUD and defeat summaries use the chosen units; simulation and saved records remain in SI units.
 
 ## Endless track
 
