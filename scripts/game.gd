@@ -31,6 +31,10 @@ var camera_track_clearance := 0.0
 var camera_rotation_ready := false
 var camera_goal := Basis.IDENTITY
 var camera_height := 0.0
+var camera_offset := Vector3.ZERO
+var takeoff_camera_offset := Vector3.ZERO
+var camera_was_grounded := true
+const TAKEOFF_CAMERA_TIME := 0.45
 var storm_label: Label
 var section_label: Label
 var message_label: Label
@@ -69,6 +73,8 @@ func _restart() -> void:
 	run_time = 0.0
 	camera_rotation_ready = false
 	camera_height = 0.0
+	camera_offset = Vector3.ZERO
+	camera_was_grounded = true
 	run_seed = randi()
 	course.reset_course(run_seed)
 	runner.reset_run(course)
@@ -106,7 +112,9 @@ func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> b
 		var t := float(i) / 16.0
 		var frame: Transform3D = course.sample(lerpf(from_s, to_s, t))
 		var point := a.lerp(b, t) - frame.origin
-		if absf(point.dot(frame.basis.x)) <= float(course.lane_limit(lerpf(from_s, to_s, t))) + 1.0 and point.dot(frame.basis.y) < 0.55:
+		var across := point.dot(frame.basis.x)
+		var clearance: float = course.surface_clearance(lerpf(from_s, to_s, t), across, point.dot(frame.basis.y), int(runner.surface_side))
+		if absf(across) <= float(course.lane_limit(lerpf(from_s, to_s, t))) + 1.0 and clearance < 0.55:
 			return false
 	return true
 
@@ -118,14 +126,17 @@ func _aim_camera(target: Vector3, up: Vector3) -> void:
 func _update_camera(delta: float) -> void:
 	var player_s: float = runner.distance
 	var player_lane: float = runner.lane
-	var frame: Transform3D = course.sample(player_s)
+	var frame: Transform3D = course.surface_frame(player_s, player_lane, int(runner.surface_side))
 	var up := frame.basis.y
 	var forward := -frame.basis.z
 	var pos: Vector3 = runner.position
 	# Camera stays on the correct side of the road; only orientation and
 	# the additional chase height are damped, never the bank-relative base.
-	camera_height = lerpf(camera_height, maxf(0.0, float(runner.height)), 1.0 - exp(-delta * 8.0))
+	camera_height = lerpf(camera_height, maxf(0.0, float(runner.height) * float(runner.surface_side)), 1.0 - exp(-delta * 8.0))
 	if not runner.is_grounded():
+		if camera_was_grounded:
+			takeoff_camera_offset = camera_offset if camera_offset.length_squared() > 0.01 else (up * 1.55 if first_person else -forward * 11.0 + up * 5.4)
+		camera_was_grounded = false
 		# Follow the free player's own pose, not the twisting road below.
 		var air_up: Vector3 = runner.transform.basis.y
 		var air_forward: Vector3 = -runner.transform.basis.z
@@ -136,6 +147,9 @@ func _update_camera(delta: float) -> void:
 		else:
 			view_camera.position = pos - air_forward * 9.0 + air_up * 4.0
 			_aim_camera(pos + air_up * 1.4 + air_forward * 4.0, air_up)
+		# Retain the exact pre-takeoff camera arm, then ease toward flight.
+		var blend := smoothstep(0.0, TAKEOFF_CAMERA_TIME, float(runner.air_time))
+		view_camera.position = pos + takeoff_camera_offset.lerp(view_camera.position - pos, blend)
 	elif first_person:
 		camera_track_s = player_s
 		view_camera.position = pos + up * 1.55
@@ -148,8 +162,9 @@ func _update_camera(delta: float) -> void:
 		var selected := false
 		for trail: float in [11.0, 8.0, 5.0, 3.0]:
 			var s := maxf(0.0, player_s - trail)
-			var rear: Transform3D = course.sample(s)
-			var candidate := rear.origin + rear.basis.x * clampf(player_lane, -float(course.lane_limit(s)), float(course.lane_limit(s))) + rear.basis.y * (5.4 + camera_height)
+			var rear_lane := clampf(player_lane, -float(course.lane_limit(s)), float(course.lane_limit(s)))
+			var rear: Transform3D = course.surface_frame(s, rear_lane, int(runner.surface_side))
+			var candidate := rear.origin + rear.basis.y * (5.4 + camera_height)
 			if _camera_line_clear(candidate, focus, s, player_s):
 				camera_track_s = s
 				view_camera.position = candidate
@@ -174,9 +189,10 @@ func _update_camera(delta: float) -> void:
 		var ground_offset := view_camera.position - pos
 		var candidate := pos + air_offset.lerp(ground_offset, blend)
 		var projected: Vector3 = course.project_position(candidate, lerpf(player_s, camera_track_s, blend))
-		var surface: Transform3D = course.sample(projected.x)
-		if absf(projected.y) <= float(course.half_width_at(projected.x)) + 0.5 and projected.z < 1.15:
-			candidate += surface.basis.y * (1.15 - projected.z)
+		var surface: Transform3D = course.surface_frame(projected.x, projected.y, int(runner.surface_side))
+		var clearance: float = course.surface_clearance(projected.x, projected.y, projected.z, int(runner.surface_side))
+		if absf(projected.y) <= float(course.half_width_at(projected.x)) + 0.5 and clearance < 1.15:
+			candidate += surface.basis.y * (1.15 - clearance)
 		if first_person or _camera_line_clear(candidate, pos + up * 1.35, projected.x, player_s):
 			view_camera.position = candidate
 			camera_track_s = projected.x
@@ -184,8 +200,10 @@ func _update_camera(delta: float) -> void:
 		var air_look := from_forward if first_person else from_forward * 13.0 - from_up * 2.6
 		var air_goal := Basis.looking_at(air_look.normalized(), from_up)
 		camera_goal = air_goal.slerp(camera_goal, blend).orthonormalized()
-	var camera_frame: Transform3D = course.sample(camera_track_s)
-	camera_track_clearance = (view_camera.position - camera_frame.origin).dot(camera_frame.basis.y)
+	var camera_projection: Vector3 = course.project_position(view_camera.position, camera_track_s)
+	camera_track_clearance = float(course.surface_clearance(camera_projection.x, camera_projection.y, camera_projection.z, int(runner.surface_side)))
+	camera_offset = view_camera.position - pos
+	camera_was_grounded = runner.is_grounded()
 	# Quaternion interpolation avoids Euler flips near 180/360 degrees.
 	# A short time constant removes sudden orientation kicks without a
 	# long lag that would point the camera back through the ribbon.

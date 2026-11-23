@@ -5,8 +5,8 @@ extends Node3D
 const CHUNK_LENGTH := 192.0
 const STEP := 1.0
 const STEPS := 192
-const HALF_WIDTH := 22.0
-const CROSS_STEPS := 12
+const HALF_WIDTH := 36.0
+const CROSS_STEPS := 24
 const THICKNESS := 0.45
 const COLOR_CYCLE := 12000.0
 const AHEAD := 5
@@ -101,9 +101,9 @@ func _kind(index: int) -> String:
 func width_for_kind(kind: String, u: float) -> float:
 	var envelope := smoothstep(0.0, 0.25, u) * (1.0 - smoothstep(0.75, 1.0, u))
 	if kind == "NARROW BRIDGE":
-		return lerpf(HALF_WIDTH, 11.0, envelope)
+		return lerpf(HALF_WIDTH, 18.0, envelope)
 	if kind == "WIDE BASIN":
-		return lerpf(HALF_WIDTH, 31.0, envelope)
+		return lerpf(HALF_WIDTH, 48.0, envelope)
 	return HALF_WIDTH
 
 func half_width_at(distance: float) -> float:
@@ -205,7 +205,9 @@ func _build_chunk(index: int) -> void:
 		positions = [30.0, 160.0]
 	for i in range(positions.size()):
 		var at: float = positions[i]
-		var lane := float(rng.randi_range(-5, 5)) * 3.2
+		var lane := float(rng.randi_range(-8, 8)) * 3.2
+		if _ramp_lift(index, kind, at, lane) > 0.02:
+			lane = -ramp_center(index)
 		# Keep the approach and immediate exit from route gates navigable.
 		if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and at >= 130.0 and at <= 150.0:
 			lane = 10.0 if index % 2 == 0 else -10.0
@@ -215,6 +217,7 @@ func _build_chunk(index: int) -> void:
 		if index == 0 and i == 0:
 			shape_id = 0
 		var frame := points[int(at / STEP)].interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
+		frame.origin += frame.basis.y * _ramp_lift(index, kind, at, lane)
 		_spawn_obstacle(node, hazards, frame, float(index) * CHUNK_LENGTH + at, lane, shape_id)
 	# Route gates have a guaranteed opening, but it moves across the track.
 	# Wide tall walls discourage jumping over every obstacle instead of steering.
@@ -309,6 +312,39 @@ func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transfor
 		edge_mesh.transform = Transform3D(frame.basis, frame.origin + frame.basis.x * edge + frame.basis.y * wall_height * 0.5)
 		node.add_child(edge_mesh)
 
+func ramp_center(index: int) -> float:
+	return 18.0 if index % 2 == 1 else -18.0
+
+func _ramp_lift(index: int, kind: String, local_s: float, across: float) -> float:
+	# A local rise, crest and runout occupying only a portion of the road.
+	# The other lanes remain unchanged; no ramp on narrow or inverted banks.
+	if index == 0 or (index != 1 and index % 3 != 0) or kind == "NARROW BRIDGE" or kind == "180 BANK" or kind == "360 BANK":
+		return 0.0
+	var lateral := 1.0 - smoothstep(5.0, 12.0, absf(across - ramp_center(index)))
+	var rise := smoothstep(58.0, 99.0, local_s)
+	var runout := 1.0 - smoothstep(99.0, 132.0, local_s)
+	return (5.0 + float(index % 3)) * lateral * rise * runout
+
+func surface_lift(distance: float, across: float) -> float:
+	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))
+	return _ramp_lift(index, section_name(distance), distance - float(index) * CHUNK_LENGTH, across)
+
+func surface_frame(distance: float, across: float, side: int = 1) -> Transform3D:
+	var frame := sample(distance)
+	var lift := surface_lift(distance, across)
+	var slope := (surface_lift(distance + 0.5, across) - surface_lift(distance - 0.5, across))
+	var cross_slope := surface_lift(distance, across + 0.5) - surface_lift(distance, across - 0.5)
+	var forward := (-frame.basis.z + frame.basis.y * slope).normalized()
+	var right := (frame.basis.x + frame.basis.y * cross_slope).normalized()
+	var up := right.cross(forward).normalized()
+	right = forward.cross(up).normalized()
+	var point := frame.origin + frame.basis.x * across + frame.basis.y * (lift if side > 0 else lift - THICKNESS)
+	return Transform3D(Basis(right * float(side), up * float(side), -forward).orthonormalized(), point)
+
+func surface_clearance(distance: float, across: float, raw_height: float, side: int) -> float:
+	var lift := surface_lift(distance, across)
+	return raw_height - lift if side > 0 else lift - THICKNESS - raw_height
+
 func lane_limit(distance: float = -1.0) -> float:
 	return (HALF_WIDTH if distance < 0.0 else half_width_at(distance)) - 0.75
 
@@ -340,6 +376,7 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 	var faces := PackedVector3Array()
 	var grid := SurfaceTool.new()
 	grid.begin(Mesh.PRIMITIVE_LINES)
+	var index := int(round(start_s / CHUNK_LENGTH))
 	for i in range(STEPS):
 		var s0 := start_s + float(i) * STEP
 		var s1 := s0 + STEP
@@ -354,28 +391,38 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			var z1 := lerpf(-width0, width0, float(j + 1) / float(CROSS_STEPS))
 			var next_z0 := lerpf(-width1, width1, float(j) / float(CROSS_STEPS))
 			var next_z1 := lerpf(-width1, width1, float(j + 1) / float(CROSS_STEPS))
-			var a := _vertex(points[i], z0)
-			var b := _vertex(points[i], z1)
-			var c := _vertex(points[i+1], next_z0)
-			var d := _vertex(points[i+1], next_z1)
+			var h0 := _ramp_lift(index, kind, float(i) * STEP, z0)
+			var h1 := _ramp_lift(index, kind, float(i) * STEP, z1)
+			var h2 := _ramp_lift(index, kind, float(i + 1) * STEP, next_z0)
+			var h3 := _ramp_lift(index, kind, float(i + 1) * STEP, next_z1)
+			var a := _vertex(points[i], z0, h0)
+			var b := _vertex(points[i], z1, h1)
+			var c := _vertex(points[i+1], next_z0, h2)
+			var d := _vertex(points[i+1], next_z1, h3)
 			_quad(fill, a, b, c, d, dark0, dark1)
 			for v: Vector3 in [a, c, b, b, c, d]:
 				faces.append(v)
-			var ba := _vertex(points[i], z0, -THICKNESS)
-			var bb := _vertex(points[i], z1, -THICKNESS)
-			var bc := _vertex(points[i+1], next_z0, -THICKNESS)
-			var bd := _vertex(points[i+1], next_z1, -THICKNESS)
+			var ba := _vertex(points[i], z0, h0 - THICKNESS)
+			var bb := _vertex(points[i], z1, h1 - THICKNESS)
+			var bc := _vertex(points[i+1], next_z0, h2 - THICKNESS)
+			var bd := _vertex(points[i+1], next_z1, h3 - THICKNESS)
 			_quad(fill, bb, ba, bd, bc, underside0, underside1)
+			for v: Vector3 in [bb, bd, ba, ba, bd, bc]:
+				faces.append(v)
 			# Both running-surface grid and collider use the same tessellation.
 			if i % 4 == 0:
-				_line(grid, _vertex(points[i], z0, 0.075), _vertex(points[i], z1, 0.075), track_color(s0, 0.0, 0.8, 0.7), track_color(s0, 0.0, 0.8, 0.7))
+				_line(grid, _vertex(points[i], z0, h0 + 0.075), _vertex(points[i], z1, h1 + 0.075), track_color(s0, 0.0, 0.8, 0.7), track_color(s0, 0.0, 0.8, 0.7))
+				_line(grid, _vertex(points[i], z0, h0 - THICKNESS - 0.075), _vertex(points[i], z1, h1 - THICKNESS - 0.075), track_color(s0, 0.07, 0.8, 0.7), track_color(s0, 0.07, 0.8, 0.7))
 		for j in range(CROSS_STEPS + 1):
 			var z := lerpf(-width0, width0, float(j) / float(CROSS_STEPS))
 			var next_z := lerpf(-width1, width1, float(j) / float(CROSS_STEPS))
 			var edge := j == 0 or j == CROSS_STEPS
 			var ca := track_color(s0, 0.19 if edge else 0.0)
 			var cb := track_color(s1, 0.19 if edge else 0.0)
-			_line(grid, _vertex(points[i], z, 0.075), _vertex(points[i+1], next_z, 0.075), ca, cb)
+			var lift0 := _ramp_lift(index, kind, float(i) * STEP, z)
+			var lift1 := _ramp_lift(index, kind, float(i + 1) * STEP, next_z)
+			_line(grid, _vertex(points[i], z, lift0 + 0.075), _vertex(points[i+1], next_z, lift1 + 0.075), ca, cb)
+			_line(grid, _vertex(points[i], z, lift0 - THICKNESS - 0.075), _vertex(points[i+1], next_z, lift1 - THICKNESS - 0.075), track_color(s0, 0.07), track_color(s1, 0.07))
 		for side: float in [-1.0, 1.0]:
 			_quad(fill, _vertex(points[i], side * width0), _vertex(points[i], side * width0, -THICKNESS), _vertex(points[i+1], side * width1), _vertex(points[i+1], side * width1, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))
 	var solid := MeshInstance3D.new()

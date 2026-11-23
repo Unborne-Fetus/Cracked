@@ -38,6 +38,7 @@ var lateral_speed := 0.0
 var height := 0.0
 var vertical_speed := 0.0
 var grounded := true
+var surface_side := 1
 var fallen := false
 var air_velocity := Vector3.ZERO
 var air_basis := Basis.IDENTITY
@@ -88,6 +89,7 @@ func reset_run(course: Node3D) -> void:
 	height = 0.0
 	vertical_speed = 0.0
 	grounded = true
+	surface_side = 1
 	fallen = false
 	air_velocity = Vector3.ZERO
 	air_basis = Basis.IDENTITY
@@ -132,9 +134,9 @@ func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta
 func relative_normal_acceleration(course: Node3D, at: float, _across: float, forward_speed: float, _side_speed: float = 0.0) -> float:
 	# Only the change in longitudinal pitch can launch the runner.
 	# Roll and lateral steering must not create artificial vertical force.
-	var frame: Transform3D = course.call("sample", at)
-	var before: Transform3D = course.call("sample", at - CONTACT_PROBE)
-	var after: Transform3D = course.call("sample", at + CONTACT_PROBE)
+	var frame: Transform3D = course.call("surface_frame", at, _across, surface_side)
+	var before: Transform3D = course.call("surface_frame", at - CONTACT_PROBE, _across, surface_side)
+	var after: Transform3D = course.call("surface_frame", at + CONTACT_PROBE, _across, surface_side)
 	var curvature := (-after.basis.z.y + before.basis.z.y) / (2.0 * CONTACT_PROBE)
 	var upright := smoothstep(0.25, 0.90, frame.basis.y.y)
 	var kind: String = course.call("section_name", at)
@@ -186,11 +188,11 @@ func sync_pose(course: Node3D) -> void:
 	# from the actual flight basis. No change to the collision point.
 	if not grounded:
 		return
-	var frame: Transform3D = course.call("sample", distance)
+	var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 	var body_basis := frame.basis
 	if landing_blend > 0.0:
 		body_basis = landing_from_basis.slerp(frame.basis, landing_fraction()).orthonormalized()
-	transform = Transform3D(body_basis, frame.origin + frame.basis.x * lane)
+	transform = Transform3D(body_basis, frame.origin)
 
 func _finish_landing(course: Node3D) -> void:
 	landing_from_basis = air_basis
@@ -211,7 +213,7 @@ func _begin_flight(frame: Transform3D, impulse: float) -> void:
 	air_time = 0.0
 	landing_blend = 0.0
 	air_basis = transform.basis
-	air_velocity = -frame.basis.z * speed + frame.basis.x * lateral_speed + frame.basis.y * impulse
+	air_velocity = -frame.basis.z * speed + frame.basis.x * lateral_speed * float(surface_side) + frame.basis.y * impulse
 	vertical_speed = impulse
 	queued_jump = false
 	is_sliding = false
@@ -221,7 +223,8 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	var previous_pos := position
 	var old_s := distance
 	var old_lane := lane
-	var old_height := height
+	var old_projection: Vector3 = course.call("project_position", previous_pos, distance)
+	var old_height := old_projection.z
 	var old_frame: Transform3D = course.call("sample", distance)
 	# Flight follows the actual momentum vector and fixed takeoff basis.
 	# The road can turn or rotate underneath without carrying the player.
@@ -251,26 +254,30 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	height = projected.z
 	var new_frame: Transform3D = course.call("sample", distance)
 	var limit: float = course.call("half_width_at", distance)
-	var toward_surface := air_velocity.dot(new_frame.basis.y)
-	vertical_speed = toward_surface
-	# Catch an actual crossing of the top surface, inside its physical edges.
-	# The normal of the landing frame, not the takeoff frame, sets contact.
-	var crossing := old_height >= -0.02 and height <= 0.0 and toward_surface < 0.0
-	if crossing and absf(lane) <= limit:
-		var fraction := clampf(old_height / maxf(old_height - height, 0.0001), 0.0, 1.0)
+	vertical_speed = air_velocity.dot(new_frame.basis.y)
+	# Both faces are rideable. Check for entry from the outside of either
+	# face, never teleport across the slab or attach to its interior.
+	for side: int in [1, -1]:
+		var old_gap: float = course.call("surface_clearance", old_projection.x, old_projection.y, old_height, side)
+		var new_gap: float = course.call("surface_clearance", distance, lane, height, side)
+		var face: Transform3D = course.call("surface_frame", distance, lane, side)
+		var toward := air_velocity.dot(face.basis.y)
+		if old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
+			continue
+		var fraction := clampf(old_gap / maxf(old_gap - new_gap, 0.0001), 0.0, 1.0)
 		var hit_pos := previous_pos.lerp(next_pos, fraction)
 		var hit: Vector3 = course.call("project_position", hit_pos, lerpf(old_s, distance, fraction))
-		var hit_limit: float = course.call("half_width_at", hit.x)
-		if absf(hit.y) <= hit_limit:
-			distance = hit.x
-			lane = hit.y
-			var landing_frame: Transform3D = course.call("sample", distance)
-			var forward_velocity := maxf(0.0, air_velocity.dot(-landing_frame.basis.z))
-			speed = landing_speed(minf(speed, forward_velocity), maxf(0.0, -air_velocity.dot(landing_frame.basis.y)))
-			lateral_speed = air_velocity.dot(landing_frame.basis.x)
-			_finish_landing(course)
-	else:
-		transform = Transform3D(air_basis, next_pos)
+		if absf(hit.y) > float(course.call("half_width_at", hit.x)):
+			continue
+		distance = hit.x
+		lane = hit.y
+		surface_side = side
+		var landing_frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
+		var forward_velocity := maxf(0.0, air_velocity.dot(-landing_frame.basis.z))
+		speed = landing_speed(minf(speed, forward_velocity), maxf(0.0, -air_velocity.dot(landing_frame.basis.y)))
+		lateral_speed = air_velocity.dot(landing_frame.basis.x) * float(surface_side)
+		_finish_landing(course)
+		break
 	# If a projected crossing misses the actual edge, keep moving freely.
 	if not grounded:
 		transform = Transform3D(air_basis, next_pos)
@@ -278,9 +285,12 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		var world_drop := new_frame.origin.y - next_pos.y
 		if world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0:
 			fallen = true
-	var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_height, height, 1.7)
-	for _i in range(count):
-		apply_obstacle_hit()
+	if (grounded and surface_side > 0) or (not grounded and (old_height >= 0.0 or height >= 0.0)):
+		var old_clear: float = course.call("surface_clearance", old_s, old_lane, old_height, 1)
+		var new_clear: float = course.call("surface_clearance", distance, lane, height, 1) if not grounded else 0.0
+		var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_clear, new_clear, 1.7)
+		for _i in range(count):
+			apply_obstacle_hit()
 
 func tick(delta: float, course: Node3D) -> void:
 	if fallen:
@@ -301,7 +311,7 @@ func tick(delta: float, course: Node3D) -> void:
 		landing_blend = maxf(0.0, landing_blend - delta)
 	hit_timer = maxf(0.0, hit_timer - delta)
 	if grounded:
-		var frame: Transform3D = course.call("sample", distance)
+		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
 		uphill = grade > 0.025
 		var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
@@ -316,7 +326,7 @@ func tick(delta: float, course: Node3D) -> void:
 			var old_lane := lane
 			var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
 			var steering_factor := 0.62 if slide else 1.0
-			lateral_speed = move_toward(lateral_speed, steer * steer_speed * steering_factor, 82.0 * delta * steering_factor)
+			lateral_speed = move_toward(lateral_speed, steer * float(surface_side) * steer_speed * steering_factor, 82.0 * delta * steering_factor)
 			var next_s := distance + speed * delta
 			var next_lane := lane + lateral_speed * delta
 			course.call("stream", next_s)
@@ -331,9 +341,10 @@ func tick(delta: float, course: Node3D) -> void:
 				lane = next_lane
 				height = 0.0
 				vertical_speed = 0.0
-				var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, 0.0, 0.0, 0.95 if slide else 1.7)
-				for _i in range(count):
-					apply_obstacle_hit()
+				if surface_side > 0:
+					var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, 0.0, 0.0, 0.95 if slide else 1.7)
+					for _i in range(count):
+						apply_obstacle_hit()
 				sync_pose(course)
 	if not grounded:
 		is_sliding = false

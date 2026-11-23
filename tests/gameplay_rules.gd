@@ -156,9 +156,47 @@ func _run_tests() -> void:
 	if runner.transform.basis.y.dot(landing_frame.basis.y) < 0.999:
 		_fail("Landing blend did not finish aligned to the track.")
 		return
+	# A 180-bank underside is a real rideable face, not a visual duplicate.
+	game.call("_restart")
+	var underside: Transform3D = course.call("surface_frame", 864.0, 0.0, -1)
+	var topside: Transform3D = course.call("surface_frame", 864.0, 0.0, 1)
+	if underside.basis.y.dot(topside.basis.y) > -0.999 or underside.origin.distance_to(topside.origin) < 0.4:
+		_fail("Track faces are not separate opposing surfaces.")
+		return
+	runner.set("distance", 864.0)
+	runner.set("lane", 0.0)
+	runner.set("grounded", false)
+	runner.set("air_basis", underside.basis)
+	runner.set("air_velocity", -underside.basis.z * 22.0 - underside.basis.y * 10.0)
+	runner.transform = Transform3D(underside.basis, underside.origin + underside.basis.y * 0.5)
+	runner.call("_advance_flight", 0.1, course, 0.0)
+	if not bool(runner.call("is_grounded")) or int(runner.get("surface_side")) != -1:
+		_fail("Runner cannot attach to the underside.")
+		return
+	game.call("_update_camera", 1.0 / 60.0)
+	if float(game.get("camera_track_clearance")) < 0.5:
+		_fail("Camera clips through the underside.")
+		return
+	# Ramp only occupies a side lane; centre and opposite side stay flat.
+	var ramp_s := 192.0 + 99.0
+	var ramp_lane: float = course.call("ramp_center", 1)
+	if float(course.call("surface_lift", ramp_s, ramp_lane)) < 5.0 or absf(float(course.call("surface_lift", ramp_s, -ramp_lane))) > 0.001 or absf(float(course.call("surface_lift", ramp_s, 0.0))) > 0.001:
+		_fail("Partial-width ramp does not leave a flat bypass.")
+		return
+	# At takeoff the camera retains its previous offset instead of snapping.
+	game.call("_restart")
+	game.call("_update_camera", 1.0 / 60.0)
+	var previous_arm: Vector3 = game.get("camera_offset")
+	runner.call("request_jump")
+	runner.call("tick", 1.0 / 60.0, course)
+	game.call("_update_camera", 1.0 / 60.0)
+	var new_arm: Vector3 = game.get("camera_offset")
+	if new_arm.distance_to(previous_arm) > 0.2:
+		_fail("Camera arm snapped at takeoff.")
+		return
 	# Crossing a road edge must detach instead of clamping the lane.
 	game.call("_restart")
-	runner.set("lane", 21.9)
+	runner.set("lane", float(course.call("half_width_at", 8.0)) - 0.1)
 	runner.set("touch_axis", 1.0)
 	runner.set("lateral_speed", 25.0)
 	runner.call("sync_pose", course)
@@ -226,7 +264,7 @@ func _run_tests() -> void:
 	if shapes.size() != 11:
 		_fail("Opening sections did not introduce all ten obstacle shapes and route gates.")
 		return
-	if float(course.call("lane_limit")) < 20.0:
+	if float(course.call("lane_limit")) < 35.0:
 		_fail("Track steering width was not expanded.")
 		return
 	var color_a: Color = course.call("track_color", 191.99)
@@ -298,7 +336,7 @@ func _run_tests() -> void:
 			_fail("Climb has no uphill grade.")
 			return
 		var width: float = course.call("lane_limit", start_s + 96.0)
-		if (kind == "NARROW BRIDGE" and width > 12.0) or (kind == "WIDE BASIN" and width < 29.0):
+		if (kind == "NARROW BRIDGE" and width > 18.0) or (kind == "WIDE BASIN" and width < 46.0):
 			_fail("Variable width terrain was not generated.")
 			return
 		var left: Transform3D = course.call("sample", start_s - 0.01)
