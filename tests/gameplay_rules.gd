@@ -47,6 +47,8 @@ func _run_tests() -> void:
 		_fail("Expected a course with multiple real obstacles; found %d." % hazards.size())
 		return
 	
+	# Make the baseline deterministic: _process has already advanced the storm one frame.
+	game.call("_restart")
 	var original_speed: float = float(storm.get("speed"))
 	var original_x: float = float(storm.get("front_x"))
 	storm.call("advance", 10.0)
@@ -61,7 +63,7 @@ func _run_tests() -> void:
 		return
 	game.call("_restart")
 	if bool(game.get("run_finished")) or absf(float(storm.get("speed")) - original_speed) > 0.001:
-		_fail("Restart did not restore player and storm state.")
+		_fail("Restart state mismatch: run_finished=%s, storm start=%.6f, actual=%.6f" % [str(game.get("run_finished")), original_speed, float(storm.get("speed"))])
 		return
 	
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
