@@ -132,10 +132,10 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	elif kind == "DROP AND RECOVERY":
 		pitch = (-0.62 * exp(-pow((u - 0.28) / 0.15, 2.0)) + 0.30 * exp(-pow((u - 0.68) / 0.17, 2.0))) * sin(PI * u) * strength
 	elif kind == "S CURVE":
-		angle = clampf(start_yaw + bank_sign * 0.78 * sin(TAU * u) * sin(PI * u) * strength, -1.25, 1.25)
+		angle = clampf(start_yaw + bank_sign * 0.55 * sin(TAU * u) * sin(PI * u) * strength, -1.25, 1.25)
 		roll = bank_sign * 0.42 * sin(TAU * u) * sin(PI * u)
 	elif kind == "CHICANE":
-		angle = clampf(start_yaw + bank_sign * 0.58 * sin(TAU * 2.0 * u) * sin(PI * u) * strength, -1.25, 1.25)
+		angle = clampf(start_yaw + bank_sign * 0.29 * sin(TAU * 2.0 * u) * sin(PI * u) * strength, -1.25, 1.25)
 		roll = bank_sign * 0.32 * sin(TAU * 2.0 * u) * sin(PI * u)
 	elif kind == "CAMBER WAVE":
 		roll = bank_sign * 0.63 * sin(TAU * u) * sin(PI * u) * strength
