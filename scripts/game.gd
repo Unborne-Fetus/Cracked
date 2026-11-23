@@ -85,6 +85,9 @@ func _physics_process(delta: float) -> void:
 		return
 	run_time += delta
 	runner.tick(delta, course)
+	if runner.fallen:
+		_lose("FELL OFF THE TRACK")
+		return
 	storm.advance(delta)
 	storm.sync_pose(course)
 	if storm.gap_to(runner.distance) <= 1.0:
@@ -122,7 +125,18 @@ func _update_camera(delta: float) -> void:
 	# Camera stays on the correct side of the road; only orientation and
 	# the additional chase height are damped, never the bank-relative base.
 	camera_height = lerpf(camera_height, float(runner.height), 1.0 - exp(-delta * 8.0))
-	if first_person:
+	if not runner.is_grounded():
+		# Follow the free player's own pose, not the twisting road below.
+		var air_up: Vector3 = runner.transform.basis.y
+		var air_forward: Vector3 = -runner.transform.basis.z
+		camera_track_s = player_s
+		if first_person:
+			view_camera.position = pos + air_up * 1.55
+			_aim_camera(view_camera.position + air_forward * 25.0, air_up)
+		else:
+			view_camera.position = pos - air_forward * 9.0 + air_up * 4.0
+			_aim_camera(pos + air_up * 1.4 + air_forward * 4.0, air_up)
+	elif first_person:
 		camera_track_s = player_s
 		view_camera.position = pos + up * 1.55
 		_aim_camera(view_camera.position + forward * 25.0, up)

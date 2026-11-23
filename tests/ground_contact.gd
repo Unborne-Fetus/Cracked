@@ -28,6 +28,7 @@ func _run_test() -> void:
 		_fail("Runner did not land on the generated track.")
 		return
 	# Inverted midpoint of the 180 bank, not a vertical loop.
+	runner.call("reset_run", course)
 	runner.set("distance", 864.0)
 	runner.set("height", 0.0)
 	runner.call("sync_pose", course)

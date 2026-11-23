@@ -125,7 +125,8 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	elif kind == "LONG DESCENT":
 		pitch = -0.44 * sin(PI * u) * strength
 	elif kind == "STEEP CLIMB":
-		pitch = 0.39 * sin(PI * u) * strength
+		# Shorter, gentler sustained climb with shallow downhill approaches.
+		pitch = (0.28 * pow(sin(PI * u), 4.0) - 0.10 * pow(sin(TAU * u), 2.0)) * strength
 	elif kind == "ROLLING RIDGES":
 		pitch = 0.23 * sin(TAU * 2.0 * u) * strength
 	elif kind == "DROP AND RECOVERY":
@@ -437,6 +438,26 @@ func sample(distance: float) -> Transform3D:
 	var frame := points[i].interpolate_with(points[i+1], unit - float(i))
 	frame.origin += node.position
 	return frame
+
+func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
+	# Project onto the nearest cross-section locally. Bounded Newton-like
+	# steps avoid snapping to a different branch of a twisted track.
+	var s := maxf(0.0, guess_s)
+	var min_s := maxf(0.0, guess_s - 64.0)
+	var max_s := guess_s + 64.0
+	for i in range(6):
+		if not has_distance(s):
+			break
+		var frame := sample(s)
+		var along := (world_pos - frame.origin).dot(-frame.basis.z)
+		if absf(along) < 0.005:
+			break
+		s = clampf(s + clampf(along, -18.0, 18.0), min_s, max_s)
+	if not has_distance(s):
+		s = guess_s
+	var local_frame := sample(s)
+	var offset := world_pos - local_frame.origin
+	return Vector3(s, offset.dot(local_frame.basis.x), offset.dot(local_frame.basis.y))
 
 func section_name(distance: float) -> String:
 	var index := maxi(0, int(floor(distance / CHUNK_LENGTH)))

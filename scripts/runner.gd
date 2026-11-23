@@ -1,12 +1,16 @@
 extends Node3D
-## Arcade track-relative runner: the local up vector turns with the ribbon.
+## Grounded runner follows the ribbon; airborne runner uses world-space flight.
 
 const START_SPEED := 22.0
 const MIN_SPEED := 7.0
 const SLIDE_BASE_ACCEL := 8.0
 const SLIDE_DOWNHILL_ACCEL := 100.0
-const SLIDE_UPHILL_DRAG := 25.0
-const UPHILL_GRADE_DRAG := 52.0
+const SLIDE_UPHILL_DRAG := 5.0
+const UPHILL_GRADE_DRAG := 32.0
+const CLIMB_SPEED_FLOOR := 18.0
+const FALL_DEPTH := 30.0
+const FALL_SIDE_DISTANCE := 48.0
+const AIR_STEER_ACCEL := 13.0
 const RUN_DRAG := 1.2
 const AIR_DRAG := 0.8
 const LANDING_RECOVERY := 0.18
@@ -32,6 +36,11 @@ var lane := 0.0
 var lateral_speed := 0.0
 var height := 0.0
 var vertical_speed := 0.0
+var grounded := true
+var fallen := false
+var air_velocity := Vector3.ZERO
+var air_basis := Basis.IDENTITY
+var air_time := 0.0
 var touch_axis := 0.0
 var touch_slide := false
 var queued_jump := false
@@ -75,6 +84,11 @@ func reset_run(course: Node3D) -> void:
 	lateral_speed = 0.0
 	height = 0.0
 	vertical_speed = 0.0
+	grounded = true
+	fallen = false
+	air_velocity = Vector3.ZERO
+	air_basis = Basis.IDENTITY
+	air_time = 0.0
 	touch_axis = 0.0
 	touch_slide = false
 	queued_jump = false
@@ -103,11 +117,12 @@ func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta
 		else:
 			change = SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
 	elif grounded:
-		change = -RUN_DRAG - maxf(grade, 0.0) * 14.0
+		change = -RUN_DRAG - maxf(grade, 0.0) * 5.0
 	else:
 		change = -AIR_DRAG
 	# No cap; the low-speed walking floor cannot increase a slower value.
-	return maxf(minf(current, MIN_SPEED), current + change * delta)
+	var floor_speed := CLIMB_SPEED_FLOOR if grounded and grade > 0.025 else MIN_SPEED
+	return maxf(minf(current, floor_speed), current + change * delta)
 
 func relative_normal_acceleration(course: Node3D, at: float, _across: float, forward_speed: float, _side_speed: float = 0.0) -> float:
 	# Only the change in longitudinal pitch can launch the runner.
@@ -153,18 +168,106 @@ func jump_impulse_for_speed(current: float) -> float:
 
 func apply_obstacle_hit() -> void:
 	speed *= OBSTACLE_RETAIN
-	speed = maxf(minf(speed, MIN_SPEED), speed)
+	if not grounded:
+		air_velocity *= OBSTACLE_RETAIN
 	hits += 1
 	hit_timer = 0.85
 
 func sync_pose(course: Node3D) -> void:
+	# Used for grounded placement and deterministic test setup. Flight never
+	# calls this to overwrite the player's world-space position or basis.
+	if not grounded:
+		return
 	var frame: Transform3D = course.call("sample", distance)
-	transform = Transform3D(frame.basis, frame.origin + frame.basis.x * lane + frame.basis.y * height)
+	transform = Transform3D(frame.basis, frame.origin + frame.basis.x * lane)
 
 func is_grounded() -> bool:
-	return height <= 0.0001
+	return grounded
+
+func _begin_flight(frame: Transform3D, impulse: float) -> void:
+	grounded = false
+	air_time = 0.0
+	air_basis = transform.basis
+	air_velocity = -frame.basis.z * speed + frame.basis.x * lateral_speed + frame.basis.y * impulse
+	vertical_speed = impulse
+	queued_jump = false
+	is_sliding = false
+
+func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
+	air_time += delta
+	var previous_pos := position
+	var old_s := distance
+	var old_lane := lane
+	var old_height := height
+	var old_frame: Transform3D = course.call("sample", distance)
+	# Flight follows the actual momentum vector and fixed takeoff basis.
+	# The road can turn or rotate underneath without carrying the player.
+	var steering_axis := air_basis.x
+	steering_axis.y = 0.0
+	if steering_axis.length_squared() > 0.001:
+		air_velocity += steering_axis.normalized() * steer * AIR_STEER_ACCEL * delta
+	var horizontal := Vector3(air_velocity.x, 0.0, air_velocity.z)
+	var drag := minf(AIR_DRAG * delta, horizontal.length())
+	if horizontal.length_squared() > 0.0001:
+		air_velocity -= horizontal.normalized() * drag
+	var prev_velocity := air_velocity
+	air_velocity.y -= GRAVITY * delta
+	var next_pos := previous_pos + (prev_velocity + air_velocity) * (0.5 * delta)
+	# Stream ahead before projecting onto the route. A rebase must shift
+	# free-flight positions too, otherwise they would jump by kilometres.
+	var old_origin: Vector3 = course.get("origin_shift")
+	var predicted_s := maxf(0.0, distance + air_velocity.dot(-old_frame.basis.z) * delta)
+	course.call("stream", maxf(distance, predicted_s))
+	var new_origin: Vector3 = course.get("origin_shift")
+	var shift := new_origin - old_origin
+	previous_pos -= shift
+	next_pos -= shift
+	var projected: Vector3 = course.call("project_position", next_pos, predicted_s)
+	distance = projected.x
+	lane = projected.y
+	height = projected.z
+	var new_frame: Transform3D = course.call("sample", distance)
+	var limit: float = course.call("half_width_at", distance)
+	var toward_surface := air_velocity.dot(new_frame.basis.y)
+	vertical_speed = toward_surface
+	# Catch an actual crossing of the top surface, inside its physical edges.
+	# The normal of the landing frame, not the takeoff frame, sets contact.
+	var crossing := old_height >= -0.02 and height <= 0.0 and toward_surface < 0.0
+	if crossing and absf(lane) <= limit:
+		var fraction := clampf(old_height / maxf(old_height - height, 0.0001), 0.0, 1.0)
+		var hit_pos := previous_pos.lerp(next_pos, fraction)
+		var hit: Vector3 = course.call("project_position", hit_pos, lerpf(old_s, distance, fraction))
+		var hit_limit: float = course.call("half_width_at", hit.x)
+		if absf(hit.y) <= hit_limit:
+			distance = hit.x
+			lane = hit.y
+			var landing_frame: Transform3D = course.call("sample", distance)
+			var forward_velocity := maxf(0.0, air_velocity.dot(-landing_frame.basis.z))
+			speed = landing_speed(minf(speed, forward_velocity), maxf(0.0, -air_velocity.dot(landing_frame.basis.y)))
+			lateral_speed = air_velocity.dot(landing_frame.basis.x)
+			height = 0.0
+			vertical_speed = 0.0
+			air_time = 0.0
+			grounded = true
+			landing_timer = LANDING_RECOVERY
+			queued_jump = false
+			sync_pose(course)
+	else:
+		transform = Transform3D(air_basis, next_pos)
+	# If a projected crossing misses the actual edge, keep moving freely.
+	if not grounded:
+		transform = Transform3D(air_basis, next_pos)
+		speed = maxf(0.0, speed - AIR_DRAG * delta)
+		var world_drop := new_frame.origin.y - next_pos.y
+		if world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0:
+			fallen = true
+	var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_height, height, 1.7)
+	for _i in range(count):
+		apply_obstacle_hit()
 
 func tick(delta: float, course: Node3D) -> void:
+	if fallen:
+		return
 	var steer := touch_axis
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
 		steer -= 1.0
@@ -173,63 +276,47 @@ func tick(delta: float, course: Node3D) -> void:
 	steer = clampf(steer + Input.get_joy_axis(0, JOY_AXIS_LEFT_X), -1.0, 1.0)
 	var slide := _slide_input()
 	var jump := Input.is_key_pressed(KEY_SPACE) or Input.is_joy_button_pressed(0, JOY_BUTTON_A)
-	if jump and not jump_held:
+	if jump and not jump_held and grounded:
 		queued_jump = true
 	jump_held = jump
-	var ground := is_grounded()
 	landing_timer = maxf(0.0, landing_timer - delta)
-	var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
-	var natural_lift := natural_lift_impulse(normal_accel, speed)
-	if ground and queued_jump and landing_timer <= 0.0:
-		vertical_speed = jump_impulse_for_speed(speed)
-		height = 0.01
-		ground = false
-		queued_jump = false
-	elif ground and natural_lift > 0.0 and landing_timer <= 0.0:
-		# A falling-away surface releases the runner automatically.
-		# Separation is vertical only; it never awards forward momentum.
-		vertical_speed = natural_lift
-		height = 0.015
-		ground = false
-		queued_jump = false
-	var frame: Transform3D = course.call("sample", distance)
-	var grade := -frame.basis.z.y
-	is_sliding = ground and slide
-	uphill = grade > 0.025
-	speed = step_speed(speed, grade, ground, slide, delta)
-	var old_s := distance
-	var old_lane := lane
-	var old_height := height
-	# Wider track needs stronger steering, especially at high forward speeds.
-	var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
-	# Standing gives precise lane changes; sliding trades control for speed.
-	var steering_factor := 0.62 if is_sliding else (0.72 if not ground else 1.0)
-	lateral_speed = move_toward(lateral_speed, steer * steer_speed * steering_factor, 82.0 * delta * steering_factor)
-	var next_s := distance + speed * delta
-	var limit: float = course.call("lane_limit", next_s)
-	lane = clampf(lane + lateral_speed * delta, -limit, limit)
-	if not ground:
-		# Integrate the gap from the moving surface, including curvature.
-		# Unlike the old tether, the road falling away creates actual airtime.
-		var previous_normal_speed := vertical_speed
-		vertical_speed += normal_accel * delta
-		var next_height := height + (previous_normal_speed + vertical_speed) * 0.5 * delta
-		if next_height <= 0.0 and vertical_speed <= 0.0:
-			speed = landing_speed(speed, -vertical_speed)
-			height = 0.0
-			vertical_speed = 0.0
-			landing_timer = LANDING_RECOVERY
-			queued_jump = false
-		else:
-			height = maxf(0.0, next_height)
-	else:
-		height = 0.0
-		vertical_speed = 0.0
 	hit_timer = maxf(0.0, hit_timer - delta)
-	distance += speed * delta
-	course.call("stream", distance)
-	var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_height, height, 0.95 if is_sliding else 1.7)
-	for _i in range(count):
-		apply_obstacle_hit()
-	sync_pose(course)
+	if grounded:
+		var frame: Transform3D = course.call("sample", distance)
+		var grade := -frame.basis.z.y
+		uphill = grade > 0.025
+		var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
+		var natural_lift := natural_lift_impulse(normal_accel, speed)
+		if landing_timer <= 0.0 and (queued_jump or natural_lift > 0.0):
+			var impulse := jump_impulse_for_speed(speed) if queued_jump else natural_lift
+			_begin_flight(frame, impulse)
+		else:
+			is_sliding = slide
+			speed = step_speed(speed, grade, true, slide, delta)
+			var old_s := distance
+			var old_lane := lane
+			var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
+			var steering_factor := 0.62 if slide else 1.0
+			lateral_speed = move_toward(lateral_speed, steer * steer_speed * steering_factor, 82.0 * delta * steering_factor)
+			var next_s := distance + speed * delta
+			var next_lane := lane + lateral_speed * delta
+			course.call("stream", next_s)
+			var edge: float = course.call("half_width_at", next_s)
+			if absf(next_lane) > edge:
+				# No invisible walls. Start flight from the last supported
+				# point, then allow the player to steer back if possible.
+				sync_pose(course)
+				_begin_flight(frame, 0.0)
+			else:
+				distance = next_s
+				lane = next_lane
+				height = 0.0
+				vertical_speed = 0.0
+				var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, 0.0, 0.0, 0.95 if slide else 1.7)
+				for _i in range(count):
+					apply_obstacle_hit()
+				sync_pose(course)
+	if not grounded:
+		is_sliding = false
+		_advance_flight(delta, course, steer)
 	avatar.scale.y = lerpf(avatar.scale.y, 0.55 if is_sliding else 1.0, minf(delta * 12.0, 1.0))

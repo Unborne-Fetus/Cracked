@@ -15,8 +15,8 @@ func _run_tests() -> void:
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
 		_fail("Uphill sliding must be available.")
 		return
-	if float(runner.call("step_speed", 80.0, 0.2, true, true, 1.0)) > 50.0:
-		_fail("Uphill sliding must cause a substantial loss of speed.")
+	if float(runner.call("step_speed", 80.0, 0.2, true, true, 1.0)) >= 75.0 or float(runner.call("step_speed", 80.0, 0.2, true, true, 1.0)) < 60.0:
+		_fail("Uphill sliding must drain momentum without excessive braking.")
 		return
 	if float(runner.call("step_speed", 25.0, -0.2, true, false, 1.0)) >= 25.0:
 		_fail("Non-sliding downhill movement must not increase speed.")
@@ -117,6 +117,40 @@ func _run_tests() -> void:
 	if float(runner.call("landing_speed", 80.0, 35.0)) >= 70.0 or absf(float(runner.call("landing_speed", 80.0, 4.0)) - 80.0) > 0.001:
 		_fail("Hard landings must lose momentum while gentle landings preserve it.")
 		return
+	# Flight retains its world-space orientation even when the road rolls.
+	game.call("_restart")
+	runner.set("distance", 784.0)
+	runner.set("speed", 40.0)
+	runner.call("sync_pose", course)
+	var takeoff_basis: Basis = runner.transform.basis
+	runner.call("request_jump")
+	for i in range(18):
+		runner.call("tick", 1.0 / 60.0, course)
+		if bool(runner.call("is_grounded")) or runner.transform.basis.y.dot(takeoff_basis.y) < 0.999:
+			_fail("Airborne body was rotated by a changing bank.")
+			return
+	# Crossing a road edge must detach instead of clamping the lane.
+	game.call("_restart")
+	runner.set("lane", 21.9)
+	runner.set("touch_axis", 1.0)
+	runner.set("lateral_speed", 25.0)
+	runner.call("sync_pose", course)
+	runner.call("tick", 1.0 / 60.0, course)
+	if bool(runner.call("is_grounded")):
+		_fail("Player remained tethered at the road edge.")
+		return
+	for i in range(240):
+		runner.call("tick", 1.0 / 60.0, course)
+		if bool(runner.get("fallen")):
+			break
+	if not bool(runner.get("fallen")):
+		_fail("Leaving the track did not eventually cause a fall.")
+		return
+	game.call("_physics_process", 1.0 / 60.0)
+	if not bool(game.get("run_finished")):
+		_fail("Falling off must end the run.")
+		return
+	game.call("_restart")
 	# Roll curvature is not a launch ramp, even near the edge at high speed.
 	for s in [780.0, 810.0, 864.0, 1000.0, 1056.0, 1100.0]:
 		for edge: float in [-20.0, 20.0]:
@@ -233,7 +267,7 @@ func _run_tests() -> void:
 		if kind == "LONG DESCENT" and -middle.basis.z.y > -0.25:
 			_fail("Descent has no downhill grade.")
 			return
-		if kind == "STEEP CLIMB" and -middle.basis.z.y < 0.25:
+		if kind == "STEEP CLIMB" and (-middle.basis.z.y < 0.19 or -middle.basis.z.y > 0.33):
 			_fail("Climb has no uphill grade.")
 			return
 		var width: float = course.call("lane_limit", start_s + 96.0)
