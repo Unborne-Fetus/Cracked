@@ -131,7 +131,7 @@ func _hazard(x: float, z: float, size: Vector3, color: Color) -> void:
 	var area := Area3D.new()
 	area.name = "Obstacle"
 	area.add_to_group("obstacle_hazards")
-	area.collision_layer = 0
+	area.collision_layer = 4
 	area.collision_mask = 2
 	area.monitoring = true
 	var shape := BoxShape3D.new()
