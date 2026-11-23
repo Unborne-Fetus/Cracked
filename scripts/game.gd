@@ -138,7 +138,7 @@ func _update_hud() -> void:
 	elif runner.is_sliding:
 		slide_label.text = "UPHILL SLIDE  //  LOSING SPEED" if runner.uphill else "SLIDING  //  BUILD MOMENTUM"
 	else:
-		slide_label.text = "HOLD SHIFT / S TO SLIDE"
+		slide_label.text = "HOLD SHIFT / CTRL / C TO SLIDE"
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
 	storm_label.text = "STORM  %d m  //  %d km/h" % [int(gap), int(storm.speed * 3.6)]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
@@ -165,15 +165,18 @@ func _toggle_camera() -> void:
 	runner.set_first_person(first_person)
 	_update_camera(1.0)
 
-func _unhandled_key_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
 	if not event is InputEventKey:
 		return
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
 		return
-	if key.keycode == KEY_V or key.keycode == KEY_C:
+	if key.keycode == KEY_TAB:
+		# Consume Tab before UI focus navigation; C is exclusively slide.
+		get_viewport().set_input_as_handled()
 		_toggle_camera()
 	elif key.keycode == KEY_R:
+		get_viewport().set_input_as_handled()
 		_restart()
 
 func _label(value: String, font_size: int, color: Color) -> Label:
@@ -239,7 +242,7 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A / D steer  ·  SPACE jump  ·  HOLD SHIFT / S slide  ·  V view  ·  R retry", 15, Color(0.7, 0.83, 0.96))
+	var hint := _label("A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
 	hint.anchor_top = 1.0
 	hint.anchor_bottom = 1.0
@@ -269,6 +272,7 @@ func _create_hud() -> void:
 	view.pressed.connect(_toggle_camera)
 	restart_button = Button.new()
 	restart_button.text = "RUN AGAIN"
+	restart_button.focus_mode = Control.FOCUS_NONE
 	root.add_child(restart_button)
 	restart_button.set_anchors_preset(Control.PRESET_CENTER)
 	restart_button.offset_left = -90

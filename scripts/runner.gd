@@ -3,19 +3,25 @@ extends Node3D
 
 const START_SPEED := 22.0
 const MIN_SPEED := 7.0
-const SLIDE_BASE_ACCEL := 3.0
-const SLIDE_DOWNHILL_ACCEL := 55.0
+const SLIDE_BASE_ACCEL := 8.0
+const SLIDE_DOWNHILL_ACCEL := 100.0
 const SLIDE_UPHILL_DRAG := 25.0
 const UPHILL_GRADE_DRAG := 52.0
 const RUN_DRAG := 1.2
-const AIR_DRAG := 2.2
+const AIR_DRAG := 0.8
 const LANDING_RECOVERY := 0.18
 const JUMP_IMPULSE := 12.5
 const JUMP_SPEED_GAIN := 1.55
 const MAX_JUMP_IMPULSE := 45.0
-const GRAVITY := 27.0
-const CONTACT_PROBE := 2.0
-const TAKEOFF_THRESHOLD := 1.0
+const GRAVITY := 24.0
+const CONTACT_PROBE := 3.0
+const CURVATURE_GAIN := 1.6
+const TAKEOFF_THRESHOLD := 0.5
+const MIN_TAKEOFF_SPEED := 30.0
+const NORMAL_ACCEL_LIMIT := 100.0
+const NATURAL_LIFT_MIN := 3.5
+const NATURAL_LIFT_MAX := 12.0
+const SLIDE_KEYS: Array[int] = [KEY_SHIFT, KEY_CTRL, KEY_C, KEY_S, KEY_DOWN]
 const SOFT_LANDING_SPEED := 9.0
 const HARD_LANDING_SCALE := 0.014
 const OBSTACLE_RETAIN := 0.30
@@ -120,7 +126,28 @@ func relative_normal_acceleration(course: Node3D, at: float, across: float, forw
 	var center := _surface_point(course, at, across)
 	var after := _surface_point(course, at + ds, clampf(across + side_delta, -limit, limit))
 	var normal_curvature := (before - center * 2.0 + after).dot(frame.basis.y) / (ds * ds)
-	return -GRAVITY - normal_curvature * forward_speed * forward_speed
+	# A slightly exaggerated curvature response makes natural lift-off
+	# readable at ordinary play speeds. Limit only normal acceleration,
+	# never forward speed, so extreme banks remain numerically stable.
+	return clampf(-GRAVITY - normal_curvature * forward_speed * forward_speed * CURVATURE_GAIN, -NORMAL_ACCEL_LIMIT, NORMAL_ACCEL_LIMIT)
+
+func natural_lift_impulse(normal_accel: float, forward_speed: float) -> float:
+	if forward_speed < MIN_TAKEOFF_SPEED or normal_accel <= TAKEOFF_THRESHOLD:
+		return 0.0
+	# A small separation velocity prevents imperceptible one-frame hops.
+	# It scales with the force that would otherwise be needed to tether us.
+	return clampf(NATURAL_LIFT_MIN + (normal_accel - TAKEOFF_THRESHOLD) * 0.14, NATURAL_LIFT_MIN, NATURAL_LIFT_MAX)
+
+func is_slide_key(code: int) -> bool:
+	return SLIDE_KEYS.has(code)
+
+func _slide_input() -> bool:
+	if touch_slide or Input.is_joy_button_pressed(0, JOY_BUTTON_B):
+		return true
+	for code in SLIDE_KEYS:
+		if Input.is_key_pressed(code):
+			return true
+	return false
 
 func landing_speed(current: float, impact_speed: float) -> float:
 	# Gentle contact with a downhill slope preserves speed; hitting the
@@ -153,7 +180,7 @@ func tick(delta: float, course: Node3D) -> void:
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 		steer += 1.0
 	steer = clampf(steer + Input.get_joy_axis(0, JOY_AXIS_LEFT_X), -1.0, 1.0)
-	var slide := touch_slide or Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN) or Input.is_joy_button_pressed(0, JOY_BUTTON_B)
+	var slide := _slide_input()
 	var jump := Input.is_key_pressed(KEY_SPACE) or Input.is_joy_button_pressed(0, JOY_BUTTON_A)
 	if jump and not jump_held:
 		queued_jump = true
@@ -161,14 +188,17 @@ func tick(delta: float, course: Node3D) -> void:
 	var ground := is_grounded()
 	landing_timer = maxf(0.0, landing_timer - delta)
 	var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
+	var natural_lift := natural_lift_impulse(normal_accel, speed)
 	if ground and queued_jump and landing_timer <= 0.0:
 		vertical_speed = jump_impulse_for_speed(speed)
 		height = 0.01
 		ground = false
 		queued_jump = false
-	elif ground and normal_accel > TAKEOFF_THRESHOLD:
-		# Natural lift-off: no button input or artificial jump impulse.
-		vertical_speed = 0.0
+	elif ground and natural_lift > 0.0 and landing_timer <= 0.0:
+		# A falling-away surface releases the runner automatically.
+		# Separation is vertical only; it never awards forward momentum.
+		vertical_speed = natural_lift
+		height = 0.015
 		ground = false
 		queued_jump = false
 	var frame: Transform3D = course.call("sample", distance)

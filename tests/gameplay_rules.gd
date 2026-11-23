@@ -27,6 +27,31 @@ func _run_tests() -> void:
 	if float(runner.call("step_speed", 100000.0, -0.2, true, true, 1.0)) <= 100000.0:
 		_fail("Sliding unexpectedly has a maximum speed.")
 		return
+	# Controls must remain independent: C slides, Tab toggles camera.
+	for code in [KEY_SHIFT, KEY_CTRL, KEY_C]:
+		if not bool(runner.call("is_slide_key", code)):
+			_fail("A required slide key is missing.")
+			return
+	if bool(runner.call("is_slide_key", KEY_TAB)):
+		_fail("Tab must not slide.")
+		return
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.keycode = KEY_C
+	var original_view: bool = game.get("first_person")
+	game.call("_input", key)
+	if bool(game.get("first_person")) != original_view:
+		_fail("C still toggles the camera.")
+		return
+	key.keycode = KEY_TAB
+	game.call("_input", key)
+	if bool(game.get("first_person")) == original_view:
+		_fail("Tab does not toggle camera.")
+		return
+	game.call("_input", key)
+	if float(runner.call("step_speed", 22.0, 0.0, true, true, 1.0)) < 29.9 or float(runner.call("step_speed", 22.0, -0.2, true, true, 1.0)) < 49.9:
+		_fail("Slide acceleration is weaker than the revised target.")
+		return
 	# Sustained grounded sliding must always retain full effectiveness.
 	var continuous_speed := 25.0
 	for i in range(600):
@@ -37,20 +62,26 @@ func _run_tests() -> void:
 	# The opening hill has negative normal curvature at 16 m.
 	# Slow players follow it, fast players leave the track without jumping.
 	var slow_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 22.0)
-	var fast_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 80.0)
-	if slow_normal >= 0.0 or fast_normal <= 1.0:
+	var fast_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 45.0)
+	if slow_normal >= 0.0 or fast_normal <= 0.5 or float(runner.call("natural_lift_impulse", fast_normal, 45.0)) < 3.5:
 		_fail("Terrain curvature did not distinguish low-speed contact from high-speed lift-off.")
 		return
 	runner.set("distance", 16.0)
 	runner.set("lane", 0.0)
 	runner.set("height", 0.0)
-	runner.set("speed", 80.0)
+	runner.set("speed", 45.0)
 	runner.set("vertical_speed", 0.0)
 	runner.set("queued_jump", false)
 	runner.call("sync_pose", course)
-	runner.call("tick", 1.0 / 60.0, course)
-	if bool(runner.call("is_grounded")) or float(runner.get("height")) <= 0.0:
-		_fail("Fast runner remained tethered to the crest without a jump.")
+	var peak := 0.0
+	var airborne_frames := 0
+	for i in range(30):
+		runner.call("tick", 1.0 / 60.0, course)
+		peak = maxf(peak, float(runner.get("height")))
+		if not bool(runner.call("is_grounded")):
+			airborne_frames += 1
+	if peak < 0.5 or airborne_frames < 12:
+		_fail("Natural takeoff did not produce meaningful airtime at 45 m/s.")
 		return
 	if float(runner.call("landing_speed", 80.0, 35.0)) >= 70.0 or absf(float(runner.call("landing_speed", 80.0, 4.0)) - 80.0) > 0.001:
 		_fail("Hard landings must lose momentum while gentle landings preserve it.")
