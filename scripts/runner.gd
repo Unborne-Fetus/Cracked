@@ -23,7 +23,7 @@ var avatar: Node3D
 func _ready() -> void:
 	collision_layer = 2
 	collision_mask = 1
-	floor_snap_length = 0.9
+	floor_snap_length = 1.5
 	floor_max_angle = deg_to_rad(65.0)
 	var shape := CapsuleShape3D.new()
 	shape.radius = 0.55
