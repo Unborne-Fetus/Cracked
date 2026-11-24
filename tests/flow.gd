@@ -232,6 +232,37 @@ func _run() -> void:
 	if not bool(runner.get("fallen")):
 		_fail("Last Light can be used more than once.")
 		return
+	# Traverse a complete seeded rest route using the real 120 Hz physics.
+	# Avoid visual updates for a fast, deterministic headless simulation.
+	course.call("reset", 98765, 1, 3, false)
+	runner.call("reset", course)
+	runner.call("apply_upgrades", {}, 0)
+	var traversal_time := 0.0
+	var full_length: float = course.get("length")
+	var last_chunk := -1
+	for step in range(120 * 120):
+		var forward: float = runner.call("progress")
+		if forward >= full_length:
+			break
+		if bool(runner.get("fallen")):
+			_fail("Runner fell on a continuous centerline.")
+			return
+		var chunk := int(floor(forward / 160.0))
+		if chunk != last_chunk:
+			course.call("stream", forward)
+			last_chunk = chunk
+		if float(runner.get("energy")) >= float(runner.call("boost_cost")) and float(runner.get("speed")) < 75.0 and float(runner.get("cooldown")) <= 0.0:
+			runner.call("request_boost")
+		var descent := not bool(runner.get("grounded")) and float(runner.get("vy")) < -6.0
+		runner.call("_step", 1.0 / 120.0, course, 0.0, descent)
+		traversal_time += 1.0 / 120.0
+		if not runner.position.is_finite():
+			_fail("Nonfinite position during full route traversal.")
+			return
+	if float(runner.call("progress")) < full_length:
+		_fail("Full physics route traversal exceeded 120 seconds.")
+		return
+	print("Full physics route traversal: %.1f seconds" % traversal_time)
 	# Test the scene's real state transitions with controlled finish positions,
 	# rather than claiming a full human playthrough.
 	game.call("_new_expedition")

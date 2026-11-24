@@ -27,3 +27,5 @@ Five worlds per shard, five route profiles, four selectable active abilities (Bu
 
 ## Gameplay depth and continuity
 52 items, four set synergies, ten distinct guardian pattern programs and six hazard types. Ten terrain motifs, alternating ravines, four optional trial objectives with performance-based rewards, build inventory, and checkpoint continuation at the start of a world or the shop. Press M to return to the title and resume the saved expedition; unbanked mid-world pickups are intentionally not persisted. The 10 guardians still use a shared procedural hazard engine. Story and art are intentionally excluded. CI exercises actual scene transitions using controlled finish positions, not a full hands-on playthrough.
+
+The regression suite also drives the actual 120 Hz runner physics along a complete seeded rest route, including acceleration, flight and ability use; it does not claim full manual playtesting or full coverage of all routes.
