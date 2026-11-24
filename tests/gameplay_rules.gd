@@ -59,6 +59,7 @@ func _run_tests() -> void:
 	var sprite_camera: Camera3D = game.get("view_camera")
 	var model_head: MeshInstance3D = model.get("head")
 	var model_boots: Array = model.get("boots")
+	model.call("pose",0.0,0.0,false,1.0)
 	var neutral_head := model_head.position.y
 	var neutral_foot: Vector3 = model_boots[0].position
 	if neutral_head < 2.0:
@@ -231,6 +232,48 @@ func _run_tests() -> void:
 		_fail("First-person body must retain board and legs but hide the head.")
 		return
 	runner.call("set_first_person", bool(game.get("first_person")))
+	# Test the actual lightcycle and its independent animation states.
+	var cycle_rig: Node3D = model.get("lightcycle")
+	var wheels: Array = model.get("cycle_wheels")
+	var cycle_body: Node3D = model.get("cycle_frame")
+	var cycle_opt := {"lightcycle":true,"speed_factor":0.8}
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,cycle_opt)
+	if not cycle_rig.visible or wheels.size()!=2 or (flip_board.get_child(0) as Node3D).visible:
+		_fail("Regular ground does not display the lightcycle instead of the deck.")
+		return
+	var seated_hip: Vector3 = (model.get("hips") as Node3D).position
+	if seated_hip.y<0.75 or seated_hip.y>1.25:
+		_fail("Lightcycle rider is not seated.")
+		return
+	var neutral_chassis:=cycle_body.position.y
+	model.call("pose",0.8,0.9,false,1.0,0.4,1.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,cycle_opt)
+	if absf(cycle_rig.rotation.z)<0.2 or cycle_body.position.y>=neutral_chassis-0.12:
+		_fail("Lightcycle lean or suspension compression missing.")
+		return
+	model.call("pose",0.6,0.0,true,0.5,0.4,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,cycle_opt)
+	if not cycle_rig.visible or cycle_rig.rotation.x<0.2:
+		_fail("Short jump does not use a cycle takeoff pose.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0,"glider_entry":0.12})
+	if not cycle_rig.visible or float(model.get("cycle_fold"))<=0.0:
+		_fail("Cycle-to-glider transition does not fold the wheel carriers.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0})
+	if cycle_rig.visible or not glider_rig.visible:
+		_fail("Glider still displays cycle hardware.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0,"glider_return":0.9})
+	if not cycle_rig.visible or float(model.get("cycle_fold"))<=0.0:
+		_fail("Glider return fails to unfold cycle before landing.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"sideways":1.0})
+	if cycle_rig.visible or not gyro_probe.visible:
+		_fail("Sidewall gyro is obstructed by the cycle.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"inverted":1.0})
+	if cycle_rig.visible or not ceiling_treads.visible:
+		_fail("Ceiling spider rig is obstructed by the cycle.")
+		return
 	# Combat must not exist in the active scene or run mode selector.
 	for child in game.get_children():
 		var script: Script = child.get_script()

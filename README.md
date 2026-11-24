@@ -121,3 +121,6 @@ The in-run HUD shows only distance, elapsed time and best distance. Desktop inpu
 
 ## Movement-only testing
 Drone combat, aiming, firing and pulse controls are removed. Right bumper is again available for sliding. Optional vertical loops now have an independent seeded schedule: after two intervening sections they are eligible, strongly favored after three, and prioritized after five when no recovery or committed wall/ceiling sequence prevents them. Existing safe bypass, route validation and loop rewards remain unchanged.
+
+## Lightcycle ground vehicle
+The regular ground and short-hop visual is now a dark hubless-wheel lightcycle with neon cosmetic trim. The articulated rider sits on the saddle, grips handlebars, leans into turns and compresses on landing. Short jumps pitch the bike instead of performing skateboard kickflips. Wheel carriers fold into the existing glider platform on extended flight and unfold as it catches the rider. Gyro and ceiling spider rigs retain their original geometry. This is a visual change only; motion, collision and track generation remain unchanged.

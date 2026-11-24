@@ -1,5 +1,9 @@
 # Vector Velocity changelog
 
+## Lightcycle ground vehicle
+- Dark monocoque with luminous hubless wheels and seated articulated rider; steering lean, suspension, wheel rotation and short-hop pitch.
+- Folding wheel carriers for glider handoff; original gyro and ceiling rig retained. Movement rules unchanged.
+
 ## Movement-only testing
 - Removed combat actors, damage, controls, mode and aiming HUD. Restored right bumper sliding.
 - Increased optional loop frequency with a dedicated cadence while preserving recovery and sustained bank sequences.

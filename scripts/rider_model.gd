@@ -1,6 +1,15 @@
 extends Node3D
 ## Blocky, track-relative articulated rider. No billboard or camera-facing art.
 var board: Node3D
+var lightcycle: Node3D
+var cycle_frame: Node3D
+var cycle_forks: Array[Node3D] = []
+var cycle_wheels: Array[Node3D] = []
+var cycle_grips: Array[Node3D] = []
+var cycle_body_mat: StandardMaterial3D
+var cycle_tire_mat: StandardMaterial3D
+var cycle_amount := 0.0
+var cycle_fold := 0.0
 var torso: MeshInstance3D
 var head: MeshInstance3D
 var hips: MeshInstance3D
@@ -102,6 +111,7 @@ func _ready() -> void:
 	outline.mesh = rails.commit()
 	outline.material_override = edge_mat
 	board.add_child(outline)
+	_build_lightcycle()
 	handles=Node3D.new()
 	handles.name="RetractableHandles"
 	board.add_child(handles)
@@ -232,6 +242,7 @@ func apply_cosmetic(index: int) -> void:
 	white.albedo_color=Color(0.98,0.99,1.0).lerp(accent,0.19 if cosmetic_index!=0 else 0.0)
 	shadow.albedo_color=Color(0.70,0.79,0.86).lerp(accent,0.42 if cosmetic_index!=0 else 0.0)
 	jet_mat.albedo_color=Color(0.35,0.92,1.0) if cosmetic_index==0 else accent.lerp(Color.WHITE,0.32)
+	cycle_body_mat.albedo_color=Color(0.035,0.055,0.085).lerp(accent,0.09)
 
 func set_first_person(enabled: bool) -> void:
 	first_person_view=enabled
@@ -241,6 +252,179 @@ func set_first_person(enabled: bool) -> void:
 		part.visible = not enabled
 	for part in lower_arms:
 		part.visible = not enabled
+
+# The cycle is an independent visual rig; no new collision body or forces.
+# All coordinates are local to the current rider surface frame (-Z forward).
+func _build_lightcycle() -> void:
+	lightcycle=Node3D.new()
+	lightcycle.name="Lightcycle"
+	add_child(lightcycle)
+	cycle_body_mat=_mat(Color(0.035,0.055,0.085))
+	cycle_tire_mat=_mat(Color(0.012,0.018,0.027))
+	cycle_frame=Node3D.new()
+	lightcycle.add_child(cycle_frame)
+	# Sleek monocoque, sloped nose/tail and narrow saddle.
+	_cycle_shell(cycle_frame,cycle_body_mat)
+	var seat:=_block(cycle_frame,Vector3(0.48,0.12,0.68),cycle_tire_mat)
+	seat.position=Vector3(0,0.86,0.28)
+	var spine:=_block(cycle_frame,Vector3(0.20,0.06,1.38),edge_mat)
+	spine.position=Vector3(0,0.74,-0.25)
+	for side:float in [-1.0,1.0]:
+		var rail:=_block(cycle_frame,Vector3(0.045,0.055,1.48),edge_mat)
+		rail.position=Vector3(side*0.30,0.60,-0.04)
+		var peg:=_block(cycle_frame,Vector3(0.28,0.08,0.21),edge_mat)
+		peg.position=Vector3(side*0.43,0.39,0.43)
+		var grip:=Node3D.new()
+		cycle_frame.add_child(grip)
+		grip.position=Vector3(side*0.36,1.02,-0.62)
+		cycle_grips.append(grip)
+		var bar:=_block(grip,Vector3(0.28,0.085,0.11),cycle_tire_mat)
+		bar.position=Vector3.ZERO
+		var tip:=_block(grip,Vector3(0.055,0.10,0.13),edge_mat)
+		tip.position.x=side*0.12
+	for index in range(2):
+		var fork:=Node3D.new()
+		lightcycle.add_child(fork)
+		cycle_forks.append(fork)
+		var wheel:=Node3D.new()
+		fork.add_child(wheel)
+		cycle_wheels.append(wheel)
+		# Hubless dark tire and two luminous rings, axis along X.
+		var tire:=TorusMesh.new()
+		tire.inner_radius=0.34
+		tire.outer_radius=0.52
+		tire.rings=32
+		tire.ring_segments=10
+		var tire_part:=MeshInstance3D.new()
+		tire_part.mesh=tire
+		tire_part.material_override=cycle_tire_mat
+		tire_part.rotation.z=PI*0.5
+		tire_part.scale.y=1.5
+		wheel.add_child(tire_part)
+		for side:float in [-1.0,1.0]:
+			var ring:=TorusMesh.new()
+			ring.inner_radius=0.37
+			ring.outer_radius=0.46
+			ring.rings=32
+			ring.ring_segments=8
+			var ring_part:=MeshInstance3D.new()
+			ring_part.mesh=ring
+			ring_part.material_override=edge_mat
+			ring_part.rotation.z=PI*0.5
+			ring_part.position.x=side*0.115
+			wheel.add_child(ring_part)
+			# Visible animated radial markings make rotation legible.
+			for mark_index in range(4):
+				var mark:=_block(wheel,Vector3(0.035,0.07,0.14),edge_mat)
+				var angle:=float(mark_index)*PI*0.5
+				mark.position=Vector3(side*0.15,cos(angle)*0.42,sin(angle)*0.42)
+				mark.rotation.x=angle
+		var axle:=_block(fork,Vector3(0.36,0.13,0.13),cycle_body_mat)
+		axle.position=Vector3.ZERO
+	lightcycle.hide()
+
+func _cycle_shell(parent: Node3D, material: StandardMaterial3D) -> void:
+	var tool:=SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# z, half-width, lower edge and upper edge.
+	var stations:Array[Vector4]=[
+		Vector4(-1.48,0.13,0.45,0.69),
+		Vector4(-1.02,0.28,0.34,0.91),
+		Vector4(-0.48,0.36,0.29,0.83),
+		Vector4(0.32,0.32,0.30,0.85),
+		Vector4(0.91,0.27,0.33,0.71),
+		Vector4(1.46,0.13,0.43,0.60)]
+	for i in range(stations.size()-1):
+		var a:=stations[i]
+		var b:=stations[i+1]
+		var al:=Vector3(-a.y,a.z,a.x)
+		var ar:=Vector3(a.y,a.z,a.x)
+		var atl:=Vector3(-a.y*0.68,a.w,a.x)
+		var atr:=Vector3(a.y*0.68,a.w,a.x)
+		var bl:=Vector3(-b.y,b.z,b.x)
+		var br:=Vector3(b.y,b.z,b.x)
+		var btl:=Vector3(-b.y*0.68,b.w,b.x)
+		var btr:=Vector3(b.y*0.68,b.w,b.x)
+		_quad(tool,atl,atr,btl,btr)
+		_quad(tool,ar,al,br,bl)
+		_quad(tool,al,atl,bl,btl)
+		_quad(tool,atr,ar,btr,br)
+		if i==0:
+			_quad(tool,al,ar,atl,atr)
+		if i==stations.size()-2:
+			_quad(tool,br,bl,btr,btl)
+	var shell:=MeshInstance3D.new()
+	shell.mesh=tool.commit()
+	material.cull_mode=BaseMaterial3D.CULL_DISABLED
+	shell.material_override=material
+	parent.add_child(shell)
+
+# The old board remains the glider/gyro/ceiling platform. The cycle
+# folds its wheel carriers into that platform at a surface/flight handoff.
+func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, _blend: float) -> void:
+	cycle_amount=amount
+	cycle_fold=1.0-amount
+	lightcycle.visible=amount>0.015
+	if amount<=0.015:
+		return
+	var speed_mix:=clampf(speed_factor,0.0,1.0)
+	var idle:=sin(PI*idle_phase) if not airborne else 0.0
+	var turn:=clampf(steer+drift*0.65,-1.0,1.0)
+	var lean:=-turn*(0.15+0.30*speed_mix)
+	var jump_pitch:=0.0
+	if airborne:
+		jump_pitch=0.25*sin(PI*clampf(flip,0.0,1.0))-0.36*dive_amount
+	elif idle_variant in [1,2]:
+		jump_pitch=idle*(0.10 if idle_variant==1 else -0.10)
+	var bounce:=idle*0.045+0.012*sin(phase*7.0)*(1.0-speed_mix)
+	var compression:=clampf(landing*0.16+impact*0.08+crouch*0.10,0.0,0.26)
+	# Lean about the tire contact plane; keep the tire off the track.
+	var target_rotation:=Vector3(jump_pitch,turn*0.055,lean)
+	var lift:=0.52*(1.0-cos(lean))+absf(sin(jump_pitch))*1.08+0.025
+	lightcycle.position=Vector3(0,lift+bounce,0)
+	lightcycle.rotation=target_rotation
+	cycle_frame.position=Vector3(0,-compression,0)
+	cycle_frame.scale=Vector3(1.0,lerpf(0.24,1.0,amount),lerpf(0.74,1.0,amount))
+	for i in range(2):
+		var fork:=cycle_forks[i]
+		var z:float=-1.08 if i==0 else 1.08
+		fork.position=Vector3(0,lerpf(0.17,0.52,amount),z*lerpf(0.46,1.0,amount))
+		fork.rotation=Vector3(0,turn*0.18 if i==0 else 0.0,(1.0 if i==0 else -1.0)*PI*0.5*cycle_fold)
+		cycle_wheels[i].rotation.x=fposmod(phase*(5.0+speed_mix*13.0),TAU)
+	# Fade from the former rig pose to a real seated pose; hands and feet
+	# are solved against the bike's current steering/compression transforms.
+	var strength:=smoothstep(0.12,0.85,amount)
+	var hip_target:=lightcycle.transform*(cycle_frame.transform*Vector3(0,0.98,0.32))
+	var chest_target:=lightcycle.transform*(cycle_frame.transform*Vector3(0,1.29-speed_mix*0.15-crouch*0.12,-0.08-speed_mix*0.18))
+	var shoulder_target:=chest_target+lightcycle.basis*Vector3(0,0.13,-0.06)
+	var head_target:=shoulder_target+lightcycle.basis*Vector3(0,0.25,-0.10)
+	var hip_value:=hips.position.lerp(hip_target,strength)
+	var shoulder_value:=shoulder_target
+	hips.position=hip_value
+	hips.rotation=hips.rotation.lerp(target_rotation,strength)
+	torso.position=torso.position.lerp(chest_target,strength)
+	torso.rotation=torso.rotation.lerp(Vector3(-0.65-speed_mix*0.30-crouch*0.20,turn*0.06,lean),strength)
+	head.position=head.position.lerp(head_target,strength)
+	head.rotation=head.rotation.lerp(Vector3(-0.12-dive_amount*0.20,-turn*0.17,lean*0.65),strength)
+	for i in range(2):
+		var side:float=-1.0 if i==0 else 1.0
+		var foot_target:=lightcycle.transform*(cycle_frame.transform*Vector3(side*0.43,0.43,0.43))
+		var foot:=boots[i].position.lerp(foot_target,strength)
+		var hip_joint:=hip_value+lightcycle.basis*Vector3(side*0.16,0,0)
+		var knee:=_joint(hip_joint,foot,lightcycle.basis*Vector3(side*0.52,0,-1),LEG_LENGTH)
+		_segment(thighs[i],hip_joint,knee)
+		_segment(shins[i],knee,foot)
+		boots[i].position=foot
+		boots[i].rotation=boots[i].rotation.lerp(Vector3(jump_pitch,side*0.08,lean),strength)
+		var arm_start:=shoulder_value+lightcycle.basis*Vector3(side*0.24,0,0)
+		var grip:=cycle_grips[i]
+		grip.rotation.y=turn*0.22
+		var grip_target:=lightcycle.transform*(cycle_frame.transform*grip.position)
+		var old_hand:=lower_arms[i].position-lower_arms[i].basis.y*0.5
+		var hand:=old_hand.lerp(grip_target,strength)
+		var elbow:=_joint(arm_start,hand,lightcycle.basis*Vector3(side*0.65,-0.1,0.6),ARM_LENGTH)
+		_segment(upper_arms[i],arm_start,elbow)
+		_segment(lower_arms[i],elbow,hand)
 
 func _quad(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	for vertex: Vector3 in [a,c,b,b,c,d]:
@@ -708,6 +892,29 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)
+	# Live runner opts into the cycle; the legacy deck solver is still
+	# available for the three other vehicle rigs and geometry fixtures.
+	var use_cycle:=bool(extra.get("lightcycle",false))
+	var cycle_target:=0.0
+	if use_cycle:
+		cycle_target=(1.0-smoothstep(0.12,0.65,inverted))*(1.0-smoothstep(0.12,0.72,gyro_deploy))
+		if gliding:
+			if entry_progress>=0.0:
+				cycle_target*=1.0-smoothstep(0.0,0.34,entry_progress)
+			elif returning and not transferring:
+				cycle_target*=smoothstep(0.72,1.0,return_progress)
+			else:
+				cycle_target=0.0
+		# Old skate spins and ground hops are not suitable for the bike.
+		# Wheelies, steering and suspension replace them instead.
+		if cycle_target>0.0:
+			rotation=rotation.lerp(Vector3.ZERO,smoothstep(0.0,0.75,cycle_target))
+			visual_lift*=1.0-cycle_target
+			visual_pivot*=1.0-cycle_target
+	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,blend)
+	if cycle_target>0.5:
+		for mesh_index in range(2):
+			(board.get_child(mesh_index) as Node3D).visible=false
 	# Crossfade every joint, deck and visual root. A landing or dive can
 	# interrupt a trick without teleporting limbs to a new pose.
 	if blend<1.0:

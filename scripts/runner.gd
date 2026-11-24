@@ -142,7 +142,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"lightcycle":true,"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot:float=rider_model.get("visual_pivot")
 	var lift:float=rider_model.get("visual_lift")
 	# Correct the inherited bank roll in a separate visual parent.
@@ -351,7 +351,7 @@ func reset_run(course: Node3D) -> void:
 	rider_landing = 0.0
 	rider_impact = 0.0
 	rider_model.scale = Vector3.ONE
-	rider_model.call("pose", 0.0, 0.0, false, 1.0)
+	rider_model.call("pose", 0.0, 0.0, false, 1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true})
 	sync_pose(course)
 
 func request_jump() -> void:
