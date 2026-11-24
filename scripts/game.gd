@@ -8,9 +8,10 @@ const EffectsScript = preload("res://scripts/run_effects.gd")
 const ReplayScript = preload("res://scripts/replay.gd")
 const CombatScript = preload("res://scripts/arcade_combat.gd")
 var combat
-var combat_label: Label
 var crosshair: Label
 var pulse_button: Button
+var touch_buttons: Array[Button] = []
+var touch_ui_active := false
 var aim_cursor: ImageTexture
 var reactive_sky: ShaderMaterial
 var mountain_mesh: MeshInstance3D
@@ -72,8 +73,6 @@ var run_finished := false
 var run_time := 0.0
 var best_distance := 0.0
 var run_seed := 0
-var speed_label: Label
-var speed_unit_label: Label
 var paused := false
 var imperial := false
 var pause_overlay: Control
@@ -83,16 +82,11 @@ var units_picker: OptionButton
 var resume_button: Button
 var options_button: Button
 var back_button: Button
-var controls_hint: Label
 var pad_menu_index := 0
 var pad_menu_axis := Vector2.ZERO
 var distance_label: Label
 var clock_label: Label
 var record_label: Label
-var camera_label: Label
-var slide_label: Label
-var reserve_meter: ProgressBar
-var reserve_label: Label
 var minimap: Control
 var camera_track_s := 0.0
 var camera_track_clearance := 0.0
@@ -111,13 +105,10 @@ const CAMERA_ARM_RESPONSE := 6.5
 var camera_goal := Basis.IDENTITY
 var camera_height := 0.0
 var slide_eye_height := 1.55
-var slide_indicator: PanelContainer
 var camera_offset := Vector3.ZERO
 var takeoff_camera_offset := Vector3.ZERO
 var camera_was_grounded := true
 const TAKEOFF_CAMERA_TIME := 0.45
-var storm_label: Label
-var section_label: Label
 var message_label: Label
 var restart_button: Button
 
@@ -229,9 +220,6 @@ func _physics_process(delta: float) -> void:
 	var previous_speed: float = runner.speed
 	runner.tick(delta, course)
 	combat.tick(delta,course,runner)
-	if combat.enabled and mode!=5 and combat.shield<=0.0:
-		_lose("SHIELD DEPLETED")
-		return
 	extras.track(delta, runner, previous_speed)
 	effects.update_run(runner.speed, runner.hits > previous_hits, not was_grounded and runner.is_grounded())
 	if runner.fallen:
@@ -504,53 +492,22 @@ func _distance_display(meters: float) -> String:
 	return "%d m" % int(meters)
 
 func _update_hud() -> void:
-	var combat_visible: bool=combat.enabled and not replay_active and not run_finished and not paused
-	combat_label.visible=combat_visible
-	# Mouse uses a custom crosshair at its actual position. Controller
-	# and touch retain a centered indicator when no mouse is in use.
-	crosshair.visible=combat_visible and not mouse_aim_active
+	var active: bool = not replay_active and not run_finished and not paused
+	var combat_visible: bool = combat.enabled and active
+	# Only the aiming reticle and input controls remain outside the compact stats.
+	crosshair.visible = combat_visible and not mouse_aim_active
 	_update_combat_cursor(combat_visible)
-	pulse_button.visible=combat_visible
-	if combat_visible:
-		combat_label.text="SHIELD %d%%  //  DRONES %d" % [int(combat.shield),int(combat.score)]
-		if combat.reward_timer>0.0:
-			combat_label.text+="  //  MOMENTUM REWARD"
-		elif combat.attack_timer>0.0:
-			combat_label.text+="  //  MOMENTUM HIT"
-	slide_indicator.visible = first_person and runner.is_grounded() and runner.is_sliding and not run_finished
-	reserve_meter.value = runner.momentum_reserve
-	reserve_label.text = "MOMENTUM RESERVE  %d%%" % int(round(runner.momentum_reserve / runner.RESERVE_MAX * 100.0))
-	speed_label.text = "%d" % _speed_display(runner.speed)
-	speed_unit_label.text = _speed_units()
+	for touch_button in touch_buttons:
+		touch_button.visible = touch_ui_active and active
+	pulse_button.visible = touch_ui_active and combat_visible
 	distance_label.text = "DISTANCE  " + _distance_display(maxf(0.0, runner.distance - 8.0))
 	clock_label.text = "TIME  %02d:%05.2f" % [int(run_time / 60.0), fmod(run_time, 60.0)]
-	record_label.text = MODES[mode].to_upper() + "  //  BEST " + _distance_display(maxf(extras.best_for(mode, run_day), runner.distance - 8.0))
-	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
-	section_label.text = str(course.biome_name(runner.distance)) + "  //  " + str(course.rider_section_name(runner.distance, runner.lane))
-	if not runner.is_grounded():
-		slide_label.text = "DIVING  //  CONTROLLED DESCENT" if runner.diving else ("AIRBORNE  //  DOUBLE JUMP READY" if runner.double_jump_available else "AIRBORNE  //  DOUBLE JUMP USED")
-	elif runner.is_sliding:
-		if float(course.recovery_accel(runner.distance, runner.lane, runner.surface_side)) > 0.1:
-			slide_label.text = "RECOVERY LANE  //  EXTRA ACCELERATION"
-		else:
-			slide_label.text = "UPHILL SLIDE  //  LOSING SPEED" if runner.uphill else "SLIDING  //  BUILD MOMENTUM"
-	else:
-		slide_label.text = "HOLD SHIFT / CTRL / C TO SLIDE"
-	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
-	storm_label.text = "PRACTICE  //  NO STORM" if mode == 5 else "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
-	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
-	if replay_active:
+	var saved_best: float = extras.best_for(mode, run_day)
+	if mode == 0:
+		saved_best = maxf(saved_best, best_distance)
+	record_label.text = "BEST  " + _distance_display(maxf(saved_best, runner.distance - 8.0))
+	if replay_active or not run_finished:
 		message_label.visible = false
-	elif not run_finished:
-		message_label.visible = runner.hit_timer>0.0 or runner.gate_timer>0.0 or runner.landing_reward_timer>0.0 or runner.loop_reward_timer>0.0
-		if runner.loop_reward_timer>0.0:
-			message_label.text="LOOP COMPLETE // +24 M/S"
-		elif runner.hit_timer > 0.0:
-			message_label.text = "IMPACT  //  MOMENTUM LOST"
-		elif runner.landing_reward_timer > 0.0:
-			message_label.text = runner.landing_reward_text
-		else:
-			message_label.text = "CLEAN GATE  //  MOMENTUM REWARD"
 
 func _lose(reason: String) -> void:
 	if run_finished:
@@ -789,6 +746,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch or event is InputEventScreenDrag:
+		touch_ui_active = true
 	if event is InputEventMouseMotion or event is InputEventMouseButton:
 		mouse_aim_active=true
 	elif event is InputEventJoypadMotion or event is InputEventJoypadButton or event is InputEventScreenTouch or event is InputEventScreenDrag:
@@ -816,14 +775,11 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			effects.activate_audio()
-			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  RIGHT STICK look  ·  L3 center  ·  START pause  ·  X retry"
 			if _pad_button(pad.button_index):
 				get_viewport().set_input_as_handled()
 		return
 	if event is InputEventJoypadMotion:
 		var motion := event as InputEventJoypadMotion
-		if absf(motion.axis_value) > 0.35:
-			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  RIGHT STICK look  ·  L3 center  ·  START pause  ·  X retry"
 		if paused and (motion.axis == JOY_AXIS_LEFT_X or motion.axis == JOY_AXIS_LEFT_Y):
 			var value := signf(motion.axis_value) if absf(motion.axis_value) > 0.65 else 0.0
 			var horizontal := motion.axis == JOY_AXIS_LEFT_X
@@ -872,7 +828,6 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	effects.activate_audio()
-	controls_hint.text = "A/D turn  ·  Q/E drift  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if paused:
@@ -928,62 +883,22 @@ func _create_hud() -> void:
 	layer.add_child(root)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	slide_indicator = PanelContainer.new()
-	root.add_child(slide_indicator)
-	slide_indicator.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	slide_indicator.offset_left = -120
-	slide_indicator.offset_right = 120
-	slide_indicator.offset_top = -104
-	slide_indicator.offset_bottom = -62
-	slide_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var slide_style := StyleBoxFlat.new()
-	slide_style.bg_color = Color(0.015, 0.09, 0.15, 0.87)
-	slide_style.border_color = Color(0.1, 0.95, 1.0)
-	slide_style.set_border_width_all(2)
-	slide_style.set_corner_radius_all(5)
-	slide_indicator.add_theme_stylebox_override("panel", slide_style)
-	var slide_text := _label("»  SLIDING  «", 23, Color(0.25, 0.98, 1.0))
-	slide_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	slide_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	slide_indicator.add_child(slide_text)
-	slide_indicator.visible = false
 	var stack := VBoxContainer.new()
 	stack.position = Vector2(22, 18)
 	stack.add_theme_constant_override("separation", 2)
 	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(stack)
-	stack.add_child(_label("VECTOR // VELOCITY", 23, Color(0.96, 0.19, 0.65)))
-	speed_label = _label("0", 58, Color(0.1, 0.95, 1.0))
-	stack.add_child(speed_label)
-	speed_unit_label = _label("KM/H", 15, Color(0.62, 0.85, 0.95))
-	stack.add_child(speed_unit_label)
-	distance_label = _label("", 19, Color(0.8, 0.93, 0.99))
+	stack.name = "RunStats"
+	distance_label = _label("", 23, Color(0.84, 0.96, 1.0))
 	stack.add_child(distance_label)
-	clock_label = _label("", 19, Color(0.8, 0.93, 0.99))
+	clock_label = _label("", 19, Color(0.84, 0.96, 1.0))
 	stack.add_child(clock_label)
-	record_label = _label("", 17, Color(0.99, 0.79, 0.41))
+	record_label = _label("", 19, Color(0.99, 0.79, 0.41))
 	stack.add_child(record_label)
-	camera_label = _label("", 14, Color(0.68, 0.74, 0.95))
-	stack.add_child(camera_label)
-	section_label = _label("", 17, Color(0.1, 0.9, 0.95))
-	stack.add_child(section_label)
-	slide_label = _label("", 16, Color(0.4, 0.96, 0.9))
-	stack.add_child(slide_label)
-	storm_label = _label("", 18, Color(1.0, 0.33, 0.50))
-	stack.add_child(storm_label)
-	reserve_label = _label("MOMENTUM RESERVE", 15, Color(0.99, 0.79, 0.41))
-	stack.add_child(reserve_label)
-	reserve_meter = ProgressBar.new()
-	reserve_meter.max_value = 30.0
-	reserve_meter.custom_minimum_size = Vector2(220, 12)
-	reserve_meter.show_percentage = false
-	reserve_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var reserve_fill := StyleBoxFlat.new()
-	reserve_fill.bg_color = Color(0.98, 0.68, 0.21)
-	reserve_meter.add_theme_stylebox_override("fill", reserve_fill)
-	stack.add_child(reserve_meter)
-	combat_label=_label("",16,Color(1.0,0.52,0.77))
-	stack.add_child(combat_label)
+	for stat in [distance_label, clock_label, record_label]:
+		stat.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+		stat.add_theme_constant_override("shadow_offset_x", 1)
+		stat.add_theme_constant_override("shadow_offset_y", 2)
 	crosshair=_label("+",25,Color(0.65,1.0,1.0))
 	root.add_child(crosshair)
 	crosshair.set_anchors_preset(Control.PRESET_CENTER)
@@ -996,6 +911,7 @@ func _create_hud() -> void:
 	pulse_button=_button("PULSE",-394,-276,124,true)
 	root.add_child(pulse_button)
 	pulse_button.pressed.connect(_fire_center)
+	pulse_button.hide()
 	minimap = preload("res://scripts/elevation_map.gd").new()
 	minimap.clip_contents = true
 	root.add_child(minimap)
@@ -1005,6 +921,8 @@ func _create_hud() -> void:
 	minimap.offset_top = 38.0
 	minimap.offset_bottom = 278.0
 	minimap.call("setup", course, runner, storm)
+	minimap.hide()
+	minimap.set_process(false)
 	message_label = _label("", 25, Color(1.0, 0.84, 0.3))
 	root.add_child(message_label)
 	message_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -1014,17 +932,6 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A/D turn  ·  Q/E drift  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
-	root.add_child(hint)
-	controls_hint = hint
-	hint.anchor_top = 1.0
-	hint.anchor_bottom = 1.0
-	hint.anchor_right = 1.0
-	hint.offset_left = 10
-	hint.offset_right = -10
-	hint.offset_top = -33
-	hint.offset_bottom = -7
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var left := _button("◀", 20, 100, 124)
 	root.add_child(left)
 	left.button_down.connect(func() -> void: runner.touch_axis = -1.0)
@@ -1050,6 +957,10 @@ func _create_hud() -> void:
 	root.add_child(dive)
 	dive.button_down.connect(func() -> void: runner.touch_dive = true)
 	dive.button_up.connect(func() -> void: runner.touch_dive = false)
+	touch_buttons.assign([left, right, slide, jump, view, recenter, dive])
+	touch_ui_active = OS.has_feature("mobile") or DisplayServer.is_touchscreen_available()
+	for touch_button in touch_buttons:
+		touch_button.visible = touch_ui_active
 	restart_button = Button.new()
 	restart_button.text = "RUN AGAIN"
 	restart_button.focus_mode = Control.FOCUS_NONE

@@ -1,7 +1,6 @@
 extends Node3D
-## Optional circuit combat. Abstract pulse tags, robotic drones, shields.
+## Circuit combat: robotic drones and momentum-only penalties.
 var enabled := false
-var shield := 100.0
 var score := 0
 var cooldown := 0.0
 var spawn_clock := 0.0
@@ -48,7 +47,6 @@ func reset(active: bool, seed_value: int = 0) -> void:
 	drones.clear()
 	pulses.clear()
 	enabled=active
-	shield=100.0
 	score=0
 	cooldown=0.0
 	spawn_clock=1.2
@@ -123,6 +121,12 @@ func fire(camera: Camera3D, screen: Vector2) -> void:
 			score+=1
 			reward_pending+=1
 
+func _apply_momentum_hit(runner: Node3D) -> void:
+	last_attack_loss = float(runner.get("speed")) * 0.40
+	runner.call("combat_momentum", 0.0, 0.60)
+	runner.set("momentum_reserve", maxf(0.0, float(runner.get("momentum_reserve")) - 10.0))
+	attack_timer = 0.85
+
 func tick(delta: float,course: Node3D,runner: Node3D) -> void:
 	if not enabled:
 		return
@@ -134,7 +138,6 @@ func tick(delta: float,course: Node3D,runner: Node3D) -> void:
 		var bonus:=float(reward_pending)*clampf(speed_value*0.16,12.0,45.0)
 		runner.call("combat_momentum",bonus,1.0)
 		runner.set("momentum_reserve",minf(30.0,float(runner.get("momentum_reserve"))+8.0*float(reward_pending)))
-		shield=minf(100.0,shield+5.0*float(reward_pending))
 		reward_pending=0
 		reward_timer=1.5
 	spawn_clock-=delta
@@ -184,11 +187,7 @@ func tick(delta: float,course: Node3D,runner: Node3D) -> void:
 				var close_lane:=absf(player_lane-float(data["warning_lane"]))<10.0
 				_pulse(node.position,runner.position+Vector3.UP*0.8,enemy_mat,0.12)
 				if close_lane and attack_timer<=0.0:
-					shield=maxf(0.0,shield-9.0)
-					last_attack_loss=player_speed*0.40
-					runner.call("combat_momentum",0.0,0.60)
-					runner.set("momentum_reserve",maxf(0.0,float(runner.get("momentum_reserve"))-10.0))
-					attack_timer=0.85
+					_apply_momentum_hit(runner)
 				data["charge"]=rng.randf_range(2.2,3.0)
 		else:
 			(data["ring"] as MeshInstance3D).material_override=drone_mat

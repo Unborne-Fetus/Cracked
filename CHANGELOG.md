@@ -1,5 +1,9 @@
 # Vector Velocity changelog
 
+## 2026-11-24 — Minimal HUD and momentum-only combat
+- Show only distance, time and best during normal gameplay; retain aiming and touch controls as needed.
+- Removed shields, shield recovery and shield-depletion defeats. Drone hits reduce speed and reserve only.
+
 ## 2026-11-24 — Deck sweeps, transformation handoffs and mesh mountains
 - Stacked-route flight checks upper and lower decks independently, selecting the earliest actual swept contact.
 - Ceiling spider legs suspend the rider 2.5 m below the surface.

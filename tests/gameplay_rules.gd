@@ -45,6 +45,11 @@ func _run_tests() -> void:
 	if absf(float(run_effects.call("soundtrack_gain", true, false, 0.0)) - 0.42) > 0.001 or absf(float(run_effects.call("soundtrack_gain", true, false, 200.0)) - 0.42) > 0.001 or float(run_effects.call("soundtrack_gain", false, true, 200.0)) != 0.0 or float(run_effects.call("soundtrack_gain", true, true, 200.0)) <= float(run_effects.call("soundtrack_gain", true, true, 20.0)):
 		_fail("Soundtrack mute and adaptive gain are not independent.")
 		return
+	# Normal run stats expose exactly distance, time and best.
+	var stats_stack: Node = (game.get("distance_label") as Label).get_parent()
+	if stats_stack.get_child_count() != 3 or (game.get("minimap") as Control).visible or not (game.get("record_label") as Label).text.begins_with("BEST"):
+		_fail("Normal run HUD contains extra stats.")
+		return
 	# The avatar is articulated geometry, with a separate curved deck.
 	var model: Node3D = runner.get("rider_model")
 	var flip_board: Node3D = runner.get("board_pivot")
@@ -261,6 +266,23 @@ func _run_tests() -> void:
 		if float(chase_drones[0]["s"])<=float(runner.get("distance")):
 			_fail("Drone could be passed instead of pursuing.")
 			return
+	var saved_speed: float = runner.get("speed")
+	var saved_reserve: float = runner.get("momentum_reserve")
+	runner.set("speed", 100.0)
+	runner.set("momentum_reserve", 25.0)
+	combat_probe.call("_apply_momentum_hit", runner)
+	if absf(float(runner.get("speed")) - 60.0) > 0.01 or float(runner.get("momentum_reserve")) != 15.0:
+		_fail("Drone hit must reduce momentum and reserve only.")
+		return
+	for repeat in range(20):
+		combat_probe.call("_apply_momentum_hit", runner)
+	if bool(game.get("run_finished")):
+		_fail("Repeated drone hits ended the run.")
+		return
+	runner.set("speed", saved_speed)
+	runner.set("momentum_reserve", saved_reserve)
+	runner.set("hit_timer", 0.0)
+	runner.set("rider_impact", 0.0)
 	combat_probe.call("reset",false)
 	sprite_camera.transform=saved_camera_pose
 	# Stalling on an uphill track must not permanently stop progress.
@@ -614,22 +636,21 @@ func _run_tests() -> void:
 	if new_arm.distance_to(previous_arm) > 0.2:
 		_fail("Camera arm snapped at takeoff.")
 		return
-	# First-person sliding has a distinct visual cue and lowered eye height.
+	# First-person sliding lowers the camera without adding HUD clutter.
 	game.call("_restart")
 	await process_frame
 	game.set("first_person", true)
 	runner.set("is_sliding", true)
 	game.call("_update_camera", 1.0)
 	game.call("_update_hud")
-	var cue: Control = game.get("slide_indicator")
-	if not cue.visible or float(game.get("slide_eye_height")) > 0.9:
-		_fail("First-person slide indication is missing.")
+	if float(game.get("slide_eye_height")) > 0.9:
+		_fail("First-person sliding does not lower the camera.")
 		return
 	runner.set("is_sliding", false)
 	game.call("_update_camera", 1.0)
 	game.call("_update_hud")
-	if cue.visible or float(game.get("slide_eye_height")) < 1.5:
-		_fail("Slide indication did not clear after standing.")
+	if float(game.get("slide_eye_height")) < 1.5:
+		_fail("First-person camera did not rise after standing.")
 		return
 	game.set("first_person", false)
 	# A high jump over the supported ribbon cannot expire on airtime.
