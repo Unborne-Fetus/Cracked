@@ -376,6 +376,22 @@ func _run() -> void:
 	if str(game.get("status")) != "running" or session.world != 2 or not session.endless or session.total_distance < distance:
 		_fail("Endless scene did not transition automatically.")
 		return
+	# The original articulated body is restored without changing movement or adding vehicles.
+	var rider_model: Node3D = runner.get("model")
+	if rider_model.get_script() != preload("res://scripts/rider_model.gd") or rider_model.get_child_count() != 13:
+		_fail("Original white rider body not restored.")
+		return
+	var boots: Array = rider_model.get("boots")
+	var original_boot: Vector3 = boots[0].position
+	rider_model.call("pose_run", PI * 0.5, 90.0, 0.0, true, false, 0.0, 0.0, 1.0)
+	if boots[0].position.distance_to(original_boot) < 0.05:
+		_fail("Original rider lacks running animation.")
+		return
+	rider_model.call("pose_run", 0.0, 90.0, 0.0, false, true, 0.0, -0.4, 1.0)
+	for part in rider_model.get_children():
+		if not (part as Node3D).transform.is_finite():
+			_fail("Original rider dive pose is nonfinite.")
+			return
 	print("PASS: flow movement, slopes, landings and streaming")
 	quit(0)
 

@@ -5,6 +5,7 @@ const START_SPEED := 36.0
 const MAX_SPEED := 250.0
 const BOOST_COST := 28.0
 const FOOT := 0.08
+const RiderModel = preload("res://scripts/rider_model.gd")
 var speed := START_SPEED
 var lateral := 0.0
 var vy := 0.0
@@ -25,7 +26,6 @@ var trail_mesh := ImmediateMesh.new()
 var trail_material := StandardMaterial3D.new()
 var trail_samples: Array[Dictionary] = []
 var trail_clock := 0.0
-var scarf: Node3D
 var touch_steer := 0.0
 var touch_dive := false
 var land_lock := 0.0
@@ -33,10 +33,6 @@ var cue := ""
 var cue_time := 0.0
 var gait := 0.0
 var model: Node3D
-var arms: Array[Node3D] = []
-var legs: Array[Node3D] = []
-var knees: Array[Node3D] = []
-var elbows: Array[Node3D] = []
 var landing_marker: MeshInstance3D
 var landing_mat: StandardMaterial3D
 var marker_clock := 0.0
@@ -61,48 +57,9 @@ var gust_direction := 0.0
 var energy_lock := 0.0
 
 func _ready() -> void:
-	model = Node3D.new()
+	model = RiderModel.new()
+	model.name = "OriginalRider"
 	add_child(model)
-	var suit := _material(Color(0.94, 0.79, 0.40))
-	var dark := _material(Color(0.15, 0.17, 0.29))
-	var accent := _material(Color(0.88, 0.28, 0.31))
-	_part(model, Vector3(0.0, 1.06, 0.0), Vector3(0.55, 0.63, 0.32), suit)
-	_part(model, Vector3(0.0, 0.74, 0.0), Vector3(0.46, 0.25, 0.28), dark)
-	var head := MeshInstance3D.new()
-	var helmet := SphereMesh.new()
-	helmet.radius = 0.22
-	helmet.height = 0.44
-	head.mesh = helmet
-	head.material_override = accent
-	head.position = Vector3(0.0, 1.57, 0.0)
-	model.add_child(head)
-	for side in [-1.0, 1.0]:
-		var arm := Node3D.new()
-		arm.position = Vector3(side * 0.33, 1.29, 0.0)
-		model.add_child(arm)
-		_part(arm, Vector3(0.0, -0.13, 0.0), Vector3(0.17, 0.29, 0.19), suit)
-		var elbow := Node3D.new()
-		elbow.position.y = -0.26
-		arm.add_child(elbow)
-		_part(elbow, Vector3(0.0, -0.13, 0.0), Vector3(0.14, 0.28, 0.15), dark)
-		elbows.append(elbow)
-		arms.append(arm)
-		var leg := Node3D.new()
-		leg.position = Vector3(side * 0.14, 0.75, 0.0)
-		model.add_child(leg)
-		_part(leg, Vector3(0.0, -0.17, 0.0), Vector3(0.22, 0.37, 0.23), dark)
-		var knee := Node3D.new()
-		knee.position.y = -0.34
-		leg.add_child(knee)
-		_part(knee, Vector3(0.0, -0.13, 0.0), Vector3(0.18, 0.29, 0.18), suit)
-		_part(knee, Vector3(0.0, -0.31, -0.075), Vector3(0.22, 0.15, 0.37), accent)
-		knees.append(knee)
-		legs.append(leg)
-	# Original scarf silhouette, with a world-space speed ribbon.
-	scarf = Node3D.new()
-	scarf.position = Vector3(0.0, 1.36, 0.17)
-	model.add_child(scarf)
-	_part(scarf, Vector3(0.0, 0.0, 0.38), Vector3(0.23, 0.08, 0.84), accent)
 	trail = MeshInstance3D.new()
 	trail.mesh = trail_mesh
 	trail.top_level = true
@@ -127,21 +84,6 @@ func _ready() -> void:
 	landing_marker.material_override = landing_mat
 	add_child(landing_marker)
 	landing_marker.hide()
-
-func _material(color: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.roughness = 0.9
-	return m
-
-func _part(parent: Node3D, at: Vector3, dimensions: Vector3, mat: Material) -> void:
-	var instance := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = dimensions
-	instance.mesh = box
-	instance.material_override = mat
-	instance.position = at
-	parent.add_child(instance)
 
 func reset(course: Node3D) -> void:
 	speed = START_SPEED
@@ -190,6 +132,7 @@ func reset(course: Node3D) -> void:
 	safe_position = position
 	model.rotation = Vector3.ZERO
 	model.scale = Vector3.ONE
+	model.call("pose_run", 0.0, speed, 0.0, true, false, 0.0, 0.0, 1.0)
 
 func progress() -> float:
 	return -position.z
@@ -477,19 +420,11 @@ func _pose(dt: float, course: Node3D) -> void:
 	gait += dt * clampf(speed * 0.24, 5.0, 24.0)
 	var slope: Vector2 = course.call("grade", position.x, -position.z)
 	landing_compression = move_toward(landing_compression, 0.0, dt * 4.8)
-	model.scale.y = 1.0 - landing_compression * 0.16
 	var pitch := atan(slope.y) if grounded else clampf(atan2(vy, speed), -0.8, 0.65)
-	model.rotation.x = lerpf(model.rotation.x, pitch - (0.27 if grounded else (0.52 if diving else 0.02)), 1.0 - exp(-dt * 10.0))
-	model.rotation.z = lerpf(model.rotation.z, -lateral / maxf(speed, 25.0) * 0.30, 1.0 - exp(-dt * 8.0))
-	scarf.rotation.x = -0.12 + sin(gait * 0.55) * 0.12 - smoothstep(35.0, 130.0, speed) * 0.30
+	var steer := clampf(lateral / maxf(speed, 25.0), -1.0, 1.0)
 	model.rotation.y = lerpf(model.rotation.y, -atan2(lateral, speed), 1.0 - exp(-dt * 9.0))
-	for i in range(2):
-		var sign_value := 1.0 if i == 0 else -1.0
-		var stride := sin(gait) * sign_value * 0.85 if grounded else (-0.45 if diving else sign_value * 0.25)
-		legs[i].rotation.x = lerpf(legs[i].rotation.x, stride, 1.0 - exp(-dt * 18.0))
-		arms[i].rotation.x = lerpf(arms[i].rotation.x, -stride if grounded else (1.0 if diving else -0.7), 1.0 - exp(-dt * 18.0))
-		knees[i].rotation.x = lerpf(knees[i].rotation.x, (0.18 + maxf(0.0, -stride) * 1.15) if grounded else (0.95 if diving else 0.65), 1.0 - exp(-dt * 17.0))
-		elbows[i].rotation.x = lerpf(elbows[i].rotation.x, -1.25 if grounded else (-0.5 if diving else -0.85), 1.0 - exp(-dt * 16.0))
+	model.rotation.x = lerpf(model.rotation.x, pitch * (0.65 if grounded else 0.30), 1.0 - exp(-dt * 10.0))
+	model.call("pose_run", gait, speed, steer, grounded, diving, landing_compression, pitch, 1.0 - exp(-dt * 20.0))
 
 func _update_trail(dt: float) -> void:
 	trail_clock += dt
@@ -508,7 +443,7 @@ func _update_trail(dt: float) -> void:
 		var fade := clampf(1.0 - (trail_clock - float(item["t"])) / 0.48, 0.0, 1.0)
 		var local: Vector3 = item["p"] - point
 		var width := (0.10 + 0.35 * strength) * fade
-		var tint := Color(1.0, 0.76, 0.40, strength * fade * fade * 0.85)
+		var tint := Color(0.35, 0.92, 1.0, strength * fade * fade * 0.85)
 		trail_mesh.surface_set_color(tint)
 		trail_mesh.surface_add_vertex(local - Vector3.RIGHT * width)
 		trail_mesh.surface_set_color(tint)

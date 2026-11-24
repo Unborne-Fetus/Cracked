@@ -1,5 +1,8 @@
 # Vector Velocity changelog
 
+## Original rider restoration
+- Restored the original white articulated body and cyan trail, using on-foot run, dive and landing animation. Kept current physics and progression; vehicles remain excluded.
+
 ## Endless and difficulty
 - Unlockable continuous-world endless mode, separate records, automatic transitions and checkpoint support.
 - Three selectable difficulty settings for collapse and attempts; smoother ravine guidance.

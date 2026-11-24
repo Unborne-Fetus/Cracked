@@ -35,3 +35,5 @@ Shared swept landing contact for the live runner and its prediction, corrected h
 
 ## Endless and difficulty
 Clear shard 10 to unlock continuous procedural worlds without shops, bosses or intermission menus. Endless records and checkpoints are persisted, and clearing a world carries forward some speed and energy. Choose Flow, Standard or Expert at the title; the settings alter initial attempts and collapse pressure. Endless has one attempt regardless of difficulty. No co-op implementation is included.
+
+The pre-reboot white articulated rider's exact body dimensions, colors and two-bone joint helpers have been restored. Its on-foot running, dive and landing poses are adapted to current movement; no vehicle hardware is instantiated. The speed trail returns to cyan.
