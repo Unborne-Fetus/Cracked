@@ -623,6 +623,34 @@ func _run_tests() -> void:
 	if str(course.call("biome_name", 0.0)) == str(course.call("biome_name", 2500.0)):
 		_fail("Terrain biomes do not change.")
 		return
+	# Daily seeds, challenge rules and practice record exclusion.
+	var extras = game.get("extras")
+	var seed_a: int = extras.daily_seed("2026-11-23")
+	if seed_a != int(extras.daily_seed("2026-11-23")) or seed_a == int(extras.daily_seed("2026-11-24")):
+		_fail("Daily seed does not follow the UTC date.")
+		return
+	game.set("mode", 1)
+	game.call("_restart")
+	var daily_seed: int = game.get("run_seed")
+	game.call("_restart")
+	if int(game.get("run_seed")) != daily_seed or not bool(course.get("fixed_daily_layout")):
+		_fail("Daily run did not preserve its deterministic course.")
+		return
+	game.set("mode", 2)
+	game.call("_restart")
+	runner.call("request_jump")
+	if bool(runner.get("queued_jump")):
+		_fail("No-jump challenge permits jumping.")
+		return
+	game.set("mode", 5)
+	game.call("_restart")
+	var storm_before_practice: float = storm.get("front_s")
+	game.call("_physics_process", 0.1)
+	if float(storm.get("front_s")) != storm_before_practice:
+		_fail("Practice mode advances the storm.")
+		return
+	game.set("mode", 0)
+	game.call("_restart")
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")
 	game.queue_free()

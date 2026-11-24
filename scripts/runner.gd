@@ -63,6 +63,15 @@ var landing_blend := 0.0
 var landing_from_basis := Basis.IDENTITY
 var hit_timer := 0.0
 var hits := 0
+var jumps_disabled := false
+var clean_gates := 0
+var perfect_landings := 0
+var dive_landings := 0
+var double_jumps := 0
+var body_material: StandardMaterial3D
+var visor_material: StandardMaterial3D
+var key_bindings: Dictionary = {}
+var pad_bindings: Dictionary = {}
 var momentum_reserve := 0.0
 var double_jump_available := true
 var diving := false
@@ -87,6 +96,7 @@ func _ready() -> void:
 	mesh.size = Vector3(0.8, 1.25, 0.8)
 	body.mesh = mesh
 	body.position.y = 0.64
+	body_material = cyan
 	body.material_override = cyan
 	avatar.add_child(body)
 	var visor := MeshInstance3D.new()
@@ -95,6 +105,7 @@ func _ready() -> void:
 	sphere.height = 0.74
 	visor.mesh = sphere
 	visor.position = Vector3(0, 1.5, -0.15)
+	visor_material = pink
 	visor.material_override = pink
 	avatar.add_child(visor)
 
@@ -123,6 +134,10 @@ func reset_run(course: Node3D) -> void:
 	landing_from_basis = Basis.IDENTITY
 	hit_timer = 0.0
 	hits = 0
+	clean_gates = 0
+	perfect_landings = 0
+	dive_landings = 0
+	double_jumps = 0
 	momentum_reserve = 0.0
 	double_jump_available = true
 	diving = false
@@ -136,20 +151,39 @@ func reset_run(course: Node3D) -> void:
 	sync_pose(course)
 
 func request_jump() -> void:
-	queued_jump = true
+	if not jumps_disabled:
+		queued_jump = true
+
+func apply_cosmetic(index: int) -> void:
+	var colors: Array[Color] = [Color(0.04, 0.85, 1.0), Color(1.0, 0.66, 0.15), Color(0.58, 0.28, 1.0), Color(0.15, 1.0, 0.52)]
+	body_material.albedo_color = colors[clampi(index, 0, 3)]
+	visor_material.albedo_color = colors[(clampi(index, 0, 3) + 1) % colors.size()]
+
+func key_down(action: String, defaults: Array) -> bool:
+	for code in key_bindings.get(action, defaults):
+		if Input.is_key_pressed(int(code)):
+			return true
+	return false
+
+func pad_down(device: int, action: String, defaults: Array) -> bool:
+	for code in pad_bindings.get(action, defaults):
+		if Input.is_joy_button_pressed(device, int(code)):
+			return true
+	return false
 
 func _dive_input() -> bool:
-	if touch_dive or Input.is_key_pressed(KEY_F):
+	if touch_dive or key_down("dive", [KEY_F]):
 		return true
 	for device in Input.get_connected_joypads():
-		if Input.is_joy_button_pressed(device, JOY_BUTTON_RIGHT_STICK):
+		if pad_down(device, "dive", [JOY_BUTTON_RIGHT_STICK]):
 			return true
 	return false
 
 func _double_jump() -> bool:
-	if grounded or not double_jump_available:
+	if grounded or not double_jump_available or jumps_disabled:
 		return false
 	double_jump_available = false
+	double_jumps += 1
 	var up := air_basis.y
 	var impulse := jump_impulse_for_speed(speed) * 0.75
 	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
@@ -168,6 +202,7 @@ func _banked_slide(grade: float, delta: float) -> void:
 func _reward_gates(course: Node3D, old_s: float, old_lane: float, old_height: float, new_height: float) -> void:
 	var count: int = course.call("collect_clean_gates", old_s, distance, old_lane, lane, old_height, new_height)
 	if count > 0:
+		clean_gates += count
 		gate_timer = 1.0
 		if grounded and is_sliding:
 			speed += GATE_REWARD * float(count)
@@ -229,9 +264,9 @@ func _pad_steer() -> float:
 	var result := 0.0
 	for device in Input.get_connected_joypads():
 		var axis := pad_axis(Input.get_joy_axis(device, JOY_AXIS_LEFT_X))
-		if Input.is_joy_button_pressed(device, JOY_BUTTON_DPAD_LEFT):
+		if pad_down(device, "left", [JOY_BUTTON_DPAD_LEFT]):
 			axis = -1.0
-		if Input.is_joy_button_pressed(device, JOY_BUTTON_DPAD_RIGHT):
+		if pad_down(device, "right", [JOY_BUTTON_DPAD_RIGHT]):
 			axis = 1.0
 		if absf(axis) > absf(result):
 			result = axis
@@ -239,7 +274,7 @@ func _pad_steer() -> float:
 
 func _pad_jump() -> bool:
 	for device in Input.get_connected_joypads():
-		if Input.is_joy_button_pressed(device, JOY_BUTTON_A):
+		if pad_down(device, "jump", [JOY_BUTTON_A]):
 			return true
 	return false
 
@@ -247,15 +282,11 @@ func _slide_input() -> bool:
 	if touch_slide:
 		return true
 	for device in Input.get_connected_joypads():
-		for button in [JOY_BUTTON_B, JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]:
-			if Input.is_joy_button_pressed(device, button):
-				return true
+		if pad_down(device, "slide", [JOY_BUTTON_B, JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]):
+			return true
 		if Input.get_joy_axis(device, JOY_AXIS_TRIGGER_LEFT) > 0.3 or Input.get_joy_axis(device, JOY_AXIS_TRIGGER_RIGHT) > 0.3:
 			return true
-	for code in SLIDE_KEYS:
-		if Input.is_key_pressed(code):
-			return true
-	return false
+	return key_down("slide", SLIDE_KEYS)
 
 func landing_speed(current: float, impact_speed: float) -> float:
 	# Gentle contact with a downhill slope preserves speed; hitting the
@@ -283,6 +314,7 @@ func _apply_landing_result(frame: Transform3D) -> void:
 	var result := landing_result(frame, air_velocity, diving, dive_seconds)
 	speed = float(result["speed"])
 	if bool(result["perfect"]):
+		perfect_landings += 1
 		landing_reward_text = "PERFECT LANDING"
 		landing_reward_timer = 1.2
 		momentum_reserve = minf(RESERVE_MAX, momentum_reserve + 2.0)
@@ -290,6 +322,7 @@ func _apply_landing_result(frame: Transform3D) -> void:
 		landing_reward_text = "MOMENTUM TRANSFER"
 		landing_reward_timer = 1.2
 	if float(result["dive_bonus"]) > 0.1:
+		dive_landings += 1
 		landing_reward_text = "DIVE LANDING  //  SPEED BONUS"
 		landing_reward_timer = 1.2
 
@@ -523,13 +556,15 @@ func tick(delta: float, course: Node3D) -> void:
 	if fallen:
 		return
 	var steer := touch_axis
-	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+	if key_down("left", [KEY_A, KEY_LEFT]):
 		steer -= 1.0
-	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+	if key_down("right", [KEY_D, KEY_RIGHT]):
 		steer += 1.0
 	steer = clampf(steer + _pad_steer(), -1.0, 1.0)
 	var slide := _slide_input()
-	var jump := Input.is_key_pressed(KEY_SPACE) or _pad_jump()
+	var jump := not jumps_disabled and (key_down("jump", [KEY_SPACE]) or _pad_jump())
+	if jumps_disabled:
+		queued_jump = false
 	if jump and not jump_held:
 		queued_jump = true
 	jump_held = jump

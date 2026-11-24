@@ -36,6 +36,7 @@ var pursuit_context: Dictionary = {}
 var demanding_sections := 0
 var recovery_sections := 0
 var rejected_layouts := 0
+var fixed_daily_layout := false
 
 func _ready() -> void:
 	surface_mat = _material(Color.WHITE)
@@ -248,6 +249,8 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 	return Basis(right, up, -forward).orthonormalized()
 
 func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
+	if fixed_daily_layout:
+		planned_speed = 65.0 + minf(float(index) * 2.0, 130.0)
 	var kind := _kind(index)
 	var start_s := chunk_starts[index]
 	var length := bank_length(kind, planned_speed)
@@ -447,7 +450,7 @@ func set_pursuit_context(at: float, across: float, speed: float, gap: float, sto
 	pursuit_context = {"at": at, "lane": across, "speed": speed, "gap": gap, "storm_speed": storm_speed, "time": elapsed, "min_gap": gap, "valid": true}
 
 func _refresh_forecast() -> void:
-	if pursuit_context.is_empty() or next_index == 0:
+	if fixed_daily_layout or pursuit_context.is_empty() or next_index == 0:
 		return
 	var at: float = pursuit_context["at"]
 	var index := chunk_index_at(at)

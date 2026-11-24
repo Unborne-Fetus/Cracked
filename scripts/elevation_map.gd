@@ -91,7 +91,7 @@ func _draw() -> void:
 			var recovery: Transform3D = course.call("surface_frame", s0, float(course.call("recovery_center", index)), 1)
 			draw_circle(_map_point(recovery.origin, player_pos, right, forward, scale_value, anchor), 1.7, Color(0.1, 1.0, 0.3))
 	var storm_at: float = storm.get("front_s")
-	if storm_at >= first and storm_at <= last and bool(course.call("has_distance", storm_at)):
+	if storm.visible and storm_at >= first and storm_at <= last and bool(course.call("has_distance", storm_at)):
 		var storm_frame: Transform3D = course.call("sample", storm_at)
 		var p := _map_point(storm_frame.origin, player_pos, right, forward, scale_value, anchor)
 		draw_circle(p, 4.0, Color(1.0, 0.15, 0.35))

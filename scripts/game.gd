@@ -3,6 +3,31 @@ extends Node3D
 const CourseScript = preload("res://scripts/course.gd")
 const RunnerScript = preload("res://scripts/runner.gd")
 const StormScript = preload("res://scripts/storm.gd")
+const ExtrasScript = preload("res://scripts/run_extras.gd")
+const EffectsScript = preload("res://scripts/run_effects.gd")
+const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice"]
+var extras
+var effects
+var mode := 0
+var run_day := ""
+var extras_page: VBoxContainer
+var extras_button: Button
+var extra_items: Array[Control] = []
+var mode_picker: OptionButton
+var cosmetic_picker: OptionButton
+var profile_label: Label
+var stats_label: Label
+var binding_action := ""
+var binding_kind := ""
+var binding_picker: OptionButton
+var keyboard_rebind: Button
+var pad_rebind: Button
+var audio_toggle: CheckButton
+var trails_toggle: CheckButton
+var vibration_toggle: CheckButton
+var board_request: HTTPRequest
+var board_status := "Online leaderboard not configured"
+var leaderboard_url := ""
 
 var course
 var runner
@@ -79,8 +104,16 @@ func _ready() -> void:
 	view_camera.near = 0.075
 	view_camera.far = 1600.0
 	add_child(view_camera)
+	extras = ExtrasScript.new()
+	add_child(extras)
+	effects = EffectsScript.new()
+	add_child(effects)
 	_create_hud()
 	_create_pause_menu()
+	_load_extras()
+	board_request = HTTPRequest.new()
+	add_child(board_request)
+	board_request.request_completed.connect(_board_completed)
 	_load_options()
 	var record := ConfigFile.new()
 	if record.load("user://endless_records.cfg") == OK:
@@ -96,12 +129,22 @@ func _restart() -> void:
 	slide_eye_height = 1.55
 	camera_offset = Vector3.ZERO
 	camera_was_grounded = true
-	run_seed = randi()
+	run_day = Time.get_date_string_from_system(true)
+	run_seed = ExtrasScript.daily_seed(run_day) if mode == 1 else randi()
+	course.fixed_daily_layout = mode == 1
 	course.reset_course(run_seed)
 	runner.reset_run(course)
+	runner.jumps_disabled = mode == 2
+	if mode == 3:
+		first_person = true
 	runner.set_first_person(first_person)
+	runner.apply_cosmetic(extras.cosmetic)
+	extras.reset_stats()
+	stats_label.visible = false
+	effects.reset_run()
 	storm.reset(runner.distance)
 	storm.sync_pose(course)
+	storm.visible = mode != 5 and storm.visible
 	message_label.visible = false
 	restart_button.visible = false
 	_update_camera(1.0)
@@ -112,14 +155,20 @@ func _physics_process(delta: float) -> void:
 		return
 	run_time += delta
 	course.set_pursuit_context(runner.distance, runner.lane, runner.speed, storm.gap_to(runner.distance), storm.speed, storm.elapsed)
+	var previous_hits: int = runner.hits
+	var was_grounded: bool = runner.is_grounded()
+	var previous_speed: float = runner.speed
 	runner.tick(delta, course)
+	extras.track(delta, runner, previous_speed)
+	effects.update_run(runner.speed, runner.hits > previous_hits, not was_grounded and runner.is_grounded())
 	if runner.fallen:
 		_lose("FELL OFF THE TRACK")
 		return
-	storm.advance(delta)
-	storm.sync_pose(course)
-	if storm.gap_to(runner.distance) <= 1.0:
-		_lose("THE STORM CAUGHT YOU")
+	if mode != 5:
+		storm.advance(delta * (1.28 if mode == 4 else 1.0))
+		storm.sync_pose(course)
+		if storm.gap_to(runner.distance) <= 1.0:
+			_lose("THE STORM CAUGHT YOU")
 
 func _process(delta: float) -> void:
 	if paused:
@@ -274,7 +323,7 @@ func _update_hud() -> void:
 	speed_unit_label.text = _speed_units()
 	distance_label.text = "DISTANCE  " + _distance_display(maxf(0.0, runner.distance - 8.0))
 	clock_label.text = "TIME  %02d:%05.2f" % [int(run_time / 60.0), fmod(run_time, 60.0)]
-	record_label.text = "BEST  " + _distance_display(maxf(best_distance, runner.distance - 8.0))
+	record_label.text = MODES[mode].to_upper() + "  //  BEST " + _distance_display(maxf(extras.best_for(mode, run_day), runner.distance - 8.0))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
 	section_label.text = str(course.biome_name(runner.distance)) + "  //  " + str(course.section_name(runner.distance))
 	if not runner.is_grounded():
@@ -287,7 +336,7 @@ func _update_hud() -> void:
 	else:
 		slide_label.text = "HOLD SHIFT / CTRL / C TO SLIDE"
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
-	storm_label.text = "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
+	storm_label.text = "PRACTICE  //  NO STORM" if mode == 5 else "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
 	if not run_finished:
 		message_label.visible = runner.hit_timer > 0.0 or runner.gate_timer > 0.0 or runner.landing_reward_timer > 0.0
@@ -303,7 +352,12 @@ func _lose(reason: String) -> void:
 		return
 	run_finished = true
 	var meters: float = maxf(0.0, runner.distance - 8.0)
-	if meters > best_distance:
+	extras.finish(mode, run_day, run_seed, meters, run_time, runner)
+	stats_label.text = extras.summary(_distance_display(meters), _speed_display(extras.top_speed), _speed_units())
+	stats_label.visible = true
+	if mode == 1:
+		_submit_daily(meters)
+	if mode == 0 and meters > best_distance:
 		best_distance = meters
 		var record := ConfigFile.new()
 		record.set_value("records", "best_distance", best_distance)
@@ -313,6 +367,8 @@ func _lose(reason: String) -> void:
 	restart_button.visible = true
 
 func _toggle_camera() -> void:
+	if mode == 3:
+		return
 	first_person = not first_person
 	camera_rotation_ready = false
 	runner.set_first_person(first_person)
@@ -321,26 +377,37 @@ func _toggle_camera() -> void:
 func _pad_focus() -> void:
 	if not paused:
 		return
-	if options_page.visible:
+	if extras_page.visible:
+		extra_items[clampi(pad_menu_index, 0, extra_items.size() - 1)].grab_focus()
+	elif options_page.visible:
 		if pad_menu_index == 0:
 			units_picker.grab_focus()
 		else:
 			back_button.grab_focus()
 	elif pad_menu_index == 0:
 		resume_button.grab_focus()
-	else:
+	elif pad_menu_index == 1:
 		options_button.grab_focus()
+	else:
+		extras_button.grab_focus()
 
 func _pad_direction(x: int, y: int) -> void:
 	if y != 0:
-		pad_menu_index = 1 - pad_menu_index
+		var count := extra_items.size() if extras_page.visible else (2 if options_page.visible else 3)
+		pad_menu_index = posmod(pad_menu_index + y, count)
 		_pad_focus()
+	elif x != 0 and extras_page.visible:
+		var selected := extra_items[pad_menu_index]
+		if selected is OptionButton:
+			var picker := selected as OptionButton
+			picker.select(posmod(picker.selected + x, picker.item_count))
+			picker.item_selected.emit(picker.selected)
 	elif x != 0 and options_page.visible and pad_menu_index == 0:
 		_set_units(1 if x > 0 else 0)
 
 func _pad_button(button: int) -> bool:
 	if button == JOY_BUTTON_START:
-		if paused and options_page.visible:
+		if paused and (options_page.visible or extras_page.visible):
 			_show_options(false)
 		else:
 			_set_paused(not paused)
@@ -348,7 +415,7 @@ func _pad_button(button: int) -> bool:
 	if paused:
 		match button:
 			JOY_BUTTON_B, JOY_BUTTON_BACK:
-				if options_page.visible:
+				if options_page.visible or extras_page.visible:
 					_show_options(false)
 				else:
 					_set_paused(false)
@@ -361,20 +428,30 @@ func _pad_button(button: int) -> bool:
 			JOY_BUTTON_DPAD_RIGHT:
 				_pad_direction(1, 0)
 			JOY_BUTTON_A:
-				if options_page.visible:
+				if extras_page.visible:
+					var control := extra_items[pad_menu_index]
+					if control is OptionButton:
+						_pad_direction(1, 0)
+					elif control is CheckButton:
+						control.button_pressed = not control.button_pressed
+					elif control is Button:
+						control.pressed.emit()
+				elif options_page.visible:
 					if pad_menu_index == 0:
 						_set_units(0 if imperial else 1)
 					else:
 						_show_options(false)
 				elif pad_menu_index == 0:
 					_set_paused(false)
-				else:
+				elif pad_menu_index == 1:
 					_show_options(true)
+				else:
+					_show_extras()
 		return true
-	if button == JOY_BUTTON_Y:
+	if _bound_pad("camera", button, JOY_BUTTON_Y):
 		_toggle_camera()
 		return true
-	if button == JOY_BUTTON_X or (run_finished and button == JOY_BUTTON_A):
+	if _bound_pad("restart", button, JOY_BUTTON_X) or (run_finished and button == JOY_BUTTON_A):
 		_restart()
 		return true
 	return false
@@ -383,6 +460,11 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventJoypadButton:
 		var pad := event as InputEventJoypadButton
 		if pad.pressed:
+			if not binding_action.is_empty() and binding_kind == "pad":
+				_capture_binding(pad.button_index)
+				get_viewport().set_input_as_handled()
+				return
+			effects.activate_audio()
 			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  START pause  ·  X retry"
 			if _pad_button(pad.button_index):
 				get_viewport().set_input_as_handled()
@@ -408,6 +490,15 @@ func _input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
 		return
+	if not binding_action.is_empty() and binding_kind == "keyboard":
+		if key.keycode == KEY_ESCAPE:
+			binding_action = ""
+			_refresh_profile()
+		else:
+			_capture_binding(key.keycode)
+		get_viewport().set_input_as_handled()
+		return
+	effects.activate_audio()
 	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
@@ -418,11 +509,11 @@ func _input(event: InputEvent) -> void:
 		return
 	if paused:
 		return
-	if key.keycode == KEY_TAB:
+	if _bound_key("camera", key.keycode, KEY_TAB):
 		# Consume Tab before UI focus navigation; C is exclusively slide.
 		get_viewport().set_input_as_handled()
 		_toggle_camera()
-	elif key.keycode == KEY_R:
+	elif _bound_key("restart", key.keycode, KEY_R):
 		get_viewport().set_input_as_handled()
 		_restart()
 
@@ -455,6 +546,9 @@ func _create_hud() -> void:
 	add_child(layer)
 	var root := Control.new()
 	layer.add_child(root)
+	var streaks: Control = effects.make_trails()
+	root.add_child(streaks)
+	streaks.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slide_indicator = PanelContainer.new()
@@ -573,6 +667,15 @@ func _create_hud() -> void:
 	restart_button.offset_bottom = 65
 	restart_button.visible = false
 	restart_button.pressed.connect(_restart)
+	stats_label = _label("", 17, Color(0.81, 0.96, 1.0))
+	root.add_child(stats_label)
+	stats_label.set_anchors_preset(Control.PRESET_CENTER)
+	stats_label.offset_left = -270
+	stats_label.offset_right = 270
+	stats_label.offset_top = 85
+	stats_label.offset_bottom = 250
+	stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	stats_label.visible = false
 
 func _load_options() -> void:
 	var settings := ConfigFile.new()
@@ -595,6 +698,7 @@ func _set_units(index: int, persist: bool = true) -> void:
 
 func _set_paused(value: bool) -> void:
 	paused = value
+	effects.set_paused(value)
 	pause_overlay.visible = value
 	pad_menu_axis = Vector2.ZERO
 	_show_options(false)
@@ -612,6 +716,9 @@ func _set_paused(value: bool) -> void:
 func _show_options(value: bool) -> void:
 	pause_page.visible = not value
 	options_page.visible = value
+	if is_instance_valid(extras_page):
+		extras_page.visible = false
+	binding_action = ""
 	pad_menu_index = 0
 	_pad_focus()
 
@@ -668,6 +775,10 @@ func _create_pause_menu() -> void:
 	pause_page.add_child(options_button)
 	options_button.pressed.connect(func() -> void: _show_options(true))
 	options_button.focus_entered.connect(func() -> void: pad_menu_index = 1)
+	extras_button = _menu_button("RUN / PROFILE / CONTROLS")
+	pause_page.add_child(extras_button)
+	extras_button.pressed.connect(_show_extras)
+	extras_button.focus_entered.connect(func() -> void: pad_menu_index = 2)
 	options_page = VBoxContainer.new()
 	options_page.add_theme_constant_override("separation", 14)
 	pages.add_child(options_page)
@@ -690,5 +801,146 @@ func _create_pause_menu() -> void:
 	var pad_hint := _label("STICK / D-PAD  ·  A SELECT  ·  B BACK", 14, Color(0.55, 0.84, 0.96))
 	pad_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pages.add_child(pad_hint)
+	_create_extras_page(pages)
 	_show_options(false)
 	pause_overlay.visible = false
+
+func _create_extras_page(pages: VBoxContainer) -> void:
+	extras_page = VBoxContainer.new()
+	extras_page.add_theme_constant_override("separation", 5)
+	pages.add_child(extras_page)
+	extras_page.add_child(_label("RUN & PROFILE", 24, Color(0.1, 0.9, 1.0)))
+	mode_picker = OptionButton.new()
+	for name_value in MODES:
+		mode_picker.add_item(name_value)
+	mode_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
+	_add_extra(mode_picker)
+	var start := _menu_button("START SELECTED RUN")
+	start.custom_minimum_size.y = 36
+	start.pressed.connect(func() -> void: mode = mode_picker.selected; _restart())
+	_add_extra(start)
+	cosmetic_picker = OptionButton.new()
+	for name_value in ["Cyan", "Amber", "Violet", "Emerald"]:
+		cosmetic_picker.add_item(name_value)
+	cosmetic_picker.item_selected.connect(func(i: int) -> void: extras.cosmetic = i; runner.apply_cosmetic(i); extras.save_profile())
+	_add_extra(cosmetic_picker)
+	binding_picker = OptionButton.new()
+	for name_value in ["left", "right", "slide", "jump", "dive", "camera", "restart"]:
+		binding_picker.add_item(name_value)
+	binding_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
+	_add_extra(binding_picker)
+	keyboard_rebind = _menu_button("REBIND KEY")
+	keyboard_rebind.custom_minimum_size.y = 34
+	keyboard_rebind.pressed.connect(func() -> void: _begin_binding("keyboard"))
+	_add_extra(keyboard_rebind)
+	pad_rebind = _menu_button("REBIND PAD BUTTON")
+	pad_rebind.custom_minimum_size.y = 34
+	pad_rebind.pressed.connect(func() -> void: _begin_binding("pad"))
+	_add_extra(pad_rebind)
+	var reset_bind := _menu_button("RESET BINDINGS")
+	reset_bind.custom_minimum_size.y = 34
+	reset_bind.pressed.connect(func() -> void: extras.keys.clear(); extras.pads.clear(); _apply_bindings(); extras.save_profile(); _refresh_profile())
+	_add_extra(reset_bind)
+	audio_toggle = CheckButton.new()
+	audio_toggle.text = "Adaptive soundtrack"
+	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.music_enabled = v; extras.save_profile(); effects.activate_audio())
+	_add_extra(audio_toggle)
+	trails_toggle = CheckButton.new()
+	trails_toggle.text = "Speed streaks"
+	trails_toggle.toggled.connect(func(v: bool) -> void: extras.trails = v; effects.trails_enabled = v; extras.save_profile())
+	_add_extra(trails_toggle)
+	vibration_toggle = CheckButton.new()
+	vibration_toggle.text = "Controller vibration"
+	vibration_toggle.toggled.connect(func(v: bool) -> void: extras.vibration = v; effects.vibration_enabled = v; extras.save_profile())
+	_add_extra(vibration_toggle)
+	profile_label = _label("", 14, Color(0.76, 0.94, 1.0))
+	extras_page.add_child(profile_label)
+	var back := _menu_button("BACK")
+	back.custom_minimum_size.y = 36
+	back.pressed.connect(func() -> void: _show_options(false))
+	_add_extra(back)
+	extras_page.visible = false
+
+func _add_extra(control: Control) -> void:
+	extras_page.add_child(control)
+	var idx := extra_items.size()
+	extra_items.append(control)
+	control.focus_entered.connect(func() -> void: pad_menu_index = idx)
+
+func _load_extras() -> void:
+	extras.load_profile()
+	_apply_bindings()
+	effects.music_enabled = extras.music
+	effects.trails_enabled = extras.trails
+	effects.vibration_enabled = extras.vibration
+	leaderboard_url = str(ProjectSettings.get_setting("velocity/leaderboard_url", ""))
+	audio_toggle.set_pressed_no_signal(extras.music)
+	trails_toggle.set_pressed_no_signal(extras.trails)
+	vibration_toggle.set_pressed_no_signal(extras.vibration)
+
+func _show_extras() -> void:
+	pause_page.visible = false
+	options_page.visible = false
+	extras_page.visible = true
+	mode_picker.select(mode)
+	pad_menu_index = 0
+	_refresh_profile()
+	_pad_focus()
+
+func _refresh_profile() -> void:
+	if not is_instance_valid(profile_label):
+		return
+	for i in range(cosmetic_picker.item_count):
+		cosmetic_picker.set_item_disabled(i, not extras.cosmetic_unlocked(i))
+	cosmetic_picker.select(extras.cosmetic)
+	var action := binding_picker.get_item_text(binding_picker.selected)
+	var key_text := str(extras.keys.get(action, []))
+	var pad_text := str(extras.pads.get(action, []))
+	profile_label.text = ("Press a new " + binding_kind + " input for " + binding_action if not binding_action.is_empty() else "Unlocked %d / 8  |  Daily best %s\n%s\n%s: key %s  /  pad %s" % [extras.achievements.size(), _distance_display(extras.best_for(1, Time.get_date_string_from_system(true))), board_status, action, key_text if key_text != "[]" else "default", pad_text if pad_text != "[]" else "default"])
+
+func _begin_binding(kind: String) -> void:
+	binding_kind = kind
+	binding_action = binding_picker.get_item_text(binding_picker.selected)
+	_refresh_profile()
+
+func _capture_binding(code: int) -> void:
+	if binding_kind == "pad" and code in [JOY_BUTTON_START, JOY_BUTTON_BACK]:
+		binding_action = ""
+		_refresh_profile()
+		return
+	var target: Dictionary = extras.keys if binding_kind == "keyboard" else extras.pads
+	target[binding_action] = [code]
+	binding_action = ""
+	_apply_bindings()
+	extras.save_profile()
+	_refresh_profile()
+
+func _apply_bindings() -> void:
+	runner.key_bindings = extras.keys
+	runner.pad_bindings = extras.pads
+
+func _bound_key(action: String, code: int, default_value: int) -> bool:
+	return extras.keys.get(action, [default_value]).has(code)
+
+func _bound_pad(action: String, code: int, default_value: int) -> bool:
+	return extras.pads.get(action, [default_value]).has(code)
+
+func _submit_daily(meters: float) -> void:
+	if leaderboard_url.is_empty() or not is_instance_valid(board_request):
+		return
+	var body := {"day": run_day, "seed": run_seed, "distance": meters, "speed": extras.top_speed, "seconds": run_time, "player": extras.player_id}
+	board_status = "Submitting daily score..."
+	var error := board_request.request(leaderboard_url.trim_suffix("/") + "/scores", ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
+	if error != OK:
+		board_status = "Leaderboard unavailable"
+
+func _board_completed(_result: int, response: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if response != 200:
+		board_status = "Leaderboard unavailable"
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if data is Dictionary:
+		board_status = "Daily global rank: %s" % str(data.get("rank", "?"))
+	else:
+		board_status = "Leaderboard unavailable"
+	_refresh_profile()
