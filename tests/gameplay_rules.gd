@@ -89,11 +89,26 @@ func _run_tests() -> void:
 		_fail("Inverted rider does not lower into the hanging pose.")
 		return
 	var ceiling_treads:Node3D=model.get("treads")
+	var spider_segments:Array=model.get("spider_upper")
+	if not (spider_segments[0] as Node3D).transform.is_finite():
+		_fail("Spider leg deployment generated an invalid transform.")
+		return
 	if not ceiling_treads.visible or ceiling_treads.get_child_count()!=24:
 		_fail("Grounded inverted riding is missing spider legs.")
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":1.0})
 	var gyro_probe:Node3D=model.get("gyro")
+	var gyro_panels:Array=model.get("gyro_panels")
+	if gyro_panels.size()!=24:
+		_fail("Gyro is missing independent rigid rim segments.")
+		return
+	var locked_panel:Node3D=gyro_panels[0]
+	var locked_pose:Transform3D=locked_panel.transform
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":0.70})
+	if not gyro_probe.visible or not gyro_probe.scale.is_equal_approx(Vector3.ONE) or not locked_panel.scale.is_equal_approx(Vector3.ONE) or locked_panel.position.distance_to(locked_pose.origin)<0.2:
+		_fail("Gyro transition scales the wheel instead of articulating rigid panels.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":1.0})
 	if not gyro_probe.visible or gyro_probe.scale.x<0.9 or ceiling_treads.visible:
 		_fail("Sidewall gyro did not replace ceiling treads.")
 		return

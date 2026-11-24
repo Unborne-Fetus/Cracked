@@ -282,6 +282,8 @@ func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> b
 
 func _level_camera_basis(direction: Vector3) -> Basis:
 	var heading := direction.normalized()
+	if heading.length_squared()<0.0001:
+		heading=Vector3.FORWARD
 	# Keep the horizon world-up even while the camera is physically beside
 	# or underneath the track. Avoid a singularity for steep viewing angles.
 	if absf(heading.y) > 0.94:
@@ -393,9 +395,9 @@ func _update_camera(delta: float) -> void:
 	if first_person and runner.is_grounded():
 		var eye_projection: Vector3=course.project_position(view_camera.position,player_s)
 		var eye_gap: float=course.surface_clearance(eye_projection.x,eye_projection.y,eye_projection.z,int(runner.surface_side))
-		if course.support_at(eye_projection.x,eye_projection.y) and eye_gap<0.95:
+		if course.support_at(eye_projection.x,eye_projection.y) and eye_gap<1.22:
 			var eye_surface: Transform3D=course.surface_frame(eye_projection.x,eye_projection.y,int(runner.surface_side))
-			view_camera.position+=eye_surface.basis.y*(0.95-eye_gap)
+			view_camera.position+=eye_surface.basis.y*(1.22-eye_gap)
 	_apply_camera_orbit(pos, up, forward, player_s)
 	# Damp the relative arm, not world coordinates (safe during rebases).
 	var desired_arm := view_camera.position-pos
@@ -408,8 +410,21 @@ func _update_camera(delta: float) -> void:
 			view_camera.position = softened_position
 			camera_track_s = soft_projection.x
 	camera_arm_ready = true
-	var camera_projection: Vector3 = course.project_position(view_camera.position, camera_track_s)
-	camera_track_clearance = float(course.surface_clearance(camera_projection.x, camera_projection.y, camera_projection.z, int(runner.surface_side)))
+	var camera_projection: Vector3=course.project_position(view_camera.position,camera_track_s)
+	camera_track_clearance=float(course.surface_clearance(camera_projection.x,camera_projection.y,camera_projection.z,int(runner.surface_side)))
+	# All orbit, landing and damping adjustments must finish on the
+	# correct side of the road. Project again after correcting position.
+	if runner.is_grounded() and camera_track_clearance<1.15:
+		var camera_surface:Transform3D=course.surface_frame(camera_projection.x,camera_projection.y,int(runner.surface_side))
+		view_camera.position+=camera_surface.basis.y*(1.30-camera_track_clearance)
+		camera_projection=course.project_position(view_camera.position,camera_projection.x)
+		camera_track_clearance=float(course.surface_clearance(camera_projection.x,camera_projection.y,camera_projection.z,int(runner.surface_side)))
+		if camera_track_clearance<1.05:
+			# Same-face fallback at the actual player cross-section.
+			view_camera.position=frame.origin+up*(1.55 if first_person else 3.6)
+			camera_projection=course.project_position(view_camera.position,player_s)
+			camera_track_clearance=float(course.surface_clearance(camera_projection.x,camera_projection.y,camera_projection.z,int(runner.surface_side)))
+		camera_track_s=camera_projection.x
 	camera_offset = view_camera.position - pos
 	camera_was_grounded = runner.is_grounded()
 	# Quaternion interpolation avoids Euler flips near 180/360 degrees.

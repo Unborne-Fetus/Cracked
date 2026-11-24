@@ -25,6 +25,11 @@ var engines: Array[Node3D]=[]
 var exhausts: Array[MeshInstance3D]=[]
 var gyro: Node3D
 var gyro_rotor: Node3D
+var gyro_panels: Array[Node3D]=[]
+var gyro_axle: Node3D
+const GYRO_SEGMENTS := 12
+const GYRO_RADIUS := 1.10
+const GYRO_CENTER := 1.16
 var gyro_deploy := 0.0
 var tread_deploy := 0.0
 var sideways_amount := 0.0
@@ -161,27 +166,46 @@ func _ready() -> void:
 	add_child(gyro)
 	gyro_rotor=Node3D.new()
 	gyro.add_child(gyro_rotor)
-	# The wheel's axle is across the riding surface, with the rider
-	# inside the wheel and its rim against the wall.
-	var wheel_mesh:=TorusMesh.new()
-	wheel_mesh.inner_radius=0.96
-	wheel_mesh.outer_radius=1.13
-	wheel_mesh.rings=32
-	wheel_mesh.ring_segments=10
+	# Two rows of rigid curved segments are stowed against the board
+	# rails. Each segment carries its own tread shoe; no scaled torus.
 	for wheel_side:float in [-1.0,1.0]:
-		var hoop:=MeshInstance3D.new()
-		hoop.mesh=wheel_mesh
-		hoop.material_override=deck_mat
-		hoop.rotation.z=PI*0.5
-		hoop.position.x=wheel_side*0.29
-		gyro_rotor.add_child(hoop)
-	for lug_index in range(12):
-		var angle:=TAU*float(lug_index)/12.0
-		var lug:=_block(gyro_rotor,Vector3(0.73,0.10,0.17),edge_mat)
-		lug.position=Vector3(0.0,cos(angle)*1.08,sin(angle)*1.08)
-		lug.rotation.x=angle
-	var platform:=_block(gyro,Vector3(0.77,0.10,0.72),deck_mat)
-	platform.position=Vector3(0,-0.68,0)
+		for segment_index in range(GYRO_SEGMENTS):
+			var panel:=Node3D.new()
+			gyro_rotor.add_child(panel)
+			gyro_panels.append(panel)
+			# Build a curved rail segment in local coordinates about its
+			# midpoint. At deployment the ends meet the next segment.
+			var tool:=SurfaceTool.new()
+			tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+			for step in range(4):
+				var theta_a:=lerpf(-PI/float(GYRO_SEGMENTS),PI/float(GYRO_SEGMENTS),float(step)/4.0)
+				var theta_b:=lerpf(-PI/float(GYRO_SEGMENTS),PI/float(GYRO_SEGMENTS),float(step+1)/4.0)
+				var vertices:Array[Vector3]=[]
+				for theta:float in [theta_a,theta_b]:
+					for radial:float in [GYRO_RADIUS-0.085,GYRO_RADIUS+0.085]:
+						for x:float in [-0.105,0.105]:
+							vertices.append(Vector3(x,cos(theta)*radial-GYRO_RADIUS,sin(theta)*radial))
+				_quad(tool,vertices[0],vertices[1],vertices[4],vertices[5])
+				_quad(tool,vertices[2],vertices[3],vertices[6],vertices[7])
+				_quad(tool,vertices[0],vertices[2],vertices[4],vertices[6])
+				_quad(tool,vertices[1],vertices[3],vertices[5],vertices[7])
+				if step==0:
+					_quad(tool,vertices[0],vertices[1],vertices[2],vertices[3])
+				if step==3:
+					_quad(tool,vertices[4],vertices[5],vertices[6],vertices[7])
+			var rim:=MeshInstance3D.new()
+			rim.mesh=tool.commit()
+			rim.material_override=deck_mat
+			panel.add_child(rim)
+			var shoe:=_block(panel,Vector3(0.24,0.08,0.30),edge_mat)
+			shoe.position.y=0.09
+	gyro_axle=Node3D.new()
+	gyro.add_child(gyro_axle)
+	for axle_side:float in [-1.0,1.0]:
+		var brace_part:=_block(gyro_axle,Vector3(0.13,0.78,0.13),shadow)
+		brace_part.position=Vector3(axle_side*0.34,-0.32,0)
+		var hub:=_block(gyro_axle,Vector3(0.28,0.28,0.28),edge_mat)
+		hub.position.x=axle_side*0.34
 	gyro.visible=false
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
@@ -211,10 +235,17 @@ func _quad(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) ->
 
 func _segment(part: MeshInstance3D, a: Vector3, b: Vector3) -> void:
 	var delta := b - a
-	var length := maxf(0.001, delta.length())
-	var rotation_basis := Basis(Quaternion(Vector3.UP, delta / length))
-	part.transform = Transform3D(rotation_basis.scaled(Vector3.ONE), (a+b)*0.5)
-	part.scale = Vector3(1.0, length, 1.0)
+	var length := delta.length()
+	# Folded mechanical joints can share the same endpoint. Quaternion
+	# requires nonzero UNIT vectors; never normalize a collapsed limb.
+	if length < 0.0001:
+		part.transform = Transform3D(Basis.IDENTITY,a)
+		part.scale=Vector3(1.0,0.001,1.0)
+		return
+	var direction:=delta/length
+	var rotation_basis:=Basis(Quaternion(Vector3.UP,direction))
+	part.transform=Transform3D(rotation_basis,(a+b)*0.5)
+	part.scale=Vector3(1.0,maxf(0.001,length),1.0)
 
 func _joint(a: Vector3, b: Vector3, bend: Vector3, segment_length: float) -> Vector3:
 	# Two-bone IK with constant limb lengths for reachable targets.
@@ -225,8 +256,37 @@ func _joint(a: Vector3, b: Vector3, bend: Vector3, segment_length: float) -> Vec
 	var axis := delta / reach
 	var perpendicular := bend - axis * bend.dot(axis)
 	if perpendicular.length_squared() < 0.0001:
-		perpendicular = axis.cross(Vector3.RIGHT)
+		perpendicular=axis.cross(Vector3.RIGHT if absf(axis.x)<0.95 else Vector3.UP)
 	return (a + b) * 0.5 + perpendicular.normalized() * sqrt(maxf(0.0, segment_length * segment_length - reach * reach * 0.25))
+
+func _pose_gyro_panels(deploy: float, phase: float, gyro_trick: float, gyro_cycle: int, gyro_progress: float) -> void:
+	# The rotor stays full-sized. First slide the rail cassettes out,
+	# then articulate each curved segment upward, then engage the rim.
+	# Reversing deployment naturally unlocks and folds in reverse.
+	gyro.scale=Vector3.ONE
+	gyro.position=Vector3(0,GYRO_CENTER,0)
+	var extension:=smoothstep(0.0,0.30,deploy)
+	var locking:=smoothstep(0.82,1.0,deploy)
+	var roll_angle:=lerp_angle(0.0,phase*3.2+(TAU*smoothstep(0.0,1.0,gyro_progress) if gyro_cycle==0 else 0.0),locking)
+	gyro_rotor.rotation=Vector3(roll_angle,gyro_trick*locking*0.28 if gyro_cycle==1 else 0.0,gyro_trick*locking*0.20 if gyro_cycle==2 else 0.0)
+	for panel_index in range(gyro_panels.size()):
+		var panel:=gyro_panels[panel_index]
+		var side:float=-1.0 if panel_index<GYRO_SEGMENTS else 1.0
+		var index:=panel_index%GYRO_SEGMENTS
+		# Lowest arcs unfold first, crown arcs last. Curved pieces remain
+		# rigid and retain their full dimensions throughout the motion.
+		var arc_order:=absi(index-int(GYRO_SEGMENTS/2))
+		var unfold:=smoothstep(0.18+float(arc_order)*0.045,0.67+float(arc_order)*0.045,deploy)
+		var angle:=TAU*float(index)/float(GYRO_SEGMENTS)
+		var stowed:=Vector3(side*0.52,-GYRO_CENTER+0.17+floorf(float(index)/4.0)*0.15,-0.78+float(index%4)*0.52)
+		var extended:=stowed+Vector3(side*0.23,0.12,0.0)
+		var locked:=Vector3(side*0.36,cos(angle)*GYRO_RADIUS,sin(angle)*GYRO_RADIUS)
+		var position_value:=stowed.lerp(extended,extension).lerp(locked,unfold)
+		var folded_basis:=Basis(Vector3.RIGHT,PI*0.5 if index%2==0 else -PI*0.5)
+		var locked_basis:=Basis(Vector3.RIGHT,angle)
+		panel.transform=Transform3D(folded_basis.slerp(locked_basis,unfold),position_value)
+	gyro_axle.position=Vector3(0,-0.75*(1.0-extension),0)
+	gyro_axle.visible=extension>0.05
 
 func _pulse(value: float, start: float, peak: float, end: float) -> float:
 	return smoothstep(start, peak, value) * (1.0 - smoothstep(peak, end, value))
@@ -331,17 +391,18 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		exhaust.position.z=0.52+0.43*jet_length
 	gyro_deploy=lerpf(gyro_deploy,sideways,blend)
 	gyro.visible=gyro_deploy>0.015 and not first_person_view
-	gyro.scale=Vector3.ONE*maxf(0.01,gyro_deploy)
-	gyro.position=Vector3(0,1.13*gyro_deploy,0)
-	gyro_rotor.rotation.x=phase*3.2+(TAU*smoothstep(0.0,1.0,gyro_progress)*gyro_deploy if gyro_cycle==0 else 0.0)
-	gyro_rotor.rotation.y=gyro_trick*gyro_deploy*0.28 if gyro_cycle==1 else 0.0
-	gyro_rotor.rotation.z=gyro_trick*gyro_deploy*0.20 if gyro_cycle==2 else 0.0
-	# Fold the visible deck into the wheel; the board pivot and all
-	# attached glider/tread geometry remain independently animated.
+	_pose_gyro_panels(gyro_deploy,phase,gyro_trick,gyro_cycle,gyro_progress)
+	# The hoverboard remains full-size as the pilot's inner platform.
+	# Its rails become the wheel, not a disappearing scaled copy.
 	for mesh_index in range(2):
 		var deck_piece:=board.get_child(mesh_index) as Node3D
-		deck_piece.scale=Vector3.ONE*maxf(0.01,1.0-gyro_deploy)
-		deck_piece.visible=gyro_deploy<0.985 and not (first_person_view and gyro_deploy>0.1)
+		deck_piece.scale=Vector3.ONE
+		deck_piece.visible=not (first_person_view and (gyro_deploy>0.1 or gliding))
+	# Avoid deploying wings through a still-folding rim. Wing motion
+	# resumes as the mechanical panels return to their rail cassettes.
+	var wing_clearance:=1.0-smoothstep(0.08,0.55,gyro_deploy)
+	wings.scale.x=maxf(0.01,wing_span*wing_clearance)
+	wings.visible=wings.visible and wings.scale.x>0.015
 	handles.visible=hang>0.015 and not first_person_view
 	if first_person_view:
 		for part in lower_arms:
@@ -458,7 +519,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	head.rotation.y+=gyro_trick*gyro_deploy*0.45 if gyro_cycle==4 else 0.0
 	# The board leaves the feet, rotates around its longitudinal axis,
 	# then returns to level at the catch. No bank is added to the root.
-	board.position=Vector3(0,0.13-tuck*0.24+0.14*(inverted if not airborne else 0.0),0)
+	board.position=Vector3(0,0.13-tuck*0.24+0.14*(inverted if not airborne else 0.0)+0.32*smoothstep(0.45,0.95,gyro_deploy),0)
 	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
 	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount+grab*0.29-one_foot*0.12
 	board.rotation.y = shifty*0.75-grab*0.20+(spin_angle if cycle==4 and idle>0.85 else shove*0.40)+indy*0.32+method_grab*0.48+cross_grab*0.28-drift*0.16
@@ -532,7 +593,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		if ground_idle>0.0 and ground_variant in [1,2,3]:
 			foot = board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34)
 		foot += Vector3(side_ride*0.12,sideways*0.10*(1.0 if sign_value*side_ride>0.0 else 0.0),-side_ride*sign_value*0.12)
-		foot=foot.lerp(Vector3(sign_value*0.23,0.53,sign_value*0.24),gyro_deploy)
+		foot=foot.lerp(Vector3(sign_value*0.23,board.position.y+0.075,sign_value*0.24),gyro_deploy)
 		if returning:
 			# Feet are free during the transfer, then settle on the deck.
 			var catch_blend:=smoothstep(0.53,0.72,return_progress)

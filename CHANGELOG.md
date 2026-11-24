@@ -1,5 +1,11 @@
 # Vector Velocity changelog
 
+## 2026-11-24 — Mechanical gyro deployment and build repair
+- Twenty-four rigid curved rim segments slide from the board rails, unfold, and lock into two rotating rings; the deck remains the pilot platform.
+- Reverse deployment folds the wheel away before glider wings extend.
+- Guarded collapsed limb transforms and enforced camera clearance after orbit and landing blends.
+- Regression tests verify rigid panel motion and bank camera clearance.
+
 ## 2026-11-23 — Transformation trick sets, jet wings and storm confirmation
 - Eight glider trick variants and six gyro trick variants; animated jet nacelles on both wings.
 - Eight large articulated ceiling spider legs replace treads.
