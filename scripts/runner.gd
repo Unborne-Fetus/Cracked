@@ -61,6 +61,8 @@ var rider_glider := 0.0
 var rider_glider_return := -1.0
 var rider_glider_spin := 1.0
 var glider_idle_clock := 0.0
+var glider_trick_clock := 0.0
+var gyro_trick_clock := 0.0
 const GLIDER_RETURN_TIME := 1.35
 const GLIDER_SPIN_TIME := 0.85
 var glide_height := 0.0
@@ -102,6 +104,7 @@ var dive_landings := 0
 var double_jumps := 0
 const RiderModel = preload("res://scripts/rider_model.gd")
 var rider_model: Node3D
+var visual_mount: Node3D
 var board_pivot: Node3D
 var kickflip_progress := 1.0
 const KICKFLIP_TIME := 0.42
@@ -127,7 +130,9 @@ func _ready() -> void:
 	add_child(avatar)
 	rider_model = RiderModel.new()
 	rider_model.name = "BlockRider"
-	avatar.add_child(rider_model)
+	visual_mount=Node3D.new()
+	avatar.add_child(visual_mount)
+	visual_mount.add_child(rider_model)
 	board_pivot = rider_model.get("board")
 
 func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
@@ -135,11 +140,26 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_spin":rider_glider_spin,"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
-	var pivot: float = rider_model.get("visual_pivot")
-	var lift: float = rider_model.get("visual_lift")
-	var correction := Vector3.UP*pivot - Basis.from_euler(rider_model.rotation)*Vector3.UP*pivot
-	rider_model.position = Vector3(correction.x,(rider_clearance+lift+correction.y)/maxf(0.05,avatar.scale.y),correction.z)
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	var pivot:float=rider_model.get("visual_pivot")
+	var lift:float=rider_model.get("visual_lift")
+	# Correct the inherited bank roll in a separate visual parent.
+	# Never feed the correction back into the model's pose crossfade.
+	var upright_blend:=smoothstep(0.05,0.90,rider_glider) if not grounded else 0.0
+	if rider_glider_return>=0.0:
+		upright_blend*=1.0-smoothstep(0.25,0.74,rider_glider_return)
+	var flight_forward:Vector3=Vector3(air_velocity.x,0.0,air_velocity.z)
+	if flight_forward.length_squared()<0.01:
+		flight_forward=-transform.basis.z
+		flight_forward.y=0.0
+	if flight_forward.length_squared()<0.01:
+		flight_forward=Vector3.FORWARD
+	var upright_basis:=Basis.looking_at(flight_forward.normalized(),Vector3.UP)
+	var local_correction:=transform.basis.inverse()*upright_basis
+	var corrected_basis:=Basis.IDENTITY.slerp(local_correction.orthonormalized(),upright_blend)
+	visual_mount.basis=corrected_basis
+	var correction:=Vector3.UP*pivot-Basis.from_euler(rider_model.rotation)*Vector3.UP*pivot
+	rider_model.position=Vector3(correction.x,(rider_clearance+lift+correction.y)/maxf(0.05,avatar.scale.y),correction.z)
 
 func _update_rider_animation(delta: float) -> void:
 	rider_phase = fposmod(rider_phase + delta * (0.75 + clampf(speed / 100.0, 0.0, 1.5)), TAU * 50.0)
@@ -188,6 +208,14 @@ func _update_rider_animation(delta: float) -> void:
 				rider_glider_spin=0.0
 				glider_idle_clock=0.0
 		rider_glider_spin=minf(1.0,rider_glider_spin+delta/GLIDER_SPIN_TIME)
+	if rider_glider>0.9 and rider_glider_return<0.0:
+		glider_trick_clock+=delta
+	elif rider_glider<=0.01:
+		glider_trick_clock=0.0
+	if grounded and absf(rider_bank)>0.65 and rider_inverted<0.3:
+		gyro_trick_clock+=delta
+	else:
+		gyro_trick_clock=0.0
 	var idle_trick := not grounded and not diving and rider_glider<0.1 and air_time > 0.45 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
 	rider_trick_mix = move_toward(rider_trick_mix,1.0 if idle_trick else 0.0,delta*5.0)
 	if idle_trick:
@@ -229,6 +257,9 @@ func reset_run(course: Node3D) -> void:
 	rider_glider_return=-1.0
 	rider_glider_spin=1.0
 	glider_idle_clock=0.0
+	glider_trick_clock=0.0
+	gyro_trick_clock=0.0
+	visual_mount.basis=Basis.IDENTITY
 	glide_height=0.0
 	clearance_clock=0.0
 	rider_clearance = 0.0

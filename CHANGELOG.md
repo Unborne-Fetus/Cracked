@@ -1,5 +1,11 @@
 # Vector Velocity changelog
 
+## 2026-11-23 — Transformation trick sets, jet wings and storm confirmation
+- Eight glider trick variants and six gyro trick variants; animated jet nacelles on both wings.
+- Eight large articulated ceiling spider legs replace treads.
+- Glider orientation corrects inherited wall roll; first-person cockpit clears obstructing transformation meshes.
+- Storm catches require sustained track-relative proximity; high-altitude projection alone cannot cause a catch. Replay ends show the saved defeat reason.
+
 ## 2026-11-23 — Transforming board and evolving skyline
 - Mountains rise and recede with course progress, with increasing peak height deeper into a run.
 - Grounded inverted riding deploys animated ceiling treads; sideways wall riding transforms the deck into a gyro wheel.

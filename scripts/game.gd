@@ -229,7 +229,7 @@ func _physics_process(delta: float) -> void:
 	if mode != 5:
 		storm.advance(delta * (1.28 if mode == 4 else 1.0))
 		storm.sync_pose(course)
-		if storm.gap_to(runner.distance) <= 1.0:
+		if storm.confirms_catch(delta,runner,course):
 			replay.record(run_time, delta, runner, course, storm, true)
 			_lose("THE STORM CAUGHT YOU")
 			return
@@ -326,8 +326,12 @@ func _update_camera(delta: float) -> void:
 		var air_forward: Vector3 = -frame.basis.z
 		camera_track_s = player_s
 		if first_person:
-			view_camera.position=pos+air_up*1.90+air_forward*0.65
-			_aim_camera(view_camera.position+(air_forward-air_up*0.34)*25.0,air_up)
+			var glide_view:float=smoothstep(0.0,0.9,float(runner.rider_glider))
+			var cockpit_up:=air_up.lerp(Vector3.UP,glide_view).normalized()
+			if cockpit_up.length_squared()<0.01:
+				cockpit_up=Vector3.UP
+			view_camera.position=pos+cockpit_up*lerpf(1.90,1.30,glide_view)+air_forward*lerpf(0.65,1.10,glide_view)
+			_aim_camera(view_camera.position+(air_forward-cockpit_up*lerpf(0.34,0.08,glide_view))*25.0,cockpit_up)
 		else:
 			view_camera.position = pos - air_forward * 9.0 + air_up * 4.0
 			_aim_camera(pos + air_up * 1.4 + air_forward * 4.0, air_up)
@@ -337,7 +341,8 @@ func _update_camera(delta: float) -> void:
 	elif first_person:
 		camera_track_s = player_s
 		var hang_eye: float=lerpf(slide_eye_height+0.30,1.08,float(runner.rider_inverted))
-		view_camera.position=pos+up*hang_eye+forward*0.68
+		var gyro_view:=smoothstep(0.50,0.90,absf(frame.basis.x.y))*(1.0-float(runner.rider_inverted))
+		view_camera.position=pos+up*lerpf(hang_eye,1.22,gyro_view)+forward*lerpf(0.68,1.15,gyro_view)
 		_aim_camera(view_camera.position+(forward-up*0.34)*25.0,up)
 	else:
 		var focus := pos + up * 1.35
@@ -489,7 +494,7 @@ func _lose(reason: String) -> void:
 	run_finished = true
 	_update_combat_cursor(false)
 	replay.record(run_time, 0.0, runner, course, storm, true)
-	replay.finish(course, run_seed, mode, extras.cosmetic)
+	replay.finish(course,run_seed,mode,extras.cosmetic,reason,storm.gap_to(runner.distance))
 	watch_replay_button.visible = replay.available()
 	var meters: float = maxf(0.0, runner.distance - 8.0)
 	extras.finish(mode, run_day, run_seed, meters, run_time, runner)
@@ -1436,6 +1441,8 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.rider_glider=float(state.get("rider_glider",0.0))
 	runner.rider_glider_return=float(state.get("rider_glider_return",-1.0))
 	runner.rider_glider_spin=float(state.get("rider_glider_spin",1.0))
+	runner.glider_trick_clock=float(state.get("glider_trick_clock",0.0))
+	runner.gyro_trick_clock=float(state.get("gyro_trick_clock",0.0))
 	runner.drift_amount = float(state.get("drift_amount",0.0))
 	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
 	runner.momentum_reserve = float(state["reserve"])
@@ -1455,7 +1462,10 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	run_time = replay_time
 	effects.speed = runner.speed
 	replay_slider.set_value_no_signal(replay_time)
-	replay_clock.text = "REPLAY   %.1f / %.1f s   %s" % [replay_time, replay.duration(), "(recording limit)" if bool(replay.archived.get("truncated", false)) else ""]
+	var replay_note: String="(recording limit)" if bool(replay.archived.get("truncated",false)) else ""
+	if replay_time>=replay.duration()-0.01 and not bool(replay.archived.get("truncated",false)):
+		replay_note=str(replay.archived.get("reason",""))
+	replay_clock.text="REPLAY   %.1f / %.1f s   %s" % [replay_time,replay.duration(),replay_note]
 	if snap_camera:
 		camera_rotation_ready = false
 		camera_arm_ready = false

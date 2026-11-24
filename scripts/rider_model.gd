@@ -18,7 +18,11 @@ var visual_pivot := 0.0
 var handles: Node3D
 var wings: Node3D
 var treads: Node3D
-var tread_links: Array[MeshInstance3D]=[]
+var spider_upper: Array[MeshInstance3D]=[]
+var spider_lower: Array[MeshInstance3D]=[]
+var spider_feet: Array[MeshInstance3D]=[]
+var engines: Array[Node3D]=[]
+var exhausts: Array[MeshInstance3D]=[]
 var gyro: Node3D
 var gyro_rotor: Node3D
 var gyro_deploy := 0.0
@@ -123,17 +127,34 @@ func _ready() -> void:
 		trim.mesh=line.commit()
 		trim.material_override=edge_mat
 		wings.add_child(trim)
+		var nacelle:=Node3D.new()
+		nacelle.name="JetNacelle"
+		nacelle.position=Vector3(wing_side*1.72,0.28,0.16)
+		wings.add_child(nacelle)
+		engines.append(nacelle)
+		var cylinder:=CylinderMesh.new()
+		cylinder.top_radius=0.27
+		cylinder.bottom_radius=0.22
+		cylinder.height=0.96
+		cylinder.radial_segments=10
+		var casing:=MeshInstance3D.new()
+		casing.mesh=cylinder
+		casing.material_override=deck_mat
+		casing.rotation.x=PI*0.5
+		nacelle.add_child(casing)
+		var nozzle:=_block(nacelle,Vector3(0.37,0.37,0.17),edge_mat)
+		nozzle.position.z=0.50
+		var exhaust:=_block(nacelle,Vector3(0.17,0.17,0.85),_mat(Color(0.35,0.92,1.0)))
+		exhaust.position.z=0.98
+		exhausts.append(exhaust)
 	wings.visible=false
 	treads=Node3D.new()
-	treads.name="CeilingTreads"
+	treads.name="CeilingSpiderLegs"
 	board.add_child(treads)
-	for tread_side: float in [-1.0,1.0]:
-		var belt:=_block(treads,Vector3(0.32,0.17,1.66),deck_mat)
-		belt.position=Vector3(tread_side*0.37,-0.135,0.0)
-		for link_index in range(9):
-			var link:=_block(treads,Vector3(0.34,0.065,0.105),edge_mat)
-			link.position=Vector3(tread_side*0.37,-0.235,-0.76+float(link_index)*0.19)
-			tread_links.append(link)
+	for leg_index in range(8):
+		spider_upper.append(_block(treads,Vector3(0.18,1.0,0.23),deck_mat))
+		spider_lower.append(_block(treads,Vector3(0.14,1.0,0.19),shadow))
+		spider_feet.append(_block(treads,Vector3(0.28,0.11,0.34),edge_mat))
 	treads.visible=false
 	gyro=Node3D.new()
 	gyro.name="SidewallGyro"
@@ -228,6 +249,14 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var release:=smoothstep(0.02,0.25,return_progress) if returning else 0.0
 	var wing_fold:=smoothstep(0.74,1.0,return_progress) if returning else 0.0
 	var gliding:=glide>0.01 or returning
+	var glide_clock:=float(extra.get("glider_clock",0.0))
+	var glide_cycle:=posmod(int(floor(glide_clock/2.2)),8)
+	var glide_progress:=fposmod(glide_clock,2.2)/2.2
+	var glide_trick:=sin(PI*glide_progress)*smoothstep(0.85,1.0,glide) if not returning and not bool(extra.get("fp",false)) else 0.0
+	var gyro_clock:=float(extra.get("gyro_clock",0.0))
+	var gyro_cycle:=posmod(int(floor(gyro_clock/1.8)),6)
+	var gyro_progress:=fposmod(gyro_clock,1.8)/1.8
+	var gyro_trick:=sin(PI*gyro_progress) if not airborne and not gliding and not bool(extra.get("fp",false)) else 0.0
 	var flipping := airborne and flip < 1.0 and not gliding
 	var tuck := sin(PI * clampf(flip, 0.0, 1.0)) if flipping else 0.0
 	var flick := _pulse(flip, 0.03, 0.24, 0.50) if flipping else 0.0
@@ -276,24 +305,70 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	# gliders never show ceiling treads, even during a blended pose.
 	tread_deploy=lerpf(tread_deploy,inverted if not airborne else 0.0,blend)
 	treads.visible=not airborne and inverted>0.025
-	treads.scale.y=maxf(0.01,tread_deploy)
-	for link_index in range(tread_links.size()):
-		tread_links[link_index].position.z=-0.855+fposmod(float(link_index%9)*0.19+phase*1.1,1.71)
+	# Eight long articulated legs spread out to the contact plane.
+	# Feet stride in alternating groups; the body/board physics stays
+	# fixed, with the enlarged legs wrapping out along the ceiling.
+	treads.scale=Vector3.ONE
+	for leg_index in range(spider_upper.size()):
+		var sign_value:float=-1.0 if leg_index<4 else 1.0
+		var z:float=-0.83+float(leg_index%4)*0.55
+		var gait:=phase*7.5+float((leg_index+leg_index/4)%2)*PI
+		var stride:=sin(gait)*0.40
+		var lift_foot:=maxf(0.0,cos(gait))*0.26
+		var anchor:=Vector3(sign_value*0.48,-0.09,z)
+		var knee:=Vector3(sign_value*1.35,0.55,z+0.28*sign_value)
+		var toe:=Vector3(sign_value*2.05,-0.25+lift_foot,z+stride)
+		knee=anchor.lerp(knee,tread_deploy)
+		toe=anchor.lerp(toe,tread_deploy)
+		_segment(spider_upper[leg_index],anchor,knee)
+		_segment(spider_lower[leg_index],knee,toe)
+		spider_feet[leg_index].position=toe
+		spider_feet[leg_index].scale=Vector3.ONE*maxf(0.01,tread_deploy)
+	for exhaust_index in range(exhausts.size()):
+		var exhaust:=exhausts[exhaust_index]
+		var jet_length:=0.65+0.27*sin(phase*16.0+float(exhaust_index))+0.75*clampf(float(extra.get("speed_factor",0.0)),0.0,1.0)
+		exhaust.scale.z=jet_length
+		exhaust.position.z=0.52+0.43*jet_length
 	gyro_deploy=lerpf(gyro_deploy,sideways,blend)
-	gyro.visible=gyro_deploy>0.015
+	gyro.visible=gyro_deploy>0.015 and not first_person_view
 	gyro.scale=Vector3.ONE*maxf(0.01,gyro_deploy)
 	gyro.position=Vector3(0,1.13*gyro_deploy,0)
-	gyro_rotor.rotation.x=phase*3.2
+	gyro_rotor.rotation.x=phase*3.2+(TAU*smoothstep(0.0,1.0,gyro_progress)*gyro_deploy if gyro_cycle==0 else 0.0)
+	gyro_rotor.rotation.y=gyro_trick*gyro_deploy*0.28 if gyro_cycle==1 else 0.0
+	gyro_rotor.rotation.z=gyro_trick*gyro_deploy*0.20 if gyro_cycle==2 else 0.0
 	# Fold the visible deck into the wheel; the board pivot and all
 	# attached glider/tread geometry remain independently animated.
 	for mesh_index in range(2):
 		var deck_piece:=board.get_child(mesh_index) as Node3D
 		deck_piece.scale=Vector3.ONE*maxf(0.01,1.0-gyro_deploy)
-		deck_piece.visible=gyro_deploy<0.985
-	handles.visible=hang>0.015
+		deck_piece.visible=gyro_deploy<0.985 and not (first_person_view and gyro_deploy>0.1)
+	handles.visible=hang>0.015 and not first_person_view
 	if first_person_view:
 		for part in lower_arms:
-			part.visible=hang>0.45
+			part.visible=false
+		var special_view:=gliding or gyro_deploy>0.10
+		hips.visible=not special_view
+		for part in thighs:
+			part.visible=not special_view
+		for part in shins:
+			part.visible=not special_view
+		for part in boots:
+			part.visible=not special_view
+		# Engines and wing tips are seen from a clear cockpit rather
+		# than looking through a rotating character/wing assembly.
+		for engine in engines:
+			engine.visible=false
+		wings.visible=false
+	else:
+		hips.visible=true
+		for part in thighs:
+			part.visible=true
+		for part in shins:
+			part.visible=true
+		for part in boots:
+			part.visible=true
+		for engine in engines:
+			engine.visible=true
 	handles.scale.y=maxf(0.01,hang)
 	var ground_idle := clampf(float(extra.get("ground_idle",0.0)),0.0,1.0) if not airborne else 0.0
 	var ground_hop := sin(PI*ground_idle)
@@ -333,6 +408,16 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		var spin_progress:=clampf(float(extra.get("glider_spin",1.0)),0.0,1.0)
 		var whole_spin:=TAU*smoothstep(0.0,1.0,spin_progress) if not returning and spin_progress<1.0 else 0.0
 		rotation=Vector3(0.0,0.0,PI*glide*(1.0-return_arc)+whole_spin)
+		if not returning and spin_progress>=1.0:
+			match glide_cycle:
+				0: rotation.z+=0.40*glide_trick # wing rock
+				1: rotation.y+=0.55*glide_trick # yaw sweep
+				2: rotation.x+=0.36*glide_trick # pitch stall
+				3: rotation.x-=TAU*smoothstep(0.12,0.88,glide_progress)*smoothstep(0.90,1.0,glide) if glide_trick>0.001 else 0.0
+				4: rotation.z+=TAU*smoothstep(0.12,0.88,glide_progress)*smoothstep(0.90,1.0,glide) if glide_trick>0.001 else 0.0
+				5: rotation.y-=0.48*glide_trick # opposite swing
+				6: rotation.x-=0.25*glide_trick # tuck
+				7: rotation.z-=0.35*glide_trick # scissor sway
 		visual_pivot=0.95
 		visual_lift=glide*0.55*(1.0-return_arc)
 	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
@@ -348,7 +433,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var shoulder := chest + Vector3(0, 0.22*(1.0-0.75*dive_amount), -0.05*bend-0.24*dive_amount)
 	# Gyro stance: tucked pilot inside the rolling cage, feet on the
 	# inner platform and both hands on stationary side grips.
-	hip=hip.lerp(Vector3(0.0,0.76,0.14),gyro_deploy)
+	hip=hip.lerp(Vector3(0.0,0.76+0.18*gyro_trick*float(gyro_cycle==3),0.14),gyro_deploy)
 	chest=chest.lerp(Vector3(0.0,1.10,-0.08),gyro_deploy)
 	shoulder=shoulder.lerp(Vector3(0.0,1.26,-0.08),gyro_deploy)
 	hip=hip.lerp(Vector3(0.0,1.65,0.10),hang)
@@ -370,6 +455,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	head.rotation.y = -steer * 0.09 + shifty*0.30 - bank*0.15
 	head.position=head.position.lerp(Vector3(0,0.67,0.03),hang)
 	head.rotation.x=lerpf(head.rotation.x,PI,hang)
+	head.rotation.y+=gyro_trick*gyro_deploy*0.45 if gyro_cycle==4 else 0.0
 	# The board leaves the feet, rotates around its longitudinal axis,
 	# then returns to level at the catch. No bank is added to the root.
 	board.position=Vector3(0,0.13-tuck*0.24+0.14*(inverted if not airborne else 0.0),0)
@@ -453,6 +539,16 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			foot=foot.lerp(Vector3(sign_value*0.30,0.42,sign_value*0.34),release*(1.0-catch_blend))
 			foot=foot.lerp(board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34),catch_blend)
 		foot=foot.lerp(Vector3(sign_value*0.22,2.27,0.20+sign_value*0.09),hang)
+		if gliding and not returning:
+			if glide_cycle==5:
+				foot.x+=sign_value*glide_trick*0.48
+			elif glide_cycle==6:
+				foot.y-=glide_trick*0.48
+				foot.z+=glide_trick*0.24
+			elif glide_cycle==7:
+				foot.z+=sign_value*glide_trick*0.48
+		if gyro_cycle==5:
+			foot.y+=gyro_deploy*gyro_trick*0.13*(1.0 if i==0 else 0.0)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
@@ -494,6 +590,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		if returning:
 			hand=hand.lerp(Vector3(sign_value*0.56,1.03,-0.05),release*(1.0-smoothstep(0.68,0.90,return_progress)))
 		hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.37,0.36,0.0),hang)
+		if gyro_cycle==4 and i==1:
+			hand.y+=gyro_deploy*gyro_trick*0.24
+		if glide_cycle==2 and i==0 and not returning:
+			hand=hand.lerp(board.position+board.basis*Vector3(-0.72,0.16,0.1),glide_trick*0.5)
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)

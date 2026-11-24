@@ -9,6 +9,8 @@ const ACCELERATION_GROWTH := 0.012
 var front_s := -INITIAL_GAP
 var speed := INITIAL_SPEED
 var elapsed := 0.0
+var catch_time := 0.0
+var confirmed_gap := INF
 
 func _ready() -> void:
 	var fog := MeshInstance3D.new()
@@ -46,6 +48,8 @@ func reset(start_s: float) -> void:
 	front_s = start_s - INITIAL_GAP
 	speed = INITIAL_SPEED
 	elapsed = 0.0
+	catch_time=0.0
+	confirmed_gap=INF
 
 func advance(delta: float) -> void:
 	if delta <= 0.0:
@@ -57,6 +61,24 @@ func advance(delta: float) -> void:
 
 func gap_to(player_s: float) -> float:
 	return player_s - front_s
+
+func confirms_catch(delta: float, runner: Node3D, course: Node3D) -> bool:
+	var at:float=runner.get("distance")
+	var gap:=gap_to(at)
+	confirmed_gap=gap
+	if not is_finite(gap) or gap>1.0:
+		catch_time=0.0
+		return false
+	# High-altitude projection is only an estimate. Never use it alone
+	# to kill a rider who is visibly far from the track/storm.
+	if not bool(runner.get("grounded")):
+		var p:=Vector3(at,float(runner.get("lane")),float(runner.get("height")))
+		var nearby:float=course.call("distance_to_rideable_surface",runner.position,p)
+		if nearby>16.0 or not bool(course.call("has_distance",at)):
+			catch_time=0.0
+			return false
+	catch_time+=maxf(0.0,delta)
+	return catch_time>=0.40
 
 func sync_pose(course: Node3D) -> void:
 	visible = bool(course.call("has_distance", front_s))

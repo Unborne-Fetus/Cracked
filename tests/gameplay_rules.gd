@@ -89,8 +89,8 @@ func _run_tests() -> void:
 		_fail("Inverted rider does not lower into the hanging pose.")
 		return
 	var ceiling_treads:Node3D=model.get("treads")
-	if not ceiling_treads.visible:
-		_fail("Grounded inverted riding is missing ceiling treads.")
+	if not ceiling_treads.visible or ceiling_treads.get_child_count()!=24:
+		_fail("Grounded inverted riding is missing spider legs.")
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":1.0})
 	var gyro_probe:Node3D=model.get("gyro")
@@ -99,6 +99,10 @@ func _run_tests() -> void:
 		return
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
 	var glider_rig:Node3D=model.get("wings")
+	var jet_engines:Array=model.get("engines")
+	if jet_engines.size()!=2:
+		_fail("Missing wing-mounted jet engines.")
+		return
 	if not glider_rig.visible or glider_rig.scale.x<0.9 or ceiling_treads.visible or gyro_probe.visible:
 		_fail("High-altitude glider pose does not deploy wings.")
 		return
@@ -121,6 +125,17 @@ func _run_tests() -> void:
 	if glider_rig.scale.x>=0.85:
 		_fail("Glider wings did not retract after the catch.")
 		return
+	# Distinct glider trick poses, independently of board kickflips.
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_clock":1.1})
+	if absf(absf(model.rotation.z)-PI)<0.25:
+		_fail("Glider wing-rock idle is missing.")
+		return
+	model.call("set_first_person",true)
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"fp":true})
+	if glider_rig.visible:
+		_fail("Glider geometry blocks first-person cockpit.")
+		return
+	model.call("set_first_person",false)
 	# Loop branch reverses longitudinal direction at its crown, bypass
 	# remains upright and forward. Test geometry independently of seeds.
 	var loop_top: Transform3D = course.call("_loop_frame",Transform3D.IDENTITY,96.0,-30.0,640.0)
@@ -817,6 +832,24 @@ func _run_tests() -> void:
 		return
 	game.call("_restart")
 	await process_frame
+	# A projected catch at high altitude must not end the run.
+	var saved_storm_front:float=storm.get("front_s")
+	var saved_runner_pose:Transform3D=runner.transform
+	var saved_grounded:bool=runner.get("grounded")
+	storm.set("front_s",float(runner.get("distance"))+0.5)
+	runner.set("grounded",false)
+	runner.position+=Vector3.UP*100.0
+	if bool(storm.call("confirms_catch",0.5,runner,course)):
+		_fail("Storm falsely catches a high airborne rider.")
+		return
+	runner.transform=saved_runner_pose
+	runner.set("grounded",true)
+	if bool(storm.call("confirms_catch",0.05,runner,course)) or not bool(storm.call("confirms_catch",0.40,runner,course)):
+		_fail("Storm catch confirmation did not debounce correctly.")
+		return
+	storm.set("front_s",saved_storm_front)
+	storm.set("catch_time",0.0)
+	runner.set("grounded",saved_grounded)
 	var original_speed: float = storm.get("speed")
 	var original_s: float = storm.get("front_s")
 	storm.call("advance", 10.0)
