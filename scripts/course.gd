@@ -43,6 +43,10 @@ var showcase_layout := false
 var recent_kinds: Array[String] = []
 var sections_since_split := 0
 var sections_since_roll := 0
+var sections_since_loop := 0
+const LOOP_MIN_SPACING := 2
+const LOOP_TARGET_SPACING := 3
+const LOOP_MAX_SPACING := 5
 # Archive the exact generated geometry, not merely the seed: endless
 # generation is adaptive to the player's speed and storm gap.
 const REPLAY_CHUNK_LIMIT := 768
@@ -81,6 +85,7 @@ func reset_course(seed_value: int) -> void:
 	recent_kinds.clear()
 	sections_since_split = 0
 	sections_since_roll = 0
+	sections_since_loop = 0
 	last_kind = ""
 	sustained_roll_queue.clear()
 	sustained_roll_sign = 1.0
@@ -163,6 +168,11 @@ func _kind(index: int) -> String:
 		var recovery: Array[String] = ["RECOVERY RUN", "LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"]
 		recovery.erase(last_kind)
 		return recovery[rng.randi_range(0, recovery.size() - 1)]
+	# Loops get an independent cadence instead of a rare branch lottery.
+	# Never interrupt a wall/ceiling sequence or override recovery above.
+	if not showcase_layout and index >= 3 and sections_since_loop >= LOOP_MIN_SPACING and last_kind != "LOOP ROUTE":
+		if sections_since_loop >= LOOP_MAX_SPACING or (sections_since_loop >= LOOP_TARGET_SPACING and rng.randf() < 0.80):
+			return "LOOP ROUTE"
 	# Wall and ceiling sequences recur much more often than the random bag.
 	if not showcase_layout and index>=2 and (sections_since_roll>=4 or (sections_since_roll>=2 and rng.randf()<0.42)):
 		if rng.randf()<0.52:
@@ -173,7 +183,7 @@ func _kind(index: int) -> String:
 	# A branching stretch roughly every 3–5 ordinary sections, rather
 	# than one appearance per 23-profile bag. Stacked decks count too.
 	if not showcase_layout and index >= 2 and (sections_since_split >= 4 or (sections_since_split >= 2 and rng.randf() < 0.40)):
-		if index >= 4 and not recent_kinds.has("LOOP ROUTE") and rng.randf()<0.30:
+		if index >= 3 and sections_since_loop >= LOOP_MIN_SPACING and last_kind != "LOOP ROUTE" and rng.randf() < 0.65:
 			return "LOOP ROUTE"
 		return "STACKED ROUTES" if rng.randf()<0.18 else "SPLIT ROUTE"
 	if terrain_bag.is_empty():
@@ -384,6 +394,7 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 				points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
 				forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 	last_kind = kind
+	sections_since_loop = 0 if kind == "LOOP ROUTE" else sections_since_loop + 1
 	if is_sustained_roll(kind) or kind in ["180 BANK","360 BANK","CORKSCREW TUNNEL","HALFPIPE"]:
 		sections_since_roll=0
 	else:

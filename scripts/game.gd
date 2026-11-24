@@ -6,13 +6,8 @@ const StormScript = preload("res://scripts/storm.gd")
 const ExtrasScript = preload("res://scripts/run_extras.gd")
 const EffectsScript = preload("res://scripts/run_effects.gd")
 const ReplayScript = preload("res://scripts/replay.gd")
-const CombatScript = preload("res://scripts/arcade_combat.gd")
-var combat
-var crosshair: Label
-var pulse_button: Button
 var touch_buttons: Array[Button] = []
 var touch_ui_active := false
-var aim_cursor: ImageTexture
 var reactive_sky: ShaderMaterial
 var mountain_mesh: MeshInstance3D
 var mountain_material: ShaderMaterial
@@ -21,8 +16,6 @@ var sky_clock := 0.0
 var mountain_velocity := 0.0
 var mountain_altitude := 0.0
 var mountain_pose_ready := false
-var aim_cursor_active := false
-var mouse_aim_active := true
 var replay
 var replay_active := false
 var replay_playing := false
@@ -36,7 +29,7 @@ var replay_speed_button: Button
 var watch_replay_button: Button
 var profile_replay_button: Button
 var cosmetic_picker: OptionButton
-const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice", "Combat"]
+const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice"]
 var extras
 var effects
 var mode := 0
@@ -148,8 +141,6 @@ func _ready() -> void:
 	replay = ReplayScript.new()
 	add_child(replay)
 	replay.load_last()
-	combat=CombatScript.new()
-	add_child(combat)
 	_create_hud()
 	_create_replay_panel()
 	_create_pause_menu()
@@ -191,8 +182,6 @@ func _restart() -> void:
 	course.reset_course(run_seed)
 	runner.reset_run(course)
 	mountain_pose_ready = false
-	combat.reset(true,run_seed)
-	runner.combat_enabled=true
 	runner.jumps_disabled = mode == 2
 	if mode == 3:
 		first_person = true
@@ -219,7 +208,6 @@ func _physics_process(delta: float) -> void:
 	var was_grounded: bool = runner.is_grounded()
 	var previous_speed: float = runner.speed
 	runner.tick(delta, course)
-	combat.tick(delta,course,runner)
 	extras.track(delta, runner, previous_speed)
 	effects.update_run(runner.speed, runner.hits > previous_hits, not was_grounded and runner.is_grounded())
 	if runner.fallen:
@@ -493,13 +481,8 @@ func _distance_display(meters: float) -> String:
 
 func _update_hud() -> void:
 	var active: bool = not replay_active and not run_finished and not paused
-	var combat_visible: bool = combat.enabled and active
-	# Only the aiming reticle and input controls remain outside the compact stats.
-	crosshair.visible = combat_visible and not mouse_aim_active
-	_update_combat_cursor(combat_visible)
 	for touch_button in touch_buttons:
 		touch_button.visible = touch_ui_active and active
-	pulse_button.visible = touch_ui_active and combat_visible
 	distance_label.text = "DISTANCE  " + _distance_display(maxf(0.0, runner.distance - 8.0))
 	clock_label.text = "TIME  %02d:%05.2f" % [int(run_time / 60.0), fmod(run_time, 60.0)]
 	var saved_best: float = extras.best_for(mode, run_day)
@@ -513,7 +496,6 @@ func _lose(reason: String) -> void:
 	if run_finished:
 		return
 	run_finished = true
-	_update_combat_cursor(false)
 	replay.record(run_time, 0.0, runner, course, storm, true)
 	replay.finish(course,run_seed,mode,extras.cosmetic,reason,storm.gap_to(runner.distance))
 	watch_replay_button.visible = replay.available()
@@ -642,32 +624,6 @@ func _back_menu() -> void:
 	else:
 		_set_paused(false)
 
-func _update_combat_cursor(active: bool) -> void:
-	if DisplayServer.get_name()=="headless" or aim_cursor_active==active:
-		return
-	aim_cursor_active=active
-	if active:
-		if aim_cursor==null:
-			# High contrast, transparent 31x31 cursor with a precise hotspot.
-			var image:=Image.create(31,31,false,Image.FORMAT_RGBA8)
-			image.fill(Color.TRANSPARENT)
-			for y in range(31):
-				for x in range(31):
-					var a:=absi(x-15)
-					var b:=absi(y-15)
-					if (a<=1 and b>=5 and b<=13) or (b<=1 and a>=5 and a<=13) or (a<=1 and b<=1):
-						image.set_pixel(x,y,Color(0.1,1.0,0.92))
-					elif (a<=2 and b>=4 and b<=14) or (b<=2 and a>=4 and a<=14) or (a<=2 and b<=2):
-						image.set_pixel(x,y,Color(0.02,0.06,0.12,0.95))
-			aim_cursor=ImageTexture.create_from_image(image)
-		Input.set_custom_mouse_cursor(aim_cursor,Input.CURSOR_ARROW,Vector2(15,15))
-	else:
-		Input.set_custom_mouse_cursor(null,Input.CURSOR_ARROW)
-
-func _fire_center() -> void:
-	if combat.enabled and not paused and not run_finished and not replay_active:
-		combat.fire(view_camera,get_viewport().get_visible_rect().size*0.5)
-
 func _pad_button(button: int) -> bool:
 	if replay_active:
 		match button:
@@ -719,9 +675,6 @@ func _pad_button(button: int) -> bool:
 				elif control is Button and not control.disabled:
 					control.pressed.emit()
 		return true
-	if combat.enabled and not run_finished and button==JOY_BUTTON_RIGHT_SHOULDER:
-		_fire_center()
-		return true
 	if _bound_pad("recenter", button, JOY_BUTTON_LEFT_STICK):
 		_recenter_camera()
 		return true
@@ -736,10 +689,6 @@ func _pad_button(button: int) -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if paused or (run_finished and not replay_active):
 		return
-	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and combat.enabled and not replay_active:
-		combat.fire(view_camera,event.position)
-		get_viewport().set_input_as_handled()
-		return
 	if event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
 		_orbit_input(drag.relative * 0.006)
@@ -748,10 +697,6 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch or event is InputEventScreenDrag:
 		touch_ui_active = true
-	if event is InputEventMouseMotion or event is InputEventMouseButton:
-		mouse_aim_active=true
-	elif event is InputEventJoypadMotion or event is InputEventJoypadButton or event is InputEventScreenTouch or event is InputEventScreenDrag:
-		mouse_aim_active=false
 	if event is InputEventMouseButton and not paused and (not run_finished or replay_active):
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_RIGHT:
@@ -837,10 +782,6 @@ func _input(event: InputEvent) -> void:
 		return
 	if paused:
 		return
-	if combat.enabled and not run_finished and key.keycode==KEY_Z:
-		_fire_center()
-		get_viewport().set_input_as_handled()
-		return
 	if _bound_key("recenter", key.keycode, KEY_G):
 		get_viewport().set_input_as_handled()
 		_recenter_camera()
@@ -899,19 +840,6 @@ func _create_hud() -> void:
 		stat.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
 		stat.add_theme_constant_override("shadow_offset_x", 1)
 		stat.add_theme_constant_override("shadow_offset_y", 2)
-	crosshair=_label("+",25,Color(0.65,1.0,1.0))
-	root.add_child(crosshair)
-	crosshair.set_anchors_preset(Control.PRESET_CENTER)
-	crosshair.offset_left=-12
-	crosshair.offset_right=12
-	crosshair.offset_top=-14
-	crosshair.offset_bottom=14
-	crosshair.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
-	crosshair.mouse_filter=Control.MOUSE_FILTER_IGNORE
-	pulse_button=_button("PULSE",-394,-276,124,true)
-	root.add_child(pulse_button)
-	pulse_button.pressed.connect(_fire_center)
-	pulse_button.hide()
 	minimap = preload("res://scripts/elevation_map.gd").new()
 	minimap.clip_contents = true
 	root.add_child(minimap)
@@ -1014,7 +942,6 @@ func _set_units(index: int, persist: bool = true) -> void:
 
 func _set_paused(value: bool) -> void:
 	paused = value
-	_update_combat_cursor(not value and combat.enabled and not run_finished and not replay_active)
 	if value:
 		orbit_drag = false
 	effects.set_paused(value)
@@ -1402,8 +1329,6 @@ func _start_replay() -> void:
 		return
 	_set_paused(false)
 	replay_active = true
-	combat.reset(false)
-	_update_combat_cursor(false)
 	run_finished = true
 	replay_time = 0.0
 	replay_rate = 1.0

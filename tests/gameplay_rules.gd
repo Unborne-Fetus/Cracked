@@ -231,60 +231,16 @@ func _run_tests() -> void:
 		_fail("First-person body must retain board and legs but hide the head.")
 		return
 	runner.call("set_first_person", bool(game.get("first_person")))
-	var combat_probe: Node3D=game.get("combat")
-	if not bool(combat_probe.get("enabled")):
-		_fail("Combat is not enabled in the normal run.")
-		return
-	combat_probe.call("reset",true,4)
-	combat_probe.call("_spawn",course,runner)
-	var drones_probe: Array=combat_probe.get("drones")
-	if drones_probe.is_empty():
-		_fail("Combat mode failed to spawn a drone.")
-		return
-	combat_probe.call("tick",0.0,course,runner)
-	var target_drone: Node3D=drones_probe[0]["node"]
-	var saved_camera_pose:=sprite_camera.transform
-	sprite_camera.look_at(target_drone.global_position,Vector3.UP)
-	var aim_point:=sprite_camera.unproject_position(target_drone.global_position)
-	combat_probe.call("fire",sprite_camera,aim_point)
-	combat_probe.set("cooldown",0.0)
-	combat_probe.call("fire",sprite_camera,aim_point)
-	if int(combat_probe.get("score"))!=1:
-		_fail("Combat energy pulses did not tag and remove a drone.")
-		return
-	var before_reward:float=runner.get("speed")
-	combat_probe.call("tick",0.0,course,runner)
-	if float(runner.get("speed"))<=before_reward:
-		_fail("Drone elimination did not reward momentum.")
-		return
-	combat_probe.call("reset",true,4)
-	combat_probe.call("_spawn",course,runner)
-	var chase_drones:Array=combat_probe.get("drones")
-	if not chase_drones.is_empty():
-		chase_drones[0]["s"]=float(runner.get("distance"))-30.0
-		combat_probe.call("tick",0.0,course,runner)
-		if float(chase_drones[0]["s"])<=float(runner.get("distance")):
-			_fail("Drone could be passed instead of pursuing.")
+	# Combat must not exist in the active scene or run mode selector.
+	for child in game.get_children():
+		var script: Script = child.get_script()
+		if script != null and script.resource_path.ends_with("arcade_combat.gd"):
+			_fail("Combat node is still active.")
 			return
-	var saved_speed: float = runner.get("speed")
-	var saved_reserve: float = runner.get("momentum_reserve")
-	runner.set("speed", 100.0)
-	runner.set("momentum_reserve", 25.0)
-	combat_probe.call("_apply_momentum_hit", runner)
-	if absf(float(runner.get("speed")) - 60.0) > 0.01 or float(runner.get("momentum_reserve")) != 15.0:
-		_fail("Drone hit must reduce momentum and reserve only.")
+	var modes: Array = game.get("MODES")
+	if modes.has("Combat"):
+		_fail("Combat remains selectable.")
 		return
-	for repeat in range(20):
-		combat_probe.call("_apply_momentum_hit", runner)
-	if bool(game.get("run_finished")):
-		_fail("Repeated drone hits ended the run.")
-		return
-	runner.set("speed", saved_speed)
-	runner.set("momentum_reserve", saved_reserve)
-	runner.set("hit_timer", 0.0)
-	runner.set("rider_impact", 0.0)
-	combat_probe.call("reset",false)
-	sprite_camera.transform=saved_camera_pose
 	# Stalling on an uphill track must not permanently stop progress.
 	for slide_test: bool in [false,true]:
 		var restart_speed:=0.0
@@ -753,11 +709,11 @@ func _run_tests() -> void:
 			_fail("Track seam is discontinuous.")
 			return
 	var chunks: Dictionary = course.get("chunks")
-	# All ten shapes must exist in the opening sequence; no vertical loops.
+	# All ten obstacle shapes must exist in the fixed opening sequence.
 	var shapes := {}
 	for data in chunks.values():
 		if str(data["kind"]) == "INVERSION":
-			_fail("Vertical loops must no longer generate.")
+			_fail("Obsolete forced inversion appeared in the opening fixture.")
 			return
 		for piece in data["hazards"]:
 			shapes[int(piece["group"]["shape"])] = true
@@ -1266,6 +1222,8 @@ func _run_tests() -> void:
 		return
 	# Directly exercise the branch cadence without expensive extra meshes.
 	course.set("sections_since_split", 5)
+	course.set("sections_since_roll", 0)
+	course.set("sections_since_loop", 0)
 	course.set("demanding_sections", 0)
 	course.set("last_kind", "TURN")
 	course.set("route_forecast", {"gap": 100.0, "speed": 80.0, "storm_speed": 30.0})
@@ -1273,6 +1231,27 @@ func _run_tests() -> void:
 	var branch_kind: String = course.call("_kind", 8)
 	if branch_kind not in ["SPLIT ROUTE", "STACKED ROUTES","LOOP ROUTE"]:
 		_fail("Split route cadence did not produce a branching section.")
+		return
+	# A due loop outranks a new wall entry or ordinary branching route.
+	course.set("sections_since_loop", 5)
+	course.set("sections_since_roll", 5)
+	course.set("last_kind", "TURN")
+	course.get("sustained_roll_queue").clear()
+	if str(course.call("_kind", 8)) != "LOOP ROUTE":
+		_fail("Due loop did not receive independent priority.")
+		return
+	course.set("sections_since_loop", 0)
+	course.set("sections_since_roll", 0)
+	course.set("sections_since_split", 0)
+	course.set("last_kind", "LOOP ROUTE")
+	if str(course.call("_kind", 9)) == "LOOP ROUTE":
+		_fail("Loops generated consecutively without spacing.")
+		return
+	course.get("sustained_roll_queue").clear()
+	course.set("sections_since_loop", 5)
+	course.set("demanding_sections", 2)
+	if str(course.call("_kind", 10)) not in ["RECOVERY RUN", "LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"]:
+		_fail("Loop cadence overrode recovery safety.")
 		return
 	var map_point: Vector3 = course.call("surface_position", 8.0, 12.0)
 	var map_frame: Transform3D = course.call("surface_frame", 8.0, 12.0, 1)

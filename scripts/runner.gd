@@ -56,7 +56,6 @@ var rider_trick_serial := 0
 var active_loop := -1
 var rewarded_loops: Dictionary = {}
 var loop_reward_timer := 0.0
-var combat_enabled := false
 var rider_glider := 0.0
 var rider_glider_return := -1.0
 var rider_glider_spin := 1.0
@@ -399,20 +398,6 @@ func _double_jump() -> bool:
 	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
 	return true
 
-func combat_momentum(bonus: float, retain: float) -> void:
-	# Apply to actual forward flight as well as the speed display.
-	var previous:=speed
-	speed=maxf(0.0,speed*retain+bonus)
-	if not grounded:
-		var horizontal:=Vector3(air_velocity.x,0.0,air_velocity.z)
-		if horizontal.length()>0.01:
-			var adjusted:=horizontal.normalized()*maxf(0.0,horizontal.length()*retain+bonus)
-			air_velocity.x=adjusted.x
-			air_velocity.z=adjusted.z
-	if speed<previous:
-		rider_impact=1.0
-		hit_timer=maxf(hit_timer,0.45)
-
 func _banked_slide(grade: float, delta: float) -> void:
 	var next_speed := slide_speed_step(speed, grade, delta)
 	if next_speed > speed:
@@ -511,7 +496,7 @@ func _slide_input() -> bool:
 	if touch_slide:
 		return true
 	for device in Input.get_connected_joypads():
-		var buttons := [JOY_BUTTON_B,JOY_BUTTON_LEFT_SHOULDER] if combat_enabled else [JOY_BUTTON_B,JOY_BUTTON_LEFT_SHOULDER,JOY_BUTTON_RIGHT_SHOULDER]
+		var buttons := [JOY_BUTTON_B,JOY_BUTTON_LEFT_SHOULDER,JOY_BUTTON_RIGHT_SHOULDER]
 		if pad_down(device,"slide",buttons):
 			return true
 		if Input.get_joy_axis(device, JOY_AXIS_TRIGGER_LEFT) > 0.3 or Input.get_joy_axis(device, JOY_AXIS_TRIGGER_RIGHT) > 0.3:

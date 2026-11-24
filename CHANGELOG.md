@@ -1,5 +1,9 @@
 # Vector Velocity changelog
 
+## Movement-only testing
+- Removed combat actors, damage, controls, mode and aiming HUD. Restored right bumper sliding.
+- Increased optional loop frequency with a dedicated cadence while preserving recovery and sustained bank sequences.
+
 ## 2026-11-24 — Minimal HUD and momentum-only combat
 - Show only distance, time and best during normal gameplay; retain aiming and touch controls as needed.
 - Removed shields, shield recovery and shield-depletion defeats. Drone hits reduce speed and reserve only.
