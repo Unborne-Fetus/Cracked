@@ -84,12 +84,18 @@ jobs:
             echo "::error::Godot encountered script/runtime errors during startup"
             exit 1
           fi
-      - name: Verify momentum and procedural terrain
-        timeout-minutes: 3
+      - name: Verify the player lands on the collision mesh
+        timeout-minutes: 2
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 150s godot --headless --path . --script res://tests/flow.gd 2>&1 | tee /tmp/godot-gameplay.log
-          grep -F 'PASS: flow movement, slopes, landings and streaming' /tmp/godot-gameplay.log
+          timeout --signal=TERM --kill-after=10s 90s godot --headless --path . --script res://tests/ground_contact.gd 2>&1 | tee /tmp/godot-collision.log
+          grep -F 'PASS: terrain raycast hit and player grounded' /tmp/godot-collision.log
+      - name: Verify sliding, obstacles, and storm rules
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 270s godot --headless --path . --script res://tests/gameplay_rules.gd 2>&1 | tee /tmp/godot-gameplay.log
+          grep -F 'PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm' /tmp/godot-gameplay.log
       - name: Export HTML5 with a unique release path
         env:
           RELEASE_SHA: ${{ github.sha }}

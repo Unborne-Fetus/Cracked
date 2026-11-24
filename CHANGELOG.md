@@ -1,48 +1,92 @@
 # Vector Velocity changelog
 
-## Board and glider restoration
-- Reused original board, wing geometry, engines and transformation solver. Automatic long-flight deployment, diving pose and return-to-board catch on landing.
-- Kept current physics, upgrades and expedition structure; gyro and ceiling vehicles remain excluded.
+## 2026-11-24 — Minimal HUD and momentum-only combat
+- Show only distance, time and best during normal gameplay; retain aiming and touch controls as needed.
+- Removed shields, shield recovery and shield-depletion defeats. Drone hits reduce speed and reserve only.
 
-## Original rider restoration
-- Restored the original white articulated body and cyan trail, using on-foot run, dive and landing animation. Kept current physics and progression; vehicles remain excluded.
+## 2026-11-24 — Deck sweeps, transformation handoffs and mesh mountains
+- Stacked-route flight checks upper and lower decks independently, selecting the earliest actual swept contact.
+- Ceiling spider legs suspend the rider 2.5 m below the surface.
+- Faster glider catch, reverse deployment, direct glider-to-gyro handoff and dedicated glider dive.
+- Animated tessellated neon mountain mesh with continuous movement and extreme speed-dependent elevation.
 
-## Endless and difficulty
-- Unlockable continuous-world endless mode, separate records, automatic transitions and checkpoint support.
-- Three selectable difficulty settings for collapse and attempts; smoother ravine guidance.
-- Automated model and scene-transition checks for endless progression.
+## 2026-11-24 — Replay rates, cosmetics and glider recovery
+- Fixed replay speed cycling (0.5x, 1x, 2x); recorded poses follow replay time.
+- Restored original, amber, violet and emerald cosmetic palettes, saved unlocks and replay selection.
+- Enlarged spider leg contact span to 8.5 metres, with longer articulated limbs and wider stride.
+- Glider release separates the rider, flies away, swoops underneath and catches the feet before folding wings.
 
-## Movement and encounter polish
-- Shared swept landing contact, corrected Redline cap, ravine approach guidance and collectible paths.
-- Guardian-specific penalties, clean streaks, safe-corridor planning, and encounter grades.
-- Live trial progress and ability availability, return-to-title control and guided ravine traversal regression.
+## 2026-11-24 — Mechanical gyro deployment and build repair
+- Twenty-four rigid curved rim segments slide from the board rails, unfold, and lock into two rotating rings; the deck remains the pilot platform.
+- Reverse deployment folds the wheel away before glider wings extend.
+- Guarded collapsed limb transforms and enforced camera clearance after orbit and landing blends.
+- Regression tests verify rigid panel motion and bank camera clearance.
 
-## Gameplay depth and continuity
-- 52 items, four set bonuses, ten guardian programs, six patterns and ten terrain motifs.
-- Optional objective-based trials, persistent checkpoints, inventory and route explanations.
-- Void recovery item, refined flight prediction, guarded economy, and integrated shard transition tests.
+## 2026-11-23 — Transformation trick sets, jet wings and storm confirmation
+- Eight glider trick variants and six gyro trick variants; animated jet nacelles on both wings.
+- Eight large articulated ceiling spider legs replace treads.
+- Glider orientation corrects inherited wall roll; first-person cockpit clears obstructing transformation meshes.
+- Storm catches require sustained track-relative proximity; high-altitude projection alone cannot cause a catch. Replay ends show the saved defeat reason.
 
-## Expedition depth update
-- Five worlds, five routes, four active abilities, 40 items, shop rerolls and rest choices.
-- Three guardian phases with lane, safe corridor, split and aerial hazard patterns.
-- Upgrades affect actual movement, pickup range, energy, protection and economy. Landing prediction accounts for steering and ability effects.
+## 2026-11-23 — Transforming board and evolving skyline
+- Mountains rise and recede with course progress, with increasing peak height deeper into a run.
+- Grounded inverted riding deploys animated ceiling treads; sideways wall riding transforms the deck into a gyro wheel.
+- Swept wall/ceiling contacts can attach and reorient upright airborne riders to the actual contacted face.
+- High-altitude glider tricks rotate the full rig; the return animation releases the grips, arcs the board underneath, catches it and then folds the wings.
 
-## Shard expedition
-- Ten unlockable shards, three-world routes, deterministic shops and collectible sparks.
-- Seven upgrade types affecting movement, energy, boost and attempts; guardian escape encounters.
-- Distinct route geometry and additional progression regression checks.
+## 2026-11-23 — Pursuit drones, fullpipe seam, synthwave sky and glider
+- Drones match pace and stay ahead; telegraphed hits remove 40% momentum and reserve, eliminations restore speed and reserve.
+- More frequent sustained wall and ceiling segments, unique sidewall grip pose.
+- Low-speed traction suppresses sideways drift until forward speed recovers.
+- Closed fullpipe crown with continuous wrapped steering.
+- Longer high-speed chunks, cheaper board clearance and bank-contact probes, reduced ordinary camera sightline samples.
+- Speed-reactive striped sunset, neon mountains and perspective grid; cosmetic high-altitude hanging glider with folding wings.
 
-## Flow expansion
-- Corrected cliff-mesh type inference that prevented the prior build from compiling.
-- Added real ravines, safe alternate corridors, support-aware landings and projected contact rings.
-- Articulated running, landing chains, improved camera response, landmarks and branching expedition routes.
+## 2026-11-23 — Default combat, restart traction and first-person corrections
+- Robotic enemies and pulse controls are enabled automatically in every run; Practice does not end from shield depletion.
+- Mouse cursor becomes a precise crosshair during play and returns to normal in menus, replays and defeat screens.
+- Grounded riders regain minimum speed after stalling, including uphill.
+- Shallow bank contacts can recover onto the correct rideable face; fall confirmation is less sensitive to brief projection errors.
+- First-person camera moved forward, with consistent screen-relative horizontal and vertical look controls.
 
-## Natural flow update
-- Replaced manual jumping with terrain-driven launch and hold-to-dive controls.
-- Four landing grades, energy rewards and an aerial speed boost; stronger steering, animated scarf and world-space trail.
-- Broad floating terrain, deterministic retries, three expedition attempts, and completion grades.
+## 2026-11-23 — Loop routes, rider hanging poses, camera and arcade combat
+- Falls require sustained downward movement beneath nearby supported road; high or sideways flight alone cannot kill the rider.
+- Track-aligned camera does not rotate with carving; revised first-person eye placement and field of view.
+- Joint and board transform crossfades, sideways riding poses and retractable upside-down grip handles.
+- Optional vertical loop branch with safe bypass, minimum speed at the crown and one-time momentum reward.
+- Optional Combat run mode with robotic drones, energy pulse tagging and shield depletion.
 
-## Flow reboot
-- Restored the momentum game with a simpler on-foot movement loop.
-- Wide procedural terrain, natural launches, diving, landing momentum, finite stages and a pursuing collapse.
-- Removed feature-heavy systems and restored the original soundtrack and browser export pipeline.
+## 2026-11-23 — First-person body, sky, drift and camera
+- Visible animated legs, boots and hoverboard in first person.
+- Procedural neon twilight skybox with stars, aurora and distant silhouettes.
+- Eased orbit, recenter, chase-arm and orientation changes.
+- Remappable Q/E left/right drifting independent of A/D carving.
+- 24 airborne idle tricks and six ground idles, plus contextual riding animations.
+
+## 2026-11-23 — Steering, branch safety and animation expansion
+- Heading-based carving on ground and directional air steering, with stronger response at speed.
+- Gold inner-edge fork guidance keeps a rider on the selected supported branch; outer edges and deliberate transfers remain open.
+- Falling between branches no longer immediately ends the run while the lower deck is still reachable.
+- Nine air idle trick variants: shifty, grab, one-foot, heelflip, shove-it, frontflip, backflip, scissor kick and barrel roll.
+- Ground hop/spin, inverted riding brace, replay-recorded turning and animation states.
+- Changelog linked from the pause menu and published alongside the browser build.
+
+## 2026-11-23 — Asymmetric forks and NIGHT CIRCUIT
+- Elevated narrow rolling ridge versus wide sunken channel; flyover and lower bowl.
+- Three initial air idle tricks, bank compensation, landing brace and gate celebration.
+- New 174 BPM original soundtrack with longer harmonic progression and distinct drops.
+
+## 2026-11-23 — Contact, rider and audio
+- Removed eight-second airborne death timeout; road-proximity fall checks.
+- Solid obstacle rebounds and persistent obstacle collision.
+- Taller block rider, curved board nose and tail, terrain-aware clearance.
+- Kickflip footwork, crouching, dive, carving, landing and impact animation.
+- Browser-native continuous soundtrack; pause resumes at the same timestamp.
+
+## Earlier development — Core systems
+- Procedural terrain, banks, halfpipes, corkscrews, gaps, branching routes and slipstreams.
+- Momentum reserve, double jump, diving, perfect landings and clean route gates.
+- Circular elevation minimap, first/third-person camera, free orbit and recenter.
+- Controller and touch controls, key remapping, daily seeds, practice and challenge modes.
+- Local replay recording and playback; local profiles and achievements.
+- Web builds with unique release paths, cached soundtrack and headless regression tests.

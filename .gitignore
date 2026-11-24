@@ -1,5 +1,10 @@
-build/
+# Godot import cache
 .godot/
-audio/generated/
+# Generated web artifacts
+build/
 export/
+*.tmp
 .DS_Store
+
+# Deterministically rendered music (generated before import by CI)
+audio/generated/

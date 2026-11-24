@@ -156,18 +156,60 @@ func _ready() -> void:
 		exhaust.position.z=0.98
 		exhausts.append(exhaust)
 	wings.visible=false
-	# Keep empty compatibility nodes for the original pose solver, but do
-	# not recreate the removed ceiling or sidewall vehicles.
 	treads=Node3D.new()
+	treads.name="CeilingSpiderLegs"
 	board.add_child(treads)
-	treads.hide()
+	for leg_index in range(8):
+		spider_upper.append(_block(treads,Vector3(0.25,1.0,0.30),deck_mat))
+		spider_lower.append(_block(treads,Vector3(0.20,1.0,0.25),shadow))
+		spider_feet.append(_block(treads,Vector3(0.42,0.13,0.52),edge_mat))
+	treads.visible=false
 	gyro=Node3D.new()
+	gyro.name="SidewallGyro"
 	add_child(gyro)
 	gyro_rotor=Node3D.new()
 	gyro.add_child(gyro_rotor)
+	# Two rows of rigid curved segments are stowed against the board
+	# rails. Each segment carries its own tread shoe; no scaled torus.
+	for wheel_side:float in [-1.0,1.0]:
+		for segment_index in range(GYRO_SEGMENTS):
+			var panel:=Node3D.new()
+			gyro_rotor.add_child(panel)
+			gyro_panels.append(panel)
+			# Build a curved rail segment in local coordinates about its
+			# midpoint. At deployment the ends meet the next segment.
+			var tool:=SurfaceTool.new()
+			tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+			for step in range(4):
+				var theta_a:=lerpf(-PI/float(GYRO_SEGMENTS),PI/float(GYRO_SEGMENTS),float(step)/4.0)
+				var theta_b:=lerpf(-PI/float(GYRO_SEGMENTS),PI/float(GYRO_SEGMENTS),float(step+1)/4.0)
+				var vertices:Array[Vector3]=[]
+				for theta:float in [theta_a,theta_b]:
+					for radial:float in [GYRO_RADIUS-0.085,GYRO_RADIUS+0.085]:
+						for x:float in [-0.105,0.105]:
+							vertices.append(Vector3(x,cos(theta)*radial-GYRO_RADIUS,sin(theta)*radial))
+				_quad(tool,vertices[0],vertices[1],vertices[4],vertices[5])
+				_quad(tool,vertices[2],vertices[3],vertices[6],vertices[7])
+				_quad(tool,vertices[0],vertices[2],vertices[4],vertices[6])
+				_quad(tool,vertices[1],vertices[3],vertices[5],vertices[7])
+				if step==0:
+					_quad(tool,vertices[0],vertices[1],vertices[2],vertices[3])
+				if step==3:
+					_quad(tool,vertices[4],vertices[5],vertices[6],vertices[7])
+			var rim:=MeshInstance3D.new()
+			rim.mesh=tool.commit()
+			rim.material_override=deck_mat
+			panel.add_child(rim)
+			var shoe:=_block(panel,Vector3(0.24,0.08,0.30),edge_mat)
+			shoe.position.y=0.09
 	gyro_axle=Node3D.new()
 	gyro.add_child(gyro_axle)
-	gyro.hide()
+	for axle_side:float in [-1.0,1.0]:
+		var brace_part:=_block(gyro_axle,Vector3(0.13,0.78,0.13),shadow)
+		brace_part.position=Vector3(axle_side*0.34,-0.32,0)
+		var hub:=_block(gyro_axle,Vector3(0.28,0.28,0.28),edge_mat)
+		hub.position.x=axle_side*0.34
+	gyro.visible=false
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
 	torso = _block(self, Vector3(0.56, 0.78, 0.34), white)
