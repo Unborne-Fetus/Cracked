@@ -1302,31 +1302,26 @@ func _run_tests() -> void:
 	if map_point.distance_to(map_frame.origin) > 0.01:
 		_fail("Fast map position differs from the rideable surface.")
 		return
-	# Force an actual loop chunk into the live generator and exercise its
-	# emitted mesh, not just the analytic inversion at the crown.
-	course.set("demanding_sections",0)
-	course.set("sections_since_loop",5)
-	course.set("last_kind","TURN")
-	course.set("route_forecast",{"speed":180.0,"gap":10000.0,"storm_speed":14.0,"time":0.0,"min_gap":10000.0,"valid":true})
-	var loop_index: int=course.get("next_index")
-	course.call("_build_chunk",loop_index,180.0)
-	course.set("next_index",loop_index+1)
-	var loop_starts: Array=course.get("chunk_starts")
-	if str(course.call("section_name",float(loop_starts[loop_index])+1.0))!="LOOP ROUTE":
-		_fail("Loop mesh regression fixture was not generated.")
-		return
-	var loop_start: float=loop_starts[loop_index]
-	var loop_length: float=loop_starts[loop_index+1]-loop_start
-	for u: float in [0.28,0.36,0.47,0.55,0.64,0.72]:
-		var at:=loop_start+loop_length*u
-		for across: float in [-42.0,-26.0,26.0]:
-			var face: Transform3D=course.call("surface_frame",at,across,1)
-			var hit: Dictionary=course.call("loop_mesh_sweep",face.origin+face.basis.y*3.0,face.origin-face.basis.y*3.0)
-			if hit.is_empty() or absf(float(hit["s"])-at)>3.0 or absf(float(hit["lane"])-across)>2.0:
+	# Deterministic full-sized loop fixture uses the actual mesh pipeline.
+	var fixture_length:=640.0
+	var fixture_points: Array=course.call("_make_points","LOOP ROUTE",0.0,0.0,1.0,1.0,fixture_length/192.0)
+	var lead_points: Array=course.call("_make_points","RECOVERY RUN",0.0,0.0,1.0,1.0,fixture_length/192.0)
+	var lead_end: Transform3D=lead_points[-1]
+	var fixture_recipes: Array=[
+		{"index":0,"start":0.0,"length":fixture_length,"kind":"RECOVERY RUN","origin":Vector3.ZERO,"points":lead_points,"layout":[]},
+		{"index":1,"start":fixture_length,"length":fixture_length,"kind":"LOOP ROUTE","origin":lead_end.origin,"points":fixture_points,"layout":[]}]
+	course.call("begin_replay_layout",fixture_recipes)
+	course.call("replay_stream",fixture_length+20.0,Vector3.ZERO)
+	for loop_u: float in [0.10,0.20,0.28,0.36,0.47,0.55,0.64,0.72,0.85]:
+		var loop_at:=fixture_length*(1.0+loop_u)
+		for loop_across: float in [-42.0,-26.0,26.0]:
+			var loop_face: Transform3D=course.call("surface_frame",loop_at,loop_across,1)
+			var loop_hit: Dictionary=course.call("loop_mesh_sweep",loop_face.origin+loop_face.basis.y*3.0,loop_face.origin-loop_face.basis.y*3.0)
+			if loop_hit.is_empty() or absf(float(loop_hit["s"])-loop_at)>3.0 or absf(float(loop_hit["lane"])-loop_across)>2.0:
 				_fail("Swept loop collision missed or chose a different arm.")
 				return
-			runner.set("distance",at)
-			runner.set("lane",across)
+			runner.set("distance",loop_at)
+			runner.set("lane",loop_across)
 			runner.set("grounded",true)
 			runner.set("surface_side",1)
 			runner.set("landing_blend",0.0)
