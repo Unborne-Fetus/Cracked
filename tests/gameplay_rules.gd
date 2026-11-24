@@ -699,6 +699,15 @@ func _run_tests() -> void:
 	if bool(course.call("support_at", split_s, 0.0)) or not bool(course.call("support_at", split_s, -28.0)) or bool(course.call("support_at", gap_s, 32.0)) or not bool(course.call("support_at", gap_s, -32.0)):
 		_fail("Split and gap routes lack an open, supported bypass.")
 		return
+	var fork_left: Transform3D = course.call("surface_frame", split_s, -28.0, 1)
+	var fork_right: Transform3D = course.call("surface_frame", split_s, 28.0, 1)
+	if fork_left.origin.distance_to(fork_right.origin) < 140.0:
+		_fail("Fork branches are not physically separated.")
+		return
+	var fork_projected: Vector3 = course.call("project_position", fork_left.origin, split_s)
+	if absf(fork_projected.y + 28.0) > 0.2:
+		_fail("Separated branch projection does not recover its lane.")
+		return
 	var tunnel_s := 25.0 * 192.0 + 96.0
 	var tunnel_mid: Transform3D = course.call("surface_frame", tunnel_s, 0.0, 1)
 	var tunnel_wall: Transform3D = course.call("surface_frame", tunnel_s, 54.0, 1)
@@ -754,6 +763,12 @@ func _run_tests() -> void:
 	if upper.origin.y - lower.origin.y < 20.0 or Vector2(upper.origin.x - lower.origin.x, upper.origin.z - lower.origin.z).length() > 1.0:
 		_fail("Stacked routes do not physically overlap.")
 		return
+	for offset: float in [12.0, 24.0, 48.0, 72.0, 96.0, 120.0, 144.0, 168.0]:
+		var overpass_s := 27.0 * 192.0 + offset
+		var normal_force: float = runner.call("relative_normal_acceleration", course, overpass_s, -30.0, 200.0)
+		if float(runner.call("natural_lift_impulse", normal_force, 200.0)) > 0.0:
+			_fail("Engineered overpass launches a grounded rider.")
+			return
 	var stream_s := 28.0 * 192.0 + 96.0
 	var stream_lane: float = course.call("slipstream_center", 28, 96.0)
 	if float(course.call("slipstream_accel", stream_s, stream_lane)) < 13.0:

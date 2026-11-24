@@ -10,9 +10,9 @@ import wave
 import numpy as np
 
 SR = 44100
-BPM = 148
+BPM = 170
 BEAT = 60 / BPM
-BARS = 64
+BARS = 96
 N = round(BARS * 4 * BEAT * SR)
 TAU = 2 * np.pi
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,30 +112,33 @@ motifs = [
 for bar in range(BARS):
     pos = bar*4
     part = bar//8
-    root, chord = (bridge if part in (2,5) else chords)[bar%8]
-    breakdown = False
-    full = part in (1,3,4,6,7)
+    root, chord = (bridge if part in (2,4,5,8,9,10) else chords)[bar%8]
+    breakdown = part in (4, 9)
+    full = part not in (0, 4, 9)
+    driving = part in (2, 3, 6, 7, 10, 11)
     # Foundation: fast broken-beat rhythm, substantial low end, chord-aware bass.
-    kicks = [0, 2.5] if breakdown else ([0, 1.75, 2.5, 3.5] if bar%4==3 else [0, 2.5, 3.25] if bar%2 else [0, 2.5])
+    kicks = [0, 2.5] if breakdown else ([0, .75, 1.75, 2.5, 3.5] if driving and bar%4==3 else [0, 1.5, 2.5, 3.25] if driving and bar%2 else [0, 2.5, 3.5] if driving else [0, 2.5])
     for j in kicks:
         put(stems[0], pos+j, kick(), .40 if j in (0,2.5) else .24)
     for j in (1,3):
-        put(stems[0], pos+j, snare(), .39 if not breakdown else .25, .04)
+        put(stems[0], pos+j, snare(), .52 if driving else .42 if not breakdown else .30, .04)
     for j in range(8):
         if breakdown and j%2:
             continue
-        put(stems[0], pos+j*.5, hat(j%4==2), .052 if j%2 else .031, -.37 if j%2 else .32)
-    bassline = [(0,1.48,root),(1.5,.94,root),(2.5,.82,root+12),(3.35,.70,root+7)]
+        put(stems[0], pos+j*.5, hat(j%4==2), .074 if j%2 else .045, -.37 if j%2 else .32)
+        if driving and j in (3, 6, 7):
+            put(stems[0], pos+j*.5+.25, hat(), .035, .22)
+    bassline = [(0,.66,root),(.75,.65,root),(1.5,.42,root+12),(2,.42,root),(2.5,.78,root),(3.35,.58,root+7)] if driving else [(0,1.48,root),(1.5,.94,root),(2.5,.82,root+12),(3.35,.70,root+7)]
     if breakdown:
         bassline = [(0,1.7,root),(2.5,1.0,root)]
     if bar%8==7:
         bassline[-1]=(3.35,.45,37)
     for j,dur,note in bassline:
-        put(stems[0],pos+j,bass(note,dur,full),.24)
+        put(stems[0],pos+j,bass(note,dur,full),.32 if driving else .24)
     # Chords and a syncopated, stereo arpeggio.
     for v,note in enumerate(chord):
         put(stems[1],pos,pad(note,4.45,1.0018 if v%2 else .9982),.12,[-.68,-.25,.27,.67][v])
-    order = [0,2,1,3,2,1,3,2] if not breakdown else [0,1,2,3]
+    order = ([0,1,3,2,1,3,0,2] if part%3==0 else [3,1,2,0,2,3,1,0] if part%3==1 else [0,2,1,3,2,1,3,2]) if not breakdown else [0,1,2,3]
     for j,k in enumerate(order):
         note = chord[k]+(12 if j%4==3 else 0)
         delay(stems[1],pos+j*(4/len(order))+.10,pluck(note,.43 if not breakdown else .75),.13, -.44 if j%2 else .44)
@@ -147,7 +150,8 @@ for bar in range(BARS):
             put(stems[2],pos+j,snare(),.12,-.2)
         for j,note,dur in motifs[bar%8]:
             # Warm lead register and legato note tails, no shrill octave jumps.
-            delay(stems[2],pos+j,pluck(note-12,dur+.12,True),.16,.12)
+            lead_note = note-12 if part in (1,5,8) else note if part in (2,6,10) else note-7
+            delay(stems[2],pos+j,pluck(lead_note,dur+.08,True),.21 if driving else .16,.12)
         for j in (0.5,1.5,2.5,3.5):
             put(stems[2],pos+j,bass(root+12,.32,True),.10)
     elif not breakdown:
@@ -171,7 +175,7 @@ gain=min(1.0,.88/max(peak,1e-6))
 OUT.mkdir(parents=True,exist_ok=True)
 # Balance the layers offline. A single browser-native sample avoids
 # three streaming decoders fighting the single-threaded Web renderer.
-mix = (stems[0]*.91 + stems[1] + stems[2]*.65)
+mix = (stems[0] + stems[1]*.86 + stems[2]*.82)
 peak=float(np.max(np.abs(mix)))
 gain=min(1.0,.78/max(peak,1e-6))
 mix *= gain

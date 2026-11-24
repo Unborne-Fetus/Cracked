@@ -280,7 +280,7 @@ func relative_normal_acceleration(course: Node3D, at: float, _across: float, for
 	var curvature := (-after.basis.z.y + before.basis.z.y) / (2.0 * CONTACT_PROBE)
 	var upright := smoothstep(0.25, 0.90, frame.basis.y.y)
 	var kind: String = course.call("section_name", at)
-	if bool(course.call("is_extreme_bank", kind)):
+	if bool(course.call("is_extreme_bank", kind)) or kind in ["STACKED ROUTES", "SPLIT ROUTE", "HALFPIPE"]:
 		upright = 0.0
 	# A gentle, bounded relative acceleration prevents violent launches at
 	# uncapped speeds. Manual jumping still works through the banks.
@@ -656,7 +656,7 @@ func tick(delta: float, course: Node3D) -> void:
 		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
 		var section: String = course.call("section_name", distance)
-		var curved_launch := section in ["HALFPIPE", "CORKSCREW TUNNEL"]
+		var curved_launch := section in ["HALFPIPE", "CORKSCREW TUNNEL", "STACKED ROUTES", "SPLIT ROUTE"]
 		uphill = grade > 0.025
 		var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
 		var natural_lift := natural_lift_impulse(normal_accel, speed)

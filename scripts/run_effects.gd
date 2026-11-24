@@ -41,8 +41,11 @@ func reset_run() -> void:
 
 func set_paused(value: bool) -> void:
 	paused = value
-	# Music is independent of the gameplay clock, including menus and
-	# replay pause. Never seek, pause or restart it on a run transition.
+	# Only pause transitions change transport. Death/restart never seek.
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.velocityMusic?.setPaused(" + ("true" if value else "false") + ")", true)
+	elif is_instance_valid(audio) and audio.stream_paused != value:
+		audio.stream_paused = value
 	if is_instance_valid(streaks):
 		streaks.queue_redraw()
 

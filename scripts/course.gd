@@ -16,6 +16,7 @@ const RECOVERY_ACCEL := 18.0
 const RECOVERY_HALF_WIDTH := 6.0
 const SPECIAL_TRACKS: Array[String] = ["SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"]
 const RunnerRules = preload("res://scripts/runner.gd")
+const ObstacleGrid = preload("res://shaders/obstacle_grid.gdshader")
 const StormRules = preload("res://scripts/storm.gd")
 
 var chunks: Dictionary = {}
@@ -305,7 +306,7 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		# sections, rather than squeezing banks below the safe base length.
 		length *= rng.randf_range(1.0, 1.45)
 		if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
-			length = maxf(length, planned_speed * 3.4)
+			length = maxf(length, maxf(420.0, planned_speed * 5.0))
 	var step_length := length / float(STEPS)
 	var strength := 1.0 if showcase_layout and index < 6 else rng.randf_range(0.72, 1.22)
 	var start_yaw := yaw
@@ -328,8 +329,15 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		rejected_layouts += 1
 		# First remove optional obstacles; if terrain itself remains risky,
 		# replace it with a clear downhill recovery stretch.
-		layout.clear()
-		forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
+		if not showcase_layout and layout.size() > 3:
+			var reduced: Array[Dictionary] = []
+			for obstacle_index in range(0, layout.size(), 2):
+				reduced.append(layout[obstacle_index])
+			layout = reduced
+			forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
+		if not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0:
+			layout.clear()
+			forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 		if not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0:
 			# Try different obstacle-free downhill profiles before falling
 			# back to a recovery run; avoid making every rejected section identical.
@@ -417,7 +425,54 @@ func _make_points(kind: String, start_yaw: float, target_yaw: float, bank_sign: 
 			p += -mid.z * step_length
 	return points
 
+func _plan_live_obstacles(index: int, kind: String, points: Array[Transform3D], step_length: float, planned_speed: float) -> Array[Dictionary]:
+	var layout: Array[Dictionary] = []
+	if kind in ["SPLIT ROUTE", "STACKED ROUTES", "CORKSCREW TUNNEL", "HALFPIPE", "GAP CROSSING"] or is_extreme_bank(kind):
+		return layout
+	# Multiple staggered objects per visible obstacle row. Reserve a
+	# broad reachable corridor, but no longer keep the centre empty.
+	var initial_lane := float(route_forecast.get("lane", 0.0))
+	var safe_lane := clampf(initial_lane, -24.0, 24.0)
+	if _has_recovery(kind):
+		safe_lane = recovery_center(index)
+	elif has_shortcut(kind):
+		safe_lane = shortcut_center(index)
+	var spacing := clampf(maxf(22.0, planned_speed * 0.68) / step_length, 14.0, 54.0)
+	var at := 35.0 if index == 0 else rng.randf_range(18.0, 28.0)
+	while at < 180.0:
+		var bound := width_for_kind(kind, at / CHUNK_LENGTH) - 9.0
+		var before := maxi(0, int(at) - 12)
+		var after := mini(STEPS, int(at) + 8)
+		var grade := -points[before].basis.z.y
+		var crest := grade - (-points[after].basis.z.y)
+		if grade < 0.24 and crest < 0.16:
+			var lanes: Array[float] = []
+			for column in range(-4, 5):
+				var candidate := float(column) * bound / 4.0
+				if absf(candidate - safe_lane) >= 15.0 and absf(_ramp_lift(index, kind, at, candidate)) < 0.05:
+					lanes.append(candidate)
+			var count := mini(lanes.size(), rng.randi_range(2, 4) if index > 0 else 2)
+			var placed: Array[float] = []
+			for item in range(count):
+				if lanes.is_empty():
+					break
+				var pick := rng.randi_range(0, lanes.size() - 1)
+				var lane := lanes[pick]
+				lanes.remove_at(pick)
+				var clear := true
+				for prior in placed:
+					if absf(prior - lane) < 13.0:
+						clear = false
+				if not clear:
+					continue
+				placed.append(lane)
+				layout.append({"at": at, "lane": lane, "shape": rng.randi_range(0, 9)})
+		at += spacing * rng.randf_range(0.82, 1.18)
+	return layout
+
 func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_length: float, planned_speed: float) -> Array[Dictionary]:
+	if not showcase_layout:
+		return _plan_live_obstacles(index, kind, points, step_length, planned_speed)
 	var layout: Array[Dictionary] = []
 	if kind in SPECIAL_TRACKS or kind in ["RECOVERY RUN", "STEEP CLIMB", "LONG DESCENT", "NARROW BRIDGE", "ROLLING RIDGES", "DROP AND RECOVERY", "CHICANE"] or is_sustained_roll(kind):
 		return layout
@@ -485,6 +540,8 @@ func _forecast_grade(index: int, kind: String, points: Array[Transform3D], at: f
 	var i := clampi(int(round(at)), 1, STEPS - 1)
 	var frame := points[i]
 	var slope := (_ramp_lift(index, kind, float(i + 1), lane) - _ramp_lift(index, kind, float(i - 1), lane)) / (2.0 * step_length)
+	if kind == "STACKED ROUTES":
+		slope += (_cross_xy(kind, float(i + 1), lane).y - _cross_xy(kind, float(i - 1), lane).y) / (2.0 * step_length)
 	return (-frame.basis.z + frame.basis.y * slope).normalized().y
 
 func _validate_routes(index: int, kind: String, points: Array[Transform3D], step_length: float, layout: Array[Dictionary], initial: Dictionary, begin_at: float = 0.0) -> Dictionary:
@@ -525,7 +582,7 @@ func _validate_routes(index: int, kind: String, points: Array[Transform3D], step
 				if bool(item.get("gate", false)):
 					if absf(cross_lane - float(item["lane"])) > float(item["gap"]) * 0.5 - 1.5:
 						clear = false
-				elif absf(cross_lane - float(item["lane"])) < 6.0:
+				elif absf(cross_lane - float(item["lane"])) < (6.0 if showcase_layout else 7.5):
 					clear = false
 			var grade := _forecast_grade(index, kind, points, (at + next_at) * 0.5, lane, step_length)
 			v = RunnerRules.slide_speed_step(v, grade, dt)
@@ -599,15 +656,19 @@ func _round_mesh(top: float, bottom: float, height: float, sides: int) -> Cylind
 func _part(parent: Node3D, frame: Transform3D, lane: float, bottom: float, width: float, height: float, depth: float, mesh: Mesh, mat: Material, hazards: Array[Dictionary], at: float, group: Dictionary, profile: String = "BOX", tilt: float = 0.0) -> void:
 	var visual := MeshInstance3D.new()
 	visual.mesh = mesh
-	visual.material_override = mat
+	var grid_material := ShaderMaterial.new()
+	grid_material.shader = ObstacleGrid
+	var solid_material := mat as StandardMaterial3D
+	grid_material.set_shader_parameter("grid_color", solid_material.albedo_color if solid_material != null else Color.WHITE)
+	visual.material_override = grid_material
 	var basis := frame.basis.rotated(-frame.basis.z, tilt)
 	visual.transform = Transform3D(basis, frame.origin + frame.basis.x * lane + frame.basis.y * (bottom + height * 0.5))
 	parent.add_child(visual)
 	hazards.append({"s": at, "lane": lane, "width": width, "height": height, "bottom": bottom, "depth": depth, "profile": profile, "group": group})
 
 func _spawn_obstacle(node: Node3D, hazards: Array[Dictionary], frame: Transform3D, at: float, lane: float, shape_id: int) -> void:
-	var mat := _material(track_color(at, 0.40, 0.88, 1.0))
-	var accent := _material(track_color(at, 0.48, 0.42, 1.0))
+	var mat := _material(track_color(at, 0.50, 0.93, 1.0))
+	var accent := _material(track_color(at, 0.50, 0.52, 1.0))
 	var group := {"used": false, "shape": shape_id}
 	match shape_id:
 		0: # Tall rectangular block
@@ -643,7 +704,7 @@ func _spawn_obstacle(node: Node3D, hazards: Array[Dictionary], frame: Transform3
 			_part(node, frame, lane + 3.6, 0.0, 3.0, 6.0, 3.0, _round_mesh(0.0, 1.5, 6.0, 5), accent, hazards, at, group, "CONE")
 
 func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transform3D, at: float, opening: float, gap_width: float) -> void:
-	var mat := _material(track_color(at, 0.40, 0.92, 0.85))
+	var mat := _material(track_color(at, 0.50, 0.92, 1.0))
 	var group := {"used": false, "rewarded": false, "shape": 10, "gate": true, "opening": opening, "gap_width": gap_width}
 	var left_edge := opening - gap_width * 0.5
 	var right_edge := opening + gap_width * 0.5
@@ -786,13 +847,22 @@ func lane_limit(distance: float = -1.0) -> float:
 	return (HALF_WIDTH if distance < 0.0 else half_width_at(distance)) - 0.75
 
 func _special_profile(kind: String) -> bool:
-	return kind in ["CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES"]
+	return kind in ["CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SPLIT ROUTE"]
 
 func _profile_envelope(local_s: float) -> float:
 	return smoothstep(0.0, 45.0, local_s) * (1.0 - smoothstep(147.0, 192.0, local_s))
 
+func _branch_envelope(local_s: float) -> float:
+	# Smooth rise and fall across the entire fork. Zero slope at seams
+	# and midpoint; no sharp change into a level overpass.
+	var u := clampf(local_s / CHUNK_LENGTH, 0.0, 1.0)
+	return pow(sin(PI * u), 2.0)
+
 func _cross_xy(kind: String, local_s: float, across: float) -> Vector2:
 	var envelope := _profile_envelope(local_s)
+	if kind == "SPLIT ROUTE":
+		var spread := 48.0 * _branch_envelope(local_s)
+		return Vector2(across + signf(across) * spread * smoothstep(0.0, 12.0, absf(across)), 0.0)
 	if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
 		var angle := (PI * 0.975 if kind == "CORKSCREW TUNNEL" else PI * 0.48) * envelope
 		if angle > 0.0001:
@@ -800,8 +870,10 @@ func _cross_xy(kind: String, local_s: float, across: float) -> Vector2:
 			var theta := across / radius
 			return Vector2(radius * sin(theta), radius * (1.0 - cos(theta)))
 	if kind == "STACKED ROUTES" and across < 0.0:
-		# Upper left deck gradually crosses above the lower right deck.
-		return Vector2(across + 60.0 * envelope, 22.0 * envelope)
+		# Upper deck follows a long, smooth crossover. Blend the inner
+		# edge only while it is joined to the lower road at the seams.
+		var weight := smoothstep(0.0, 4.0, -across) * _branch_envelope(local_s)
+		return Vector2(across + 60.0 * weight, 22.0 * weight)
 	return Vector2(across, 0.0)
 
 func _cross_normal(kind: String, local_s: float, across: float) -> Vector2:
@@ -813,13 +885,13 @@ func _cross_normal(kind: String, local_s: float, across: float) -> Vector2:
 
 func _cell_supported(kind: String, local_s: float, across: float) -> bool:
 	if kind == "SPLIT ROUTE":
-		var opening := 12.0 * _profile_envelope(local_s)
+		var opening := 12.0 * _branch_envelope(local_s)
 		return absf(across) >= opening
 	if kind == "GAP CROSSING":
 		return not (local_s >= 76.0 and local_s < 96.0 and across > 12.0)
 	if kind == "STACKED ROUTES":
 		# A centre opening keeps the upper and lower deck physically separate.
-		return absf(across) >= 4.0 * _profile_envelope(local_s)
+		return absf(across) >= 4.0 * _branch_envelope(local_s)
 	return true
 
 func _local_s(distance: float) -> float:
@@ -1080,10 +1152,28 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 			if angle > 0.0001:
 				var radius := HALF_WIDTH / angle
 				across = atan2(across, radius - raw_y) * radius
+		elif kind == "SPLIT ROUTE":
+			# The fork mapping is monotone; invert it without guessing
+			# which branch is nearest. Keep off-road coordinates outside.
+			var sign_value := signf(across)
+			var magnitude := absf(across)
+			var spread := 48.0 * _branch_envelope(local_s)
+			if magnitude >= 12.0 + spread:
+				across = sign_value * (magnitude - spread)
+			else:
+				var low := 0.0
+				var high := 12.0
+				for iteration in range(12):
+					var mid := (low + high) * 0.5
+					if mid + spread * smoothstep(0.0, 12.0, mid) < magnitude:
+						low = mid
+					else:
+						high = mid
+				across = sign_value * (low + high) * 0.5
 		elif kind == "STACKED ROUTES":
-			var envelope := _profile_envelope(local_s)
+			var envelope := _branch_envelope(local_s)
 			var lower := clampf(across, 0.001, HALF_WIDTH)
-			var upper := clampf(across - 60.0 * envelope, -HALF_WIDTH, -0.001)
+			var upper := clampf(across - 60.0 * envelope, -HALF_WIDTH, -4.0)
 			var upper_xy := _cross_xy(kind, local_s, upper)
 			var lower_xy := _cross_xy(kind, local_s, lower)
 			var query := Vector2(across, raw_y)
