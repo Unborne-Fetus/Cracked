@@ -19,49 +19,18 @@ func _run_tests() -> void:
 	course.set("showcase_layout", true)
 	game.call("_restart")
 	await process_frame
-	# The new rider is real pixel art, not a block-and-sphere model.
-	var rider_visual: Sprite3D = runner.get("rider_sprite")
-	var rider_frames: Array = runner.get("rider_textures")
-	if rider_frames.size() != 3 or rider_visual.texture_filter != BaseMaterial3D.TEXTURE_FILTER_NEAREST:
-		_fail("Pixel rider is missing its three nearest-filtered pose textures.")
+	# The avatar is articulated geometry, with a separate curved deck.
+	var model: Node3D = runner.get("rider_model")
+	var flip_board: Node3D = runner.get("board_pivot")
+	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 2:
+		_fail("Block rider or curved board geometry is missing.")
 		return
-	for texture_value in rider_frames:
-		var pixels: Image = texture_value.get_image()
-		if pixels.get_size() != Vector2i(36, 32):
-			_fail("Rider texture is not at the intended sprite resolution.")
-			return
-		var occupied := 0
-		for y in range(pixels.get_height()):
-			for x in range(pixels.get_width()):
-				var pixel := pixels.get_pixel(x, y)
-				if pixel.a > 0.0:
-					occupied += 1
-					if not pixel.is_equal_approx(Color.WHITE):
-						_fail("Pixel rider contains unwanted colored or shaded pixels.")
-						return
-		if occupied < 50:
-			_fail("Pixel rider pose is empty.")
-			return
 	var sprite_camera: Camera3D = game.get("view_camera")
-	runner.set("is_sliding", true)
-	runner.call("update_rider_sprite", sprite_camera)
-	if int(runner.get("rider_pose")) != 1:
-		_fail("Sliding did not select the carving sprite.")
-		return
-	runner.set("is_sliding", false)
-	runner.call("update_rider_sprite", sprite_camera)
-	if int(runner.get("rider_pose")) != 0:
-		_fail("Standing did not restore the cruising sprite.")
-		return
-	# Rear chase uses the centered rear art, and only the board flips.
-	var old_sprite_camera_position := sprite_camera.global_position
-	sprite_camera.global_position = runner.global_position + runner.transform.basis.z * 12.0 + runner.transform.basis.y * 4.0
 	runner.set("grounded", false)
 	runner.set("kickflip_progress", 0.5)
 	runner.call("update_rider_sprite", sprite_camera)
-	var flip_board: Node3D = runner.get("board_pivot")
-	if bool(runner.get("rider_is_side_view")) or absf(absf(flip_board.rotation.z) - PI) > 0.02:
-		_fail("Rear camera or board-only kickflip failed.")
+	if absf(absf(flip_board.rotation.z) - PI) > 0.02 or absf(model.rotation.z) > 0.01:
+		_fail("Board-only kickflip rotated the rider or failed.")
 		return
 	runner.set("grounded", true)
 	runner.set("kickflip_progress", 1.0)
@@ -69,7 +38,6 @@ func _run_tests() -> void:
 	if absf(flip_board.rotation.z) > 0.01:
 		_fail("Board did not reset flat on landing.")
 		return
-	sprite_camera.global_position = old_sprite_camera_position
 	runner.call("set_first_person", true)
 	var sprite_avatar: Node3D = runner.get("avatar")
 	if sprite_avatar.visible:
@@ -276,6 +244,24 @@ func _run_tests() -> void:
 		_fail("Sideways landing retained the old flight state.")
 		return
 	game.call("_update_camera", 1.0 / 60.0)
+	# Simulate a sideways rider actually approaching an upright floor;
+	# do not simply invoke the landing completion method.
+	game.call("_restart")
+	await process_frame
+	var floor_s := 52.0
+	var floor_frame: Transform3D = course.call("surface_frame", floor_s, 0.0, 1)
+	var floor_sideways := floor_frame.basis.rotated(-floor_frame.basis.z, PI * 0.5)
+	runner.set("distance", floor_s)
+	runner.set("lane", 0.0)
+	runner.set("grounded", false)
+	runner.set("air_time", 0.35)
+	runner.set("air_basis", floor_sideways)
+	runner.set("air_velocity", -floor_frame.basis.z * 30.0 - floor_frame.basis.y * 4.0)
+	runner.transform = Transform3D(floor_sideways, floor_frame.origin + floor_frame.basis.y * 0.23)
+	runner.call("_advance_flight", 1.0 / 60.0, course, 0.0)
+	if not bool(runner.get("grounded")) or runner.transform.basis.y.dot(floor_frame.basis.y) < 0.98:
+		_fail("Sideways shallow floor contact failed to recover.")
+		return
 	# Head-first contact with a ceiling is blocked before the feet cross.
 	game.call("_restart")
 	await process_frame

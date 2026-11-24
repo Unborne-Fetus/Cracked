@@ -69,17 +69,12 @@ var clean_gates := 0
 var perfect_landings := 0
 var dive_landings := 0
 var double_jumps := 0
-const RiderSprites = preload("res://scripts/rider_sprites.gd")
-var rider_sprite: Sprite3D
-var rider_textures: Array[Texture2D] = []
-var rider_side_textures: Array[Texture2D] = []
-var rider_side_body_textures: Array[Texture2D] = []
+const RiderModel = preload("res://scripts/rider_model.gd")
+var rider_model: Node3D
 var board_pivot: Node3D
 var kickflip_progress := 1.0
 const KICKFLIP_TIME := 0.42
-var rider_is_side_view := false
-var rider_pose := RiderSprites.CRUISE
-var rider_facing_left := false
+var rider_crouch := 0.0
 var key_bindings: Dictionary = {}
 var pad_bindings: Dictionary = {}
 var momentum_reserve := 0.0
@@ -95,76 +90,21 @@ var avatar: Node3D
 func _ready() -> void:
 	avatar = Node3D.new()
 	add_child(avatar)
-	rider_textures = RiderSprites.make_textures()
-	rider_side_textures = RiderSprites.make_textures(true)
-	rider_side_body_textures = RiderSprites.make_textures(true, true)
-	rider_sprite = Sprite3D.new()
-	rider_sprite.name = "PixelHoverboardRider"
-	rider_sprite.texture = rider_textures[RiderSprites.CRUISE]
-	rider_sprite.pixel_size = RiderSprites.PIXEL_SIZE
-	rider_sprite.position.y = RiderSprites.HEIGHT * RiderSprites.PIXEL_SIZE * 0.5
-	rider_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	rider_sprite.shaded = false
-	rider_sprite.double_sided = true
-	rider_sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
-	avatar.add_child(rider_sprite)
-	# A separate deck gives the rear view real foreshortening and allows
-	# a kickflip without rotating the character or the collision body.
-	board_pivot = Node3D.new()
-	board_pivot.name = "HoverboardFlip"
-	avatar.add_child(board_pivot)
-	var deck := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(1.35, 0.12, 2.15)
-	deck.mesh = mesh
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = Color.WHITE
-	deck.material_override = material
-	board_pivot.add_child(deck)
+	rider_model = RiderModel.new()
+	rider_model.name = "BlockRider"
+	avatar.add_child(rider_model)
+	board_pivot = rider_model.get("board")
 
-func update_rider_sprite(camera: Camera3D) -> void:
-	if not is_instance_valid(rider_sprite):
+func update_rider_sprite(_camera: Camera3D) -> void:
+	if not is_instance_valid(rider_model):
 		return
-	# Preserve the physical bank-relative up axis. Face the camera only
-	# around that axis, so the sprite never disappears edge-on or turns
-	# upright during a wall/ceiling ride.
-	var relative := avatar.to_local(camera.global_position)
-	if Vector2(relative.x, relative.z).length_squared() > 0.0001:
-		rider_sprite.rotation.y = atan2(relative.x, relative.z)
-	var next_pose := RiderSprites.CRUISE
-	if not grounded:
-		next_pose = RiderSprites.BOOST if diving else RiderSprites.CARVE
-	elif is_sliding:
-		next_pose = RiderSprites.BOOST if speed >= 90.0 and absf(lateral_speed) < 5.0 else RiderSprites.CARVE
-	# Rear art stays active throughout the chase cone. Only a deliberate
-	# near-profile camera orbit switches to the approved side art.
-	var side_view := absf(relative.x) > absf(relative.z) * (1.6 if rider_is_side_view else 2.4)
-	rider_pose = next_pose
-	rider_is_side_view = side_view
-	var flipping := not grounded and kickflip_progress < 1.0
-	if side_view:
-		rider_sprite.texture = rider_side_body_textures[rider_pose] if flipping else rider_side_textures[rider_pose]
-	else:
-		rider_sprite.texture = rider_textures[rider_pose]
-	board_pivot.visible = not side_view or flipping
-	board_pivot.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	board_pivot.position.y = (0.075 - (sin(PI * kickflip_progress) * 0.24 if flipping else 0.0)) / maxf(0.05, avatar.scale.y)
-	board_pivot.rotation.z = TAU * smoothstep(0.0, 1.0, kickflip_progress) if flipping else 0.0
-	# Hysteresis avoids rapid mirroring when the steering input is neutral.
-	if grounded and absf(lateral_speed) > 2.5:
-		rider_facing_left = lateral_speed * screen_steer_sign < 0.0
-	rider_sprite.flip_h = relative.x < 0.0 if rider_is_side_view else false
-	# The original collision envelope is unchanged; sprite-only pitch
-	# expresses the jump/dive and never changes contact or momentum.
-	# The crouched textures already contain their full pose. Counter the
-	# legacy collision capsule scale, otherwise the rider is squashed twice.
-	rider_sprite.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_sprite.position.y = RiderSprites.HEIGHT * RiderSprites.PIXEL_SIZE * 0.5 / maxf(0.05, avatar.scale.y)
-	var tilt := 0.0
-	if not grounded:
-		tilt = -0.18 if diving else 0.12
-	rider_sprite.rotation.z = (-tilt if rider_facing_left else tilt) if rider_is_side_view else 0.0
+	# Legacy collision scale stays independent of the articulated model.
+	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
+	var target := 0.85 if is_sliding else (0.72 if not grounded else 0.0)
+	if diving:
+		target = 1.0
+	rider_crouch = lerpf(rider_crouch, target, 0.22)
+	rider_model.call("pose", rider_crouch, clampf(lateral_speed/25.0,-1.0,1.0), not grounded, kickflip_progress)
 
 func reset_run(course: Node3D) -> void:
 	distance = 8.0
@@ -207,15 +147,9 @@ func reset_run(course: Node3D) -> void:
 	avatar.scale = Vector3.ONE
 	avatar.position = Vector3.ZERO
 	kickflip_progress = 1.0
-	board_pivot.rotation = Vector3.ZERO
-	rider_pose = RiderSprites.CRUISE
-	rider_is_side_view = false
-	rider_facing_left = false
-	rider_sprite.texture = rider_textures[rider_pose]
-	rider_sprite.flip_h = false
-	rider_sprite.rotation = Vector3.ZERO
-	rider_sprite.scale = Vector3.ONE
-	rider_sprite.position.y = RiderSprites.HEIGHT * RiderSprites.PIXEL_SIZE * 0.5
+	rider_crouch = 0.0
+	rider_model.scale = Vector3.ONE
+	rider_model.call("pose", 0.0, 0.0, false, 1.0)
 	sync_pose(course)
 
 func request_jump() -> void:
@@ -224,7 +158,7 @@ func request_jump() -> void:
 
 func apply_cosmetic(_index: int) -> void:
 	# Preserve saved unlocks, but the approved first set is monochrome.
-	rider_sprite.modulate = Color.WHITE
+	pass
 
 func key_down(action: String, defaults: Array) -> bool:
 	for code in key_bindings.get(action, defaults):
@@ -442,6 +376,8 @@ func _finish_landing(course: Node3D) -> void:
 	landing_blend = LANDING_BLEND_TIME if air_basis.y.dot(frame.basis.y) > 0.85 else 0.0
 	air_basis = frame.basis
 	recover_air_roll = false
+	lateral_speed = clampf(lateral_speed, -35.0, 35.0)
+	air_velocity = Vector3.ZERO
 	height = 0.0
 	vertical_speed = 0.0
 	air_time = 0.0
@@ -519,11 +455,44 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 			break
 		_flight_step(step, course, steer)
 
+func _recover_floor_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, old_s: float, predicted_s: float) -> bool:
+	if air_time < 0.12:
+		return false
+	var contact: Vector3 = course.call("project_position", next_pos, predicted_s)
+	if not bool(course.call("support_at", contact.x, contact.y)):
+		return false
+	var frame: Transform3D = course.call("surface_frame", contact.x, contact.y, 1)
+	# Only upward-facing riding surfaces; retain true wall/ceiling
+	# sweeps and head-first protection on inverted sections.
+	if frame.basis.y.y < 0.60 or air_velocity.dot(frame.basis.y) > 0.15:
+		return false
+	var alignment := air_basis.y.dot(frame.basis.y)
+	if alignment < -0.55:
+		return false
+	var gap: float = course.call("surface_clearance", contact.x, contact.y, contact.z, 1)
+	var previous: Vector3 = course.call("project_position", old_pos, old_s)
+	var previous_gap: float = course.call("surface_clearance", previous.x, previous.y, previous.z, 1)
+	# A sideways torso can be the first thing touching the floor. A
+	# small persistent overlap or descending crossing must settle rather
+	# than requiring an exact new zero crossing on every physics step.
+	var reach := 0.18 if alignment > 0.55 else 0.85
+	if gap > reach or gap < -0.28 or previous_gap < -0.28 or gap > previous_gap + 0.035:
+		return false
+	if alignment > 0.55 and previous_gap > 0.0 and gap > 0.0:
+		return false
+	distance = contact.x
+	lane = contact.y
+	surface_side = 1
+	_apply_landing_result(frame)
+	lateral_speed = air_velocity.dot(frame.basis.x)
+	_finish_landing(course)
+	return true
+
 func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	air_time += delta
 	# Launching off a curved wall can leave the rider ninety degrees
 	# sideways. Recover roll in free space, not by rotating with the road.
-	if recover_air_roll and air_time > 0.12:
+	if (recover_air_roll and air_time > 0.12) or (air_time > 0.40 and air_basis.y.y < 0.45 and air_velocity.y < 0.0):
 		var forward := -air_basis.z
 		if absf(forward.dot(Vector3.UP)) < 0.95:
 			var upright := Basis.looking_at(forward, Vector3.UP)
@@ -565,6 +534,8 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	var shift := new_origin - old_origin
 	previous_pos -= shift
 	next_pos -= shift
+	if _recover_floor_contact(course, previous_pos, next_pos, old_s, predicted_s):
+		return
 	var body_contact := _body_sweep(course, previous_pos, next_pos, old_s, predicted_s)
 	if not body_contact.is_empty():
 		var normal: Vector3 = body_contact["normal"]
