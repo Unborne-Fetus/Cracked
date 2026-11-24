@@ -263,6 +263,63 @@ func _run() -> void:
 		_fail("Full physics route traversal exceeded 120 seconds.")
 		return
 	print("Full physics route traversal: %.1f seconds" % traversal_time)
+	# Test high-speed items, warning geometry and distinct guardian responses.
+	if rules.landing_speed(Vector3(0.0, -20.0, -270.0), Vector3(0.0, 1.0, -0.1).normalized(), -0.2, true, 295.0) <= 250.0:
+		_fail("Redline speed cap lost on landing.")
+		return
+	runner.call("reset", course)
+	runner.call("apply_upgrades", {}, 0)
+	runner.set("energy", 80.0)
+	runner.call("apply_guardian_hit", 1, 1.0)
+	if float(runner.get("energy")) != 60.0:
+		_fail("Guardian drain effect failed.")
+		return
+	runner.call("apply_guardian_hit", 3, 1.0)
+	if float(runner.get("energy_lock")) <= 0.0 or bool(runner.call("_activate_boost")):
+		_fail("Guardian ability jam failed.")
+		return
+	runner.call("apply_guardian_hit", 2, -1.0)
+	if float(runner.get("gust_time")) <= 0.0 or float(runner.get("gust_direction")) != -1.0:
+		_fail("Guardian gust effect failed.")
+		return
+	# Test the safe route geometry without building all 50 worlds.
+	for style in [0, 1, 2, 4]:
+		course.set("route_style", style)
+		for index in range(3, 10):
+			var hole: Rect2 = course.call("gap_rect", index)
+			if not hole.has_area():
+				continue
+			var safe: float = course.call("safe_lane", hole)
+			if not bool(course.call("has_ground", safe, hole.get_center().y)) or absf(float(course.call("guide_x", hole.get_center().y)) - safe) > 0.1:
+				_fail("Ravine guidance leaves supported terrain.")
+				return
+	# Traverse a route with actual ravines using steering, dive and boost.
+	course.call("reset", 72819, 1, 1, false)
+	runner.call("reset", course)
+	runner.call("apply_upgrades", {}, 0)
+	var hazard_length: float = course.get("length")
+	var streamed := -1
+	for frame in range(120 * 150):
+		var progress: float = runner.call("progress")
+		if progress >= hazard_length:
+			break
+		if bool(runner.get("fallen")):
+			_fail("Guided ravine route fell into void.")
+			return
+		var chunk_id := int(floor(progress / 160.0))
+		if chunk_id != streamed:
+			course.call("stream", progress)
+			streamed = chunk_id
+		var goal: float = course.call("guide_x", progress + 45.0)
+		var steer := clampf((goal - runner.position.x) / 14.0 - float(runner.get("lateral")) * 0.012, -1.0, 1.0)
+		if float(runner.get("energy")) >= float(runner.call("boost_cost")) and float(runner.get("speed")) < 70.0 and float(runner.get("cooldown")) <= 0.0:
+			runner.call("request_boost")
+		var dive_now := not bool(runner.get("grounded")) and float(runner.get("vy")) < -6.0
+		runner.call("_step", 1.0 / 120.0, course, steer, dive_now)
+	if float(runner.call("progress")) < hazard_length:
+		_fail("Ravine route did not finish.")
+		return
+	print("Guided ravine route traversal passed")
 	# Test the scene's real state transitions with controlled finish positions,
 	# rather than claiming a full human playthrough.
 	game.call("_new_expedition")

@@ -25,6 +25,9 @@ var build_label: Label
 var trial_label: Label
 var last_guardian_clean := 0
 var paused_from := "running"
+var navigation_label: Label
+var title_button: Button
+var guidance_enabled := true
 var course: Node3D
 var runner: Node3D
 var camera: Camera3D
@@ -261,7 +264,7 @@ func _physics_process(delta: float) -> void:
 		if expedition.complete:
 			unlocked_shard = maxi(unlocked_shard, mini(expedition.shard + 1, Expedition.SHARD_COUNT))
 			_save()
-			_show("shard_complete", "SHARD CLEARED  /  " + rank, "%s  •  %.0f m in %.1f s" % [expedition.title(), expedition.total_distance, expedition.total_time], "NEXT SHARD" if expedition.shard < Expedition.SHARD_COUNT else "NEW EXPEDITION")
+			_show("shard_complete", "SHARD CLEARED  /  " + rank, "%s  •  %.0f m in %.1f s  •  Guardian %s" % [expedition.title(), expedition.total_distance, expedition.total_time, guardian.call("grade")], "NEXT SHARD" if expedition.shard < Expedition.SHARD_COUNT else "NEW EXPEDITION")
 		else:
 			_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d attempts left%s" % [runner.get("perfect_landings"), lives, ("  •  TRIAL " + ("PASSED" if expedition.trial_success else "MISSED")) if expedition.route == 4 else ""], "NEXT WORLD")
 
@@ -348,6 +351,8 @@ func _make_ui() -> void:
 	stats.add_child(boss_label)
 	trial_label = _label("", 15)
 	stats.add_child(trial_label)
+	navigation_label = _label("", 15)
+	stats.add_child(navigation_label)
 	cue_label = _label("", 24)
 	root.add_child(cue_label)
 	cue_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -464,12 +469,15 @@ func _make_ui() -> void:
 	menu_button = _button("RESTART RUN")
 	stack.add_child(menu_button)
 	menu_button.pressed.connect(func() -> void: _new_expedition(); _start())
+	title_button = _button("RETURN TO TITLE")
+	title_button.pressed.connect(_return_to_title)
+	stack.add_child(title_button)
 	music_button = CheckButton.new()
 	music_button.text = "Soundtrack"
 	music_button.set_pressed_no_signal(music_enabled)
 	music_button.toggled.connect(func(v: bool) -> void: music_enabled = v; _configure_music(); _save())
 	stack.add_child(music_button)
-	var hint := _label("A / D  STEER    ·    HOLD SPACE  DIVE    ·    F  ABILITY", 16)
+	var hint := _label("A / D  STEER    ·    HOLD SPACE  DIVE    ·    F  ABILITY    ·    M  TITLE", 16)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(hint)
 
@@ -479,11 +487,18 @@ func _update_hud() -> void:
 	time_label.text = "TIME  %02d:%05.2f" % [int(elapsed / 60.0), fmod(elapsed, 60.0)]
 	best_label.text = "BEST  %d m" % int(maxf(best, s))
 	energy_meter.value = float(runner.get("energy"))
-	energy_label.text = str(Expedition.ABILITIES[expedition.ability]).to_upper() + (" READY" if energy_meter.value >= float(runner.call("boost_cost")) else "")
+	var able := energy_meter.value >= float(runner.call("boost_cost")) and float(runner.get("cooldown")) <= 0.0 and float(runner.get("energy_lock")) <= 0.0
+	energy_label.text = str(Expedition.ABILITIES[expedition.ability]).to_upper() + (" READY" if able else "")
 	boss_label.visible = expedition.guardian()
-	boss_label.text = "%s  •  PHASE %d / 3  •  %s" % [guardian.call("boss_name"), int(guardian.get("phase")) + 1, guardian.call("instruction")]
+	boss_label.text = "%s  •  PHASE %d / 3  •  %s" % [guardian.call("boss_name"), int(guardian.get("phase")) + 1, guardian.call("instruction_detail")]
 	trial_label.visible = expedition.route == 4
-	trial_label.text = expedition.trial_text() if expedition.route == 4 else ""
+	var progress_values: Array = [runner.get("perfect_landings"), int(runner.get("peak_speed")), expedition.pending_currency, runner.get("peak_chain")]
+	trial_label.text = expedition.trial_text() + "  •  %d/%d" % [int(progress_values[expedition.trial_kind]), expedition.trial_target()] if expedition.route == 4 else ""
+	var gap: Rect2 = course.call("next_gap", s, 420.0)
+	navigation_label.visible = guidance_enabled and gap.has_area() and status == "running"
+	if navigation_label.visible:
+		var side := "RIGHT" if float(course.call("safe_lane", gap)) > 0.0 else "LEFT"
+		navigation_label.text = "RAVINE %dm  •  BYPASS %s" % [maxi(0, int(gap.position.y - s)), side]
 	expedition_label.text = "SHARD %02d  •  %d/%d  •  %d sparks  •  %d attempts" % [expedition.shard, expedition.world, Expedition.WORLDS_PER_SHARD, expedition.currency + expedition.pending_currency, expedition.attempts]
 	cue_label.text = str(runner.get("cue"))
 	cue_label.visible = float(runner.get("cue_time")) > 0.0 and status == "running"
@@ -508,6 +523,8 @@ func _show(value: String, title: String, detail: String, action: String) -> void
 			route_buttons[i].visible = expedition.world < Expedition.WORLDS_PER_SHARD - 1 or i < 3
 	action_button.visible = value not in ["complete", "rest"]
 	menu_button.visible = value != "ready"
+	title_button.visible = value != "ready"
+	navigation_label.hide()
 	touch_controls.hide()
 	cue_label.hide()
 	if value == "complete":
@@ -594,10 +611,7 @@ func _input(event: InputEvent) -> void:
 				_toggle_pause()
 				get_viewport().set_input_as_handled()
 			KEY_M:
-				if status != "ready":
-					_store_checkpoint()
-					_refresh_shard_picker()
-					_show("ready", "VECTOR VELOCITY", "Continue your expedition or start a new one.", "START NEW RUN")
+				_return_to_title()
 				get_viewport().set_input_as_handled()
 			KEY_R:
 				_new_expedition()
@@ -677,3 +691,11 @@ func _resume_checkpoint() -> void:
 		_start()
 	else:
 		_show("lost", "EXPEDITION ENDED", "No attempts remaining.", "NEW EXPEDITION")
+
+func _return_to_title() -> void:
+	if status == "ready":
+		return
+	_store_checkpoint()
+	_refresh_shard_picker()
+	ability_picker.select(ability_setting)
+	_show("ready", "VECTOR VELOCITY", "Continue your expedition or start a new one.", "START NEW RUN")

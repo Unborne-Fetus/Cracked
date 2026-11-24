@@ -196,7 +196,7 @@ func _build(index: int) -> void:
 		for i in range(1 if route_style == 3 else (6 if route_style == 4 else 3 + mini(stage - 1, 2))):
 			var at := start + 20.0 + float(i) * 23.0 + rng.randf_range(-4.0, 4.0)
 			var across := rng.randf_range(-65.0, 65.0)
-			if not has_ground(across, at) or absf(across) < 9.0:
+			if not has_ground(across, at) or absf(across - guide_x(at)) < 12.0 or absf(across) < 9.0:
 				continue
 			var radius := rng.randf_range(2.0, 4.8)
 			var rock := MeshInstance3D.new()
@@ -211,7 +211,7 @@ func _build(index: int) -> void:
 	for i in range(6):
 		var across := (-1.0 if i % 2 == 0 else 1.0) * rng.randf_range(72.0, 99.0)
 		var at := start + 12.0 + float(i) * 23.0
-		if not has_ground(across, at):
+		if not has_ground(across, at) or absf(across - guide_x(at)) < 12.0:
 			continue
 		var spire := MeshInstance3D.new()
 		spire.mesh = ridge_mesh
@@ -226,7 +226,7 @@ func _build(index: int) -> void:
 	if index >= 0 and start < length - 80.0:
 		for i in range(3):
 			var at := start + 24.0 + float(i) * 48.0
-			var across := sin(float(index * 3 + i) * 0.62 + phase) * 24.0
+			var across := guide_x(at) + sin(float(index * 3 + i) * 0.62 + phase) * 7.0
 			if not has_ground(across, at):
 				var hole := gap_rect(index)
 				across = 80.0 if hole.position.x < -100.0 else -80.0
@@ -240,6 +240,13 @@ func _build(index: int) -> void:
 			spark.scale = Vector3(1.0, 1.55, 1.0)
 			node.add_child(spark)
 			sparks.append({"point": Vector3(across, height, -at), "node": spark, "used": false})
+			if route_style in [2, 4] and i == 1:
+				var airborne := MeshInstance3D.new()
+				airborne.mesh = spark_mesh
+				airborne.material_override = spark_material
+				airborne.position = Vector3(across, height + 8.0, -(at - start))
+				node.add_child(airborne)
+				sparks.append({"point": Vector3(across, height + 8.0, -at), "node": airborne, "used": false})
 	chunks[index] = {"node": node, "rocks": rocks, "sparks": sparks}
 
 func _cliff(st: SurfaceTool, a: Vector2, b: Vector2, start: float) -> void:
@@ -308,3 +315,29 @@ func collect_sparks(a: Vector3, b: Vector3, reach: float = 3.6) -> int:
 				instance.hide()
 				gained += 2
 	return gained
+
+# Look ahead far enough for a player moving at the maximum speed to steer.
+func next_gap(s: float, look: float = 420.0) -> Rect2:
+	var first := int(floor(s / CHUNK))
+	var last := int(floor((s + look) / CHUNK))
+	for index in range(first, last + 1):
+		var gap := gap_rect(index)
+		if gap.has_area() and gap.end.y >= s and gap.position.y <= s + look:
+			return gap
+	return Rect2()
+
+func safe_lane(gap: Rect2) -> float:
+	if not gap.has_area():
+		return 0.0
+	if gap.position.x <= -HALF_WIDTH + 0.1:
+		return (gap.end.x + HALF_WIDTH) * 0.5
+	return (-HALF_WIDTH + gap.position.x) * 0.5
+
+# A smoothly approaching route, visible through pickups and used by tests.
+func guide_x(s: float) -> float:
+	var gap := next_gap(s - 55.0, 480.0)
+	if not gap.has_area():
+		return 0.0
+	var approach := smoothstep(gap.position.y - 300.0, gap.position.y - 65.0, s)
+	var release := 1.0 - smoothstep(gap.end.y + 15.0, gap.end.y + 115.0, s)
+	return safe_lane(gap) * approach * release

@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Movement and encounter polish
+- Shared swept landing contact, corrected Redline cap, ravine approach guidance and collectible paths.
+- Guardian-specific penalties, clean streaks, safe-corridor planning, and encounter grades.
+- Live trial progress and ability availability, return-to-title control and guided ravine traversal regression.
+
 ## Gameplay depth and continuity
 - 52 items, four set bonuses, ten guardian programs, six patterns and ten terrain motifs.
 - Optional objective-based trials, persistent checkpoints, inventory and route explanations.

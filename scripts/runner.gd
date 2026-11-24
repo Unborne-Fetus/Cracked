@@ -56,6 +56,9 @@ var void_rescues := 0
 var safe_position := Vector3.ZERO
 var cooldown := 0.0
 var course_route := 0
+var gust_time := 0.0
+var gust_direction := 0.0
+var energy_lock := 0.0
 
 func _ready() -> void:
 	model = Node3D.new()
@@ -163,6 +166,9 @@ func reset(course: Node3D) -> void:
 	last_motion = Vector3.ZERO
 	protected_time = 0.0
 	air_charge = 0.0
+	gust_time = 0.0
+	gust_direction = 0.0
+	energy_lock = 0.0
 	peak_speed = START_SPEED
 	peak_chain = 0
 	impacts = 0
@@ -188,12 +194,12 @@ func reset(course: Node3D) -> void:
 func progress() -> float:
 	return -position.z
 
-static func ground_speed(v: float, slope: float, dt: float) -> float:
+static func ground_speed(v: float, slope: float, dt: float, cap: float = MAX_SPEED) -> float:
 	# Maintain a strong running pace; downhill tangent gravity builds speed.
 	var slope_force := -slope * (65.0 if slope < 0.0 else 22.0)
 	var drive := 9.0 * (1.0 - v / 65.0)
 	var drag := 0.00010 * v * v
-	return clampf(v + (slope_force + drive - drag) * dt, 22.0, MAX_SPEED)
+	return clampf(v + (slope_force + drive - drag) * dt, 22.0, cap)
 
 static func should_launch(v: float, curve: float, slope: float) -> bool:
 	return v * v * curve < -GRAVITY * pow(1.0 + slope * slope, 1.5) * 0.82
@@ -209,20 +215,20 @@ static func landing_quality(v: Vector3, n: Vector3, slope: float) -> String:
 		return "OK"
 	return "BAD"
 
-static func landing_speed(v: Vector3, n: Vector3, slope: float, dive: bool) -> float:
+static func landing_speed(v: Vector3, n: Vector3, slope: float, dive: bool, cap: float = MAX_SPEED) -> float:
 	var quality := landing_quality(v, n, slope)
 	var tangent := v - n * v.dot(n)
 	var forward := maxf(0.0, -tangent.z)
 	var horizontal := maxf(0.0, -v.z)
 	match quality:
 		"PERFECT":
-			return clampf(maxf(horizontal, forward) * 1.12 + (8.0 if dive else 4.0), 22.0, MAX_SPEED)
+			return clampf(maxf(horizontal, forward) * 1.12 + (8.0 if dive else 4.0), 22.0, cap)
 		"GOOD":
-			return clampf(maxf(horizontal * 0.98, forward) + 2.5, 22.0, MAX_SPEED)
+			return clampf(maxf(horizontal * 0.98, forward) + 2.5, 22.0, cap)
 		"OK":
-			return clampf(horizontal * 0.82, 22.0, MAX_SPEED)
+			return clampf(horizontal * 0.82, 22.0, cap)
 		_:
-			return clampf(horizontal * 0.52, 22.0, MAX_SPEED)
+			return clampf(horizontal * 0.52, 22.0, cap)
 
 func apply_upgrades(values: Dictionary, ability_value: int = 0) -> void:
 	upgrades = values.duplicate()
@@ -258,7 +264,7 @@ func request_boost() -> void:
 	boost_queued = true
 
 func _activate_boost() -> bool:
-	if energy < boost_cost() or boost_time > 0.0 or cooldown > 0.0:
+	if energy < boost_cost() or boost_time > 0.0 or cooldown > 0.0 or energy_lock > 0.0:
 		return false
 	energy -= boost_cost()
 	boost_time = float([0.65, 1.35, 0.65, 0.85][ability]) + float(rank_of("boosttime")) * 0.18
@@ -316,10 +322,12 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 	land_lock = maxf(0.0, land_lock - dt)
 	protected_time = maxf(0.0, protected_time - dt)
 	cooldown = maxf(0.0, cooldown - dt)
+	gust_time = maxf(0.0, gust_time - dt)
+	energy_lock = maxf(0.0, energy_lock - dt)
 	var old := position
 	var s := -position.z
 	var g: Vector2 = course.call("grade", position.x, s)
-	var target_lateral := steer * minf(76.0, speed * 0.66) * (1.0 + float(rank_of("steer")) * 0.08)
+	var target_lateral := steer * minf(76.0, speed * 0.66) * (1.0 + float(rank_of("steer")) * 0.08) + (gust_direction * 12.0 if gust_time > 0.0 else 0.0)
 	lateral = lerpf(lateral, target_lateral, 1.0 - exp(-dt * (8.0 if grounded else 4.0) * (1.0 + float(rank_of("steer")) * 0.15 + (float(rank_of("wind")) * 0.17 if not grounded else 0.0))))
 	if boost_queued:
 		_activate_boost()
@@ -328,8 +336,8 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 		speed = minf(speed_limit(), speed + boost_accel() * dt)
 		boost_time = maxf(0.0, boost_time - dt)
 	if grounded:
-		var next_speed := ground_speed(minf(speed, MAX_SPEED), g.y, dt)
-		var change := next_speed - minf(speed, MAX_SPEED)
+		var next_speed := ground_speed(speed, g.y, dt, speed_limit())
+		var change := next_speed - speed
 		if change < 0.0 and g.y > 0.0:
 			change *= 1.0 - float(rank_of("coast")) * 0.13
 		var extra := float(rank_of("sprint")) * 1.5 * dt * (1.0 - smoothstep(50.0, 120.0, speed)) + float(rank_of("threshold")) * 2.0 * dt * smoothstep(80.0, 150.0, speed)
@@ -375,22 +383,13 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 			return
 		# Substeps and a bracketed crossing prevent tunneling at high speed.
 		if support and next.y <= next_floor and (land_lock <= 0.0 or vy < 0.0):
-			var low := 0.0
-			var high := 1.0
-			for i in range(9):
-				var mid := (low + high) * 0.5
-				var p := old.lerp(next, mid)
-				if not bool(course.call("has_ground", p.x, -p.z)) or p.y > float(course.call("elevation", p.x, -p.z)) + FOOT:
-					low = mid
-				else:
-					high = mid
-			position = old.lerp(next, high)
+			position = contact_point(course, old, next)
 			var normal: Vector3 = course.call("normal_at", position.x, -position.z)
 			var slope: Vector2 = course.call("grade", position.x, -position.z)
 			var velocity := Vector3(lateral, vy, -speed)
 			var quality := landing_quality(velocity, normal, slope.y)
 			if air_time >= 0.10:
-				var landing_result := landing_speed(velocity, normal, slope.y, diving)
+				var landing_result := landing_speed(velocity, normal, slope.y, diving, speed_limit())
 				if landing_result < speed:
 					landing_result = lerpf(landing_result, speed, float(rank_of("landing")) * 0.13 + (0.12 if has_set(["landing", "impact", "guardian"]) else 0.0))
 				speed = landing_result
@@ -450,13 +449,28 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 		cue = "MOMENTUM LOST"
 		cue_time = 0.65
 
-func apply_guardian_hit() -> void:
+func apply_guardian_hit(effect: int = 0, direction: float = 1.0) -> void:
 	if protected_time > 0.0:
 		return
 	impacts += 1
 	speed = maxf(22.0, speed * (0.68 + float(rank_of("guardian")) * 0.08))
 	flow_chain = 0
-	cue = "GUARDIAN WAVE"
+	match effect:
+		1:
+			energy = maxf(0.0, energy - 20.0)
+			cue = "ENERGY DRAIN"
+		2:
+			gust_time = 0.8
+			gust_direction = signf(direction)
+			cue = "CROSSWIND"
+		3:
+			energy_lock = 1.4
+			cue = "ABILITY JAMMED"
+		4:
+			if not grounded: vy = minf(vy, -14.0)
+			cue = "DOWNDRAFT"
+		_:
+			cue = "GUARDIAN WAVE"
 	cue_time = 0.7
 
 func _pose(dt: float, course: Node3D) -> void:
@@ -512,25 +526,29 @@ func predict_landing(course: Node3D, dive: bool) -> Dictionary:
 	var predicted_lateral := lateral
 	var steer := _steer()
 	var remaining_boost := boost_time
+	var lock := land_lock
 	var step := 1.0 / 120.0
 	for i in range(360):
+		lock = maxf(0.0, lock - step)
 		var was_boosting := remaining_boost > 0.0
 		if was_boosting:
 			forward = minf(speed_limit(), forward + boost_accel() * step)
 			remaining_boost = maxf(0.0, remaining_boost - step)
 		vertical -= flight_gravity(dive or (ability == 2 and remaining_boost > 0.0), remaining_boost) * step
 		forward = maxf(22.0, forward - air_drag() * step)
-		var target_lateral := steer * minf(76.0, forward * 0.66) * (1.0 + float(rank_of("steer")) * 0.08)
+		var target_lateral := steer * minf(76.0, forward * 0.66) * (1.0 + float(rank_of("steer")) * 0.08) + (gust_direction * 12.0 if gust_time > float(i + 1) * step else 0.0)
 		predicted_lateral = lerpf(predicted_lateral, target_lateral, 1.0 - exp(-step * 4.0 * (1.0 + float(rank_of("steer")) * 0.15 + float(rank_of("wind")) * 0.17)))
 		var next := p + Vector3(predicted_lateral, vertical, -forward) * step
 		var floor_y: float = course.call("elevation", next.x, -next.z)
 		var supported: bool = course.call("has_ground", next.x, -next.z)
-		if supported and next.y <= floor_y + FOOT:
+		if supported and next.y <= floor_y + FOOT and (lock <= 0.0 or vertical < 0.0):
 			if not bool(course.call("has_ground", p.x, -p.z)) and next.y < floor_y - 0.5:
 				return {}
-			var n: Vector3 = course.call("normal_at", next.x, -next.z)
-			var slope: Vector2 = course.call("grade", next.x, -next.z)
-			return {"point": Vector3(next.x, floor_y, next.z), "normal": n, "quality": landing_quality(Vector3(predicted_lateral, vertical, -forward), n, slope.y)}
+			var contact := contact_point(course, p, next)
+			var n: Vector3 = course.call("normal_at", contact.x, -contact.z)
+			var slope: Vector2 = course.call("grade", contact.x, -contact.z)
+			contact.y = float(course.call("elevation", contact.x, -contact.z))
+			return {"point": contact, "normal": n, "quality": landing_quality(Vector3(predicted_lateral, vertical, -forward), n, slope.y), "seconds": float(i + 1) * step}
 		if next.y < floor_y - 32.0 or absf(next.x) > 125.0:
 			return {}
 		p = next
@@ -576,3 +594,15 @@ func _fail_or_rescue(course: Node3D) -> void:
 				return
 	fallen = true
 	landing_marker.hide()
+
+static func contact_point(course: Node3D, a: Vector3, b: Vector3) -> Vector3:
+	var low := 0.0
+	var high := 1.0
+	for i in range(10):
+		var mid := (low + high) * 0.5
+		var p := a.lerp(b, mid)
+		if not bool(course.call("has_ground", p.x, -p.z)) or p.y > float(course.call("elevation", p.x, -p.z)) + FOOT:
+			low = mid
+		else:
+			high = mid
+	return a.lerp(b, high)
