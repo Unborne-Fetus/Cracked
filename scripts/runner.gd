@@ -30,6 +30,11 @@ const SLIDE_KEYS: Array[int] = [KEY_SHIFT, KEY_CTRL, KEY_C, KEY_S, KEY_DOWN]
 const SOFT_LANDING_SPEED := 9.0
 const HARD_LANDING_SCALE := 0.014
 const OBSTACLE_RETAIN := 0.30
+const RESERVE_MAX := 30.0
+const RESERVE_EARN_FRACTION := 0.20
+const GATE_REWARD := 4.0
+const DIVE_ACCEL := 36.0
+const DIVE_MAX_DOWN := 38.0
 
 var speed := START_SPEED
 var distance := 8.0
@@ -55,6 +60,11 @@ var landing_blend := 0.0
 var landing_from_basis := Basis.IDENTITY
 var hit_timer := 0.0
 var hits := 0
+var momentum_reserve := 0.0
+var double_jump_available := true
+var diving := false
+var touch_dive := false
+var gate_timer := 0.0
 var avatar: Node3D
 
 func _ready() -> void:
@@ -107,12 +117,53 @@ func reset_run(course: Node3D) -> void:
 	landing_from_basis = Basis.IDENTITY
 	hit_timer = 0.0
 	hits = 0
+	momentum_reserve = 0.0
+	double_jump_available = true
+	diving = false
+	touch_dive = false
+	gate_timer = 0.0
 	avatar.scale = Vector3.ONE
 	avatar.position = Vector3.ZERO
 	sync_pose(course)
 
 func request_jump() -> void:
 	queued_jump = true
+
+func _dive_input() -> bool:
+	if touch_dive or Input.is_key_pressed(KEY_F):
+		return true
+	for device in Input.get_connected_joypads():
+		if Input.is_joy_button_pressed(device, JOY_BUTTON_RIGHT_STICK):
+			return true
+	return false
+
+func _double_jump() -> bool:
+	if grounded or not double_jump_available:
+		return false
+	double_jump_available = false
+	var up := air_basis.y
+	var impulse := jump_impulse_for_speed(speed) * 0.75
+	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
+	return true
+
+func _banked_slide(grade: float, delta: float) -> void:
+	var next_speed := slide_speed_step(speed, grade, delta)
+	if next_speed > speed:
+		momentum_reserve = minf(RESERVE_MAX, momentum_reserve + (next_speed - speed) * RESERVE_EARN_FRACTION)
+	elif grade > 0.025:
+		var spend := minf(momentum_reserve, speed - next_speed)
+		momentum_reserve -= spend
+		next_speed += spend
+	speed = next_speed
+
+func _reward_gates(course: Node3D, old_s: float, old_lane: float, old_height: float, new_height: float) -> void:
+	var count: int = course.call("collect_clean_gates", old_s, distance, old_lane, lane, old_height, new_height)
+	if count > 0:
+		gate_timer = 1.0
+		if grounded and is_sliding:
+			speed += GATE_REWARD * float(count)
+		else:
+			momentum_reserve = minf(RESERVE_MAX, momentum_reserve + GATE_REWARD * float(count))
 
 func set_first_person(enabled: bool) -> void:
 	avatar.visible = not enabled
@@ -260,6 +311,8 @@ func _finish_landing(course: Node3D) -> void:
 	vertical_speed = 0.0
 	air_time = 0.0
 	grounded = true
+	double_jump_available = true
+	diving = false
 	landing_timer = LANDING_RECOVERY
 	queued_jump = false
 	sync_pose(course)
@@ -269,6 +322,8 @@ func is_grounded() -> bool:
 
 func _begin_flight(frame: Transform3D, impulse: float) -> void:
 	grounded = false
+	double_jump_available = true
+	diving = false
 	air_time = 0.0
 	landing_blend = 0.0
 	air_basis = transform.basis
@@ -336,6 +391,9 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		air_velocity -= horizontal.normalized() * drag
 	var prev_velocity := air_velocity
 	air_velocity.y -= GRAVITY * delta
+	if diving:
+		# A controlled downward plunge, with no forward speed injection.
+		air_velocity.y -= minf(DIVE_ACCEL * delta, maxf(0.0, air_velocity.y + DIVE_MAX_DOWN))
 	var next_pos := previous_pos + (prev_velocity + air_velocity) * (0.5 * delta)
 	# Stream ahead before projecting onto the route. A rebase must shift
 	# free-flight positions too, otherwise they would jump by kilometres.
@@ -415,6 +473,7 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_clear, new_clear, 1.7)
 		for _i in range(count):
 			apply_obstacle_hit()
+		_reward_gates(course, old_s, old_lane, old_clear, new_clear)
 
 func tick(delta: float, course: Node3D) -> void:
 	if fallen:
@@ -427,13 +486,14 @@ func tick(delta: float, course: Node3D) -> void:
 	steer = clampf(steer + _pad_steer(), -1.0, 1.0)
 	var slide := _slide_input()
 	var jump := Input.is_key_pressed(KEY_SPACE) or _pad_jump()
-	if jump and not jump_held and grounded:
+	if jump and not jump_held:
 		queued_jump = true
 	jump_held = jump
 	landing_timer = maxf(0.0, landing_timer - delta)
 	if grounded:
 		landing_blend = maxf(0.0, landing_blend - delta)
 	hit_timer = maxf(0.0, hit_timer - delta)
+	gate_timer = maxf(0.0, gate_timer - delta)
 	if grounded:
 		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
@@ -445,9 +505,11 @@ func tick(delta: float, course: Node3D) -> void:
 			_begin_flight(frame, impulse)
 		else:
 			is_sliding = slide
-			speed = step_speed(speed, grade, true, slide, delta)
 			if slide:
+				_banked_slide(grade, delta)
 				speed += float(course.call("recovery_accel", distance, lane, surface_side)) * delta
+			else:
+				speed = step_speed(speed, grade, true, false, delta)
 			var old_s := distance
 			var old_lane := lane
 			var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
@@ -481,8 +543,15 @@ func tick(delta: float, course: Node3D) -> void:
 					var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, 0.0, 0.0, 0.95 if slide else 1.7)
 					for _i in range(count):
 						apply_obstacle_hit()
+					_reward_gates(course, old_s, old_lane, 0.0, 0.0)
 				sync_pose(course)
 	if not grounded:
 		is_sliding = false
+		diving = _dive_input()
+		if queued_jump:
+			_double_jump()
+			queued_jump = false
 		_advance_flight(delta, course, steer)
+	else:
+		diving = false
 	avatar.scale.y = lerpf(avatar.scale.y, 0.55 if is_sliding else 1.0, minf(delta * 12.0, 1.0))

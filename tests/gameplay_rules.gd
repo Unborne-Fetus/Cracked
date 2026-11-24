@@ -499,6 +499,57 @@ func _run_tests() -> void:
 	if bool(game.get("run_finished")) or absf(float(storm.get("speed")) - original_speed) > 0.001 or absf(float(storm.get("front_s")) - original_s) > 0.001:
 		_fail("Restart did not restore the storm.")
 		return
+	# Reserve builds from sliding and covers uphill loss without adding speed.
+	runner.set("speed", 22.0)
+	runner.set("momentum_reserve", 0.0)
+	runner.call("_banked_slide", 0.0, 1.0)
+	var reserve: float = runner.get("momentum_reserve")
+	if reserve <= 0.0:
+		_fail("Clean sliding did not earn momentum reserve.")
+		return
+	runner.set("momentum_reserve", 30.0)
+	runner.set("speed", 60.0)
+	runner.call("_banked_slide", 0.2, 1.0)
+	if absf(float(runner.get("speed")) - 60.0) > 0.01 or float(runner.get("momentum_reserve")) >= 30.0:
+		_fail("Uphill momentum reserve did not absorb the speed loss.")
+		return
+	runner.set("grounded", false)
+	runner.set("air_basis", Basis.IDENTITY)
+	runner.set("air_velocity", Vector3(0, -8, -40))
+	if not bool(runner.call("_double_jump")) or bool(runner.call("_double_jump")):
+		_fail("Double jump must be available exactly once per flight.")
+		return
+	var double_velocity: Vector3 = runner.get("air_velocity")
+	if double_velocity.y <= 0.0 or absf(double_velocity.z + 40.0) > 0.01:
+		_fail("Double jump injected forward speed or failed to lift.")
+		return
+	game.call("_restart")
+	var shortcut_lane: float = course.call("shortcut_center", 0)
+	var center_hill: Transform3D = course.call("surface_frame", 145.0, 0.0, 1)
+	var side_hill: Transform3D = course.call("surface_frame", 145.0, shortcut_lane, 1)
+	if not bool(course.call("shortcut_at", 145.0, shortcut_lane)) or -side_hill.basis.z.y >= -center_hill.basis.z.y:
+		_fail("Shortcut did not reduce the hill grade.")
+		return
+	var gate_chunks: Dictionary = course.get("chunks")
+	var reward_gate: Dictionary = {}
+	for piece in gate_chunks[2]["hazards"]:
+		if bool(piece["group"].get("gate", false)):
+			reward_gate = piece
+			break
+	if reward_gate.is_empty():
+		_fail("Reward gate is absent.")
+		return
+	var reward_s: float = reward_gate["s"]
+	var reward_lane: float = reward_gate["group"]["opening"]
+	if int(course.call("collect_clean_gates", reward_s - 3.0, reward_s + 3.0, reward_lane, reward_lane, 0.0, 0.0)) != 1 or int(course.call("collect_clean_gates", reward_s - 3.0, reward_s + 3.0, reward_lane, reward_lane, 0.0, 0.0)) != 0:
+		_fail("Clean gate reward is missing or repeatable.")
+		return
+	var map_control: Control = game.get("minimap")
+	var low_color: Color = map_control.call("elevation_color", -35.0)
+	var high_color: Color = map_control.call("elevation_color", 35.0)
+	if low_color.is_equal_approx(high_color):
+		_fail("Hypsometric minimap has no elevation distinction.")
+		return
 	# Exercise adaptive generation independently of the fixed-speed intro.
 	if float(course.call("bank_length", "360 BANK", 195.0)) < 575.0 or float(course.call("bank_length", "HILLS", 195.0)) != 192.0:
 		_fail("High-speed banking length does not scale.")

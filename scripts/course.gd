@@ -297,6 +297,7 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		var i := mini(int(floor(at)), STEPS - 1)
 		var frame := points[i].interpolate_with(points[i + 1], at - float(i))
 		if bool(item.get("gate", false)):
+			# Gate remains at the base road; the opening follows the marked shortcut.
 			_spawn_route_gate(node, hazards, frame, start_s + at * step_length, float(item["lane"]), float(item["gap"]))
 		else:
 			var lane: float = item["lane"]
@@ -334,7 +335,7 @@ func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_
 	var previous := -100000.0
 	var reaction_spacing := maxf(28.0, planned_speed * 1.15)
 	var gate := index >= 2 and index < 6 and not is_extreme_bank(kind)
-	var gate_lane := -14.0 if index % 2 == 0 else 14.0
+	var gate_lane := shortcut_center(index) if has_shortcut(kind) else (-14.0 if index % 2 == 0 else 14.0)
 	for i in range(positions.size()):
 		var at: float = positions[i]
 		var shape_id := (index * 5 + i) % 10 if index < 6 else rng.randi_range(0, 9)
@@ -362,6 +363,8 @@ func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_
 			lane = clampf(lane, -bound, bound)
 		if index >= 6 and (absf(lane - safe_lane) < 14.0 or absf(lane) < 15.0):
 			continue
+		if has_shortcut(kind) and absf(lane - shortcut_center(index)) < 15.0:
+			lane = clampf(-shortcut_center(index), -bound, bound)
 		layout.append({"at": at, "lane": lane, "shape": shape_id})
 		previous = at
 	if gate:
@@ -520,7 +523,7 @@ func _spawn_obstacle(node: Node3D, hazards: Array[Dictionary], frame: Transform3
 
 func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transform3D, at: float, opening: float, gap_width: float) -> void:
 	var mat := _material(track_color(at, 0.40, 0.92, 0.85))
-	var group := {"used": false, "shape": 10, "gate": true, "opening": opening, "gap_width": gap_width}
+	var group := {"used": false, "rewarded": false, "shape": 10, "gate": true, "opening": opening, "gap_width": gap_width}
 	var left_edge := opening - gap_width * 0.5
 	var right_edge := opening + gap_width * 0.5
 	var left_width := left_edge + HALF_WIDTH
@@ -562,21 +565,55 @@ func recovery_accel(distance: float, across: float, side: int = 1) -> float:
 	var local_s := (distance - chunk_starts[index]) * CHUNK_LENGTH / (chunk_starts[index + 1] - chunk_starts[index])
 	return RECOVERY_ACCEL * _recovery_strength(index, section_name(distance), local_s, across)
 
+func has_shortcut(kind: String) -> bool:
+	return kind in ["HILLS", "STEEP CLIMB", "ROLLING RIDGES"]
+
+func shortcut_center(index: int) -> float:
+	return 44.0 if index % 2 == 0 else -44.0
+
+func _shortcut_weight(index: int, kind: String, local_s: float, across: float) -> float:
+	if not has_shortcut(kind):
+		return 0.0
+	var envelope := smoothstep(0.0, 18.0, local_s) * (1.0 - smoothstep(174.0, 192.0, local_s))
+	return envelope * (1.0 - smoothstep(5.0, 13.0, absf(across - shortcut_center(index))))
+
+func shortcut_at(distance: float, across: float) -> bool:
+	if not has_distance(distance):
+		return false
+	var index := chunk_index_at(distance)
+	var local_s := (distance - chunk_starts[index]) * CHUNK_LENGTH / (chunk_starts[index + 1] - chunk_starts[index])
+	return _shortcut_weight(index, section_name(distance), local_s, across) > 0.5
+
+func _shortcut_lift(index: int, kind: String, local_s: float, across: float) -> float:
+	var u := clampf(local_s / CHUNK_LENGTH, 0.0, 1.0)
+	var weight := _shortcut_weight(index, kind, local_s, across)
+	if kind == "HILLS":
+		# Smooth, lower-grade chord around the central valley and climb.
+		var estimated_y := CHUNK_LENGTH * (0.32 / TAU * (cos(TAU * u) - 1.0) + 0.15 / PI * (cos(PI * u) - 1.0))
+		var chord_y := -CHUNK_LENGTH * 0.30 / PI * smoothstep(0.0, 1.0, u)
+		return (chord_y - estimated_y) * weight
+	if kind == "STEEP CLIMB":
+		return 10.0 * sin(TAU * u) * pow(sin(PI * u), 2.0) * weight
+	if kind == "ROLLING RIDGES":
+		return -3.5 * (1.0 - cos(TAU * 2.0 * u)) * weight
+	return 0.0
+
 func _ramp_lift(index: int, kind: String, local_s: float, across: float) -> float:
+	var shortcut := _shortcut_lift(index, kind, local_s, across)
 	# Alternate grade on major climbs: distribute the elevation change
 	# over the approaches, while flattening the sharp central ascent.
 	if kind == "STEEP CLIMB":
 		var u := clampf(local_s / CHUNK_LENGTH, 0.0, 1.0)
 		var weight := 1.0 - smoothstep(7.0, 19.0, absf(across - bypass_center(index)))
-		return 10.0 * sin(TAU * u) * pow(sin(PI * u), 2.0) * weight
+		return 10.0 * sin(TAU * u) * pow(sin(PI * u), 2.0) * weight + shortcut
 	# A local rise, crest and runout occupying only a portion of the road.
 	# The other lanes remain unchanged; no ramp on narrow or inverted banks.
 	if index == 0 or (index != 1 and index % 3 != 0) or kind in ["NARROW BRIDGE", "RECOVERY RUN", "LONG DESCENT"] or is_extreme_bank(kind):
-		return 0.0
+		return shortcut
 	var lateral := 1.0 - smoothstep(5.0, 12.0, absf(across - ramp_center(index)))
 	var rise := smoothstep(58.0, 99.0, local_s)
 	var runout := 1.0 - smoothstep(99.0, 132.0, local_s)
-	return (5.0 + float(index % 3)) * lateral * rise * runout
+	return (5.0 + float(index % 3)) * lateral * rise * runout + shortcut
 
 func surface_lift(distance: float, across: float) -> float:
 	var index := chunk_index_at(distance)
@@ -656,7 +693,11 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			var d := _vertex(points[i+1], next_z1, h3)
 			var recovery0 := _recovery_strength(index, kind, float(i), (z0 + z1) * 0.5)
 			var recovery1 := _recovery_strength(index, kind, float(i + 1), (next_z0 + next_z1) * 0.5)
-			_quad(fill, a, b, c, d, dark0.lerp(Color(0.03, 0.58, 0.26), recovery0), dark1.lerp(Color(0.03, 0.58, 0.26), recovery1))
+			var shortcut0 := _shortcut_weight(index, kind, float(i), (z0 + z1) * 0.5)
+			var shortcut1 := _shortcut_weight(index, kind, float(i + 1), (next_z0 + next_z1) * 0.5)
+			var color0 := dark0.lerp(Color(0.11, 0.36, 0.65), shortcut0 * 0.85).lerp(Color(0.03, 0.58, 0.26), recovery0)
+			var color1 := dark1.lerp(Color(0.11, 0.36, 0.65), shortcut1 * 0.85).lerp(Color(0.03, 0.58, 0.26), recovery1)
+			_quad(fill, a, b, c, d, color0, color1)
 			for v: Vector3 in [a, c, b, b, c, d]:
 				faces.append(v)
 			var ba := _vertex(points[i], z0, h0 - THICKNESS)
@@ -809,5 +850,25 @@ func swept_obstacles(from_s: float, to_s: float, from_lane: float, to_lane: floa
 				radius *= sqrt(maxf(0.0, 1.0 - pow((closest_y - center_y) / (h * 0.5), 2.0)))
 			if absf(lane - float(hazard["lane"])) <= radius + 0.55:
 				group["used"] = true
+				count += 1
+	return count
+
+func collect_clean_gates(from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float) -> int:
+	var count := 0
+	if to_s <= from_s:
+		return 0
+	for index in range(chunk_index_at(from_s), chunk_index_at(to_s) + 1):
+		if not chunks.has(index):
+			continue
+		for hazard in chunks[index]["hazards"]:
+			var group: Dictionary = hazard["group"]
+			var at: float = hazard["s"]
+			if not bool(group.get("gate", false)) or bool(group.get("rewarded", false)) or at <= from_s or at > to_s:
+				continue
+			group["rewarded"] = true
+			var fraction := (at - from_s) / (to_s - from_s)
+			var across := lerpf(from_lane, to_lane, fraction)
+			var feet := lerpf(from_height, to_height, fraction)
+			if not bool(group["used"]) and feet >= -0.1 and feet < 40.0 and absf(across - float(group["opening"])) < float(group["gap_width"]) * 0.5 - 0.8:
 				count += 1
 	return count

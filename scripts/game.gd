@@ -32,6 +32,9 @@ var clock_label: Label
 var record_label: Label
 var camera_label: Label
 var slide_label: Label
+var reserve_meter: ProgressBar
+var reserve_label: Label
+var minimap: Control
 var camera_track_s := 0.0
 var camera_track_clearance := 0.0
 var camera_rotation_ready := false
@@ -266,6 +269,8 @@ func _distance_display(meters: float) -> String:
 
 func _update_hud() -> void:
 	slide_indicator.visible = first_person and runner.is_grounded() and runner.is_sliding and not run_finished
+	reserve_meter.value = runner.momentum_reserve
+	reserve_label.text = "MOMENTUM RESERVE  %d%%" % int(round(runner.momentum_reserve / runner.RESERVE_MAX * 100.0))
 	speed_label.text = "%d" % _speed_display(runner.speed)
 	speed_unit_label.text = _speed_units()
 	distance_label.text = "DISTANCE  " + _distance_display(maxf(0.0, runner.distance - 8.0))
@@ -274,7 +279,7 @@ func _update_hud() -> void:
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
 	section_label.text = "TRACK  //  " + str(course.section_name(runner.distance))
 	if not runner.is_grounded():
-		slide_label.text = "AIRBORNE  //  CARRY MOMENTUM"
+		slide_label.text = "DIVING  //  CONTROLLED DESCENT" if runner.diving else ("AIRBORNE  //  DOUBLE JUMP READY" if runner.double_jump_available else "AIRBORNE  //  DOUBLE JUMP USED")
 	elif runner.is_sliding:
 		if float(course.recovery_accel(runner.distance, runner.lane, runner.surface_side)) > 0.1:
 			slide_label.text = "RECOVERY LANE  //  EXTRA ACCELERATION"
@@ -286,8 +291,8 @@ func _update_hud() -> void:
 	storm_label.text = "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
 	if not run_finished:
-		message_label.visible = runner.hit_timer > 0.0
-		message_label.text = "IMPACT  //  MOMENTUM LOST"
+		message_label.visible = runner.hit_timer > 0.0 or runner.gate_timer > 0.0
+		message_label.text = "IMPACT  //  MOMENTUM LOST" if runner.hit_timer > 0.0 else "CLEAN GATE  //  MOMENTUM REWARD"
 
 func _lose(reason: String) -> void:
 	if run_finished:
@@ -374,14 +379,14 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventJoypadButton:
 		var pad := event as InputEventJoypadButton
 		if pad.pressed:
-			controls_hint.text = "STICK / D-PAD steer  ·  A jump  ·  B / TRIGGERS slide  ·  Y view  ·  START pause  ·  X retry"
+			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  START pause  ·  X retry"
 			if _pad_button(pad.button_index):
 				get_viewport().set_input_as_handled()
 		return
 	if event is InputEventJoypadMotion:
 		var motion := event as InputEventJoypadMotion
 		if absf(motion.axis_value) > 0.35:
-			controls_hint.text = "STICK / D-PAD steer  ·  A jump  ·  B / TRIGGERS slide  ·  Y view  ·  START pause  ·  X retry"
+			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  START pause  ·  X retry"
 		if paused and (motion.axis == JOY_AXIS_LEFT_X or motion.axis == JOY_AXIS_LEFT_Y):
 			var value := signf(motion.axis_value) if absf(motion.axis_value) > 0.65 else 0.0
 			var horizontal := motion.axis == JOY_AXIS_LEFT_X
@@ -399,7 +404,7 @@ func _input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
 		return
-	controls_hint.text = "A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  ESC pause  ·  R retry"
+	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if paused and options_page.visible:
@@ -491,6 +496,26 @@ func _create_hud() -> void:
 	stack.add_child(slide_label)
 	storm_label = _label("", 18, Color(1.0, 0.33, 0.50))
 	stack.add_child(storm_label)
+	reserve_label = _label("MOMENTUM RESERVE", 15, Color(0.99, 0.79, 0.41))
+	stack.add_child(reserve_label)
+	reserve_meter = ProgressBar.new()
+	reserve_meter.max_value = 30.0
+	reserve_meter.custom_minimum_size = Vector2(220, 12)
+	reserve_meter.show_percentage = false
+	reserve_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var reserve_fill := StyleBoxFlat.new()
+	reserve_fill.bg_color = Color(0.98, 0.68, 0.21)
+	reserve_meter.add_theme_stylebox_override("fill", reserve_fill)
+	stack.add_child(reserve_meter)
+	minimap = preload("res://scripts/elevation_map.gd").new()
+	minimap.clip_contents = true
+	root.add_child(minimap)
+	minimap.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	minimap.offset_left = -266.0
+	minimap.offset_right = -16.0
+	minimap.offset_top = 38.0
+	minimap.offset_bottom = 278.0
+	minimap.call("setup", course, runner, storm)
 	message_label = _label("", 25, Color(1.0, 0.84, 0.3))
 	root.add_child(message_label)
 	message_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -500,7 +525,7 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
+	var hint := _label("A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
 	controls_hint = hint
 	hint.anchor_top = 1.0
@@ -529,6 +554,10 @@ func _create_hud() -> void:
 	var view := _button("VIEW", -138, -20, 202, true)
 	root.add_child(view)
 	view.pressed.connect(_toggle_camera)
+	var dive := _button("DIVE", -266, -148, 124, true)
+	root.add_child(dive)
+	dive.button_down.connect(func() -> void: runner.touch_dive = true)
+	dive.button_up.connect(func() -> void: runner.touch_dive = false)
 	restart_button = Button.new()
 	restart_button.text = "RUN AGAIN"
 	restart_button.focus_mode = Control.FOCUS_NONE
@@ -572,6 +601,7 @@ func _set_paused(value: bool) -> void:
 	if value:
 		# Avoid a stuck touch button if it was held when Escape was pressed.
 		runner.touch_slide = false
+		runner.touch_dive = false
 		runner.touch_axis = 0.0
 		runner.queued_jump = false
 
