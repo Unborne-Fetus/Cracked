@@ -17,6 +17,12 @@ var visual_lift := 0.0
 var visual_pivot := 0.0
 var handles: Node3D
 var wings: Node3D
+var treads: Node3D
+var tread_links: Array[MeshInstance3D]=[]
+var gyro: Node3D
+var gyro_rotor: Node3D
+var gyro_deploy := 0.0
+var tread_deploy := 0.0
 var sideways_amount := 0.0
 var first_person_view := false
 # Visual dimensions only. The gameplay collision envelope is unchanged.
@@ -118,6 +124,44 @@ func _ready() -> void:
 		trim.material_override=edge_mat
 		wings.add_child(trim)
 	wings.visible=false
+	treads=Node3D.new()
+	treads.name="CeilingTreads"
+	board.add_child(treads)
+	for tread_side: float in [-1.0,1.0]:
+		var belt:=_block(treads,Vector3(0.32,0.17,1.66),deck_mat)
+		belt.position=Vector3(tread_side*0.37,-0.135,0.0)
+		for link_index in range(9):
+			var link:=_block(treads,Vector3(0.34,0.065,0.105),edge_mat)
+			link.position=Vector3(tread_side*0.37,-0.235,-0.76+float(link_index)*0.19)
+			tread_links.append(link)
+	treads.visible=false
+	gyro=Node3D.new()
+	gyro.name="SidewallGyro"
+	add_child(gyro)
+	gyro_rotor=Node3D.new()
+	gyro.add_child(gyro_rotor)
+	# The wheel's axle is across the riding surface, with the rider
+	# inside the wheel and its rim against the wall.
+	var wheel_mesh:=TorusMesh.new()
+	wheel_mesh.inner_radius=0.96
+	wheel_mesh.outer_radius=1.13
+	wheel_mesh.rings=32
+	wheel_mesh.ring_segments=10
+	for wheel_side:float in [-1.0,1.0]:
+		var hoop:=MeshInstance3D.new()
+		hoop.mesh=wheel_mesh
+		hoop.material_override=deck_mat
+		hoop.rotation.z=PI*0.5
+		hoop.position.x=wheel_side*0.29
+		gyro_rotor.add_child(hoop)
+	for lug_index in range(12):
+		var angle:=TAU*float(lug_index)/12.0
+		var lug:=_block(gyro_rotor,Vector3(0.73,0.10,0.17),edge_mat)
+		lug.position=Vector3(0.0,cos(angle)*1.08,sin(angle)*1.08)
+		lug.rotation.x=angle
+	var platform:=_block(gyro,Vector3(0.77,0.10,0.72),deck_mat)
+	platform.position=Vector3(0,-0.68,0)
+	gyro.visible=false
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
 	torso = _block(self, Vector3(0.56, 0.78, 0.34), white)
@@ -177,13 +221,20 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var dive_amount := maxf(dive_blend,1.0 if dive else 0.0) if airborne else 0.0
 	# All phases are derived from recorded simulation time; camera orbit
 	# and render rate never alter the animation or the player's physics.
-	var flipping := airborne and flip < 1.0
+	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
+	var return_progress:=float(extra.get("glider_return",-1.0))
+	var returning:=return_progress>=0.0
+	var return_arc:=smoothstep(0.18,0.68,return_progress) if returning else 0.0
+	var release:=smoothstep(0.02,0.25,return_progress) if returning else 0.0
+	var wing_fold:=smoothstep(0.74,1.0,return_progress) if returning else 0.0
+	var gliding:=glide>0.01 or returning
+	var flipping := airborne and flip < 1.0 and not gliding
 	var tuck := sin(PI * clampf(flip, 0.0, 1.0)) if flipping else 0.0
 	var flick := _pulse(flip, 0.03, 0.24, 0.50) if flipping else 0.0
 	var catch_pose := _pulse(flip, 0.64, 0.83, 1.0) if flipping else 0.0
 	# Each 1.15-second airborne idle is a different board trick.
 	# The endpoints ease back to neutral so they can blend/cancel cleanly.
-	var idle := clampf(trick_mix,0.0,1.0) * (1.0-dive_amount) if airborne and not flipping else 0.0
+	var idle := clampf(trick_mix,0.0,1.0)*(1.0-dive_amount) if airborne and not flipping and not gliding else 0.0
 	var cycle := posmod(int(floor(trick_clock/1.15)),24)
 	var progress := fposmod(trick_clock,1.15)/1.15
 	var trick := sin(PI*progress)*idle
@@ -215,12 +266,30 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
 	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
 	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
-	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
-	var hang:=maxf(inverted,glide)
-	wings.visible=glide>0.015
-	wings.scale.x=maxf(0.01,glide)
-	var side_ride := clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang)
-	var sideways:=smoothstep(0.42,0.90,absf(side_ride))
+	var hang:=maxf(inverted if not airborne else 0.0,glide*(1.0-release))
+	var wing_span:=glide*(1.0-wing_fold)
+	wings.visible=wing_span>0.015
+	wings.scale.x=maxf(0.01,wing_span)
+	var side_ride:=clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang) if not airborne and not gliding else 0.0
+	var sideways:=smoothstep(0.50,0.90,absf(side_ride))
+	# Hardware is tied to contact, not the hanging animation. Airborne
+	# gliders never show ceiling treads, even during a blended pose.
+	tread_deploy=lerpf(tread_deploy,inverted if not airborne else 0.0,blend)
+	treads.visible=not airborne and inverted>0.025
+	treads.scale.y=maxf(0.01,tread_deploy)
+	for link_index in range(tread_links.size()):
+		tread_links[link_index].position.z=-0.855+fposmod(float(link_index%9)*0.19+phase*1.1,1.71)
+	gyro_deploy=lerpf(gyro_deploy,sideways,blend)
+	gyro.visible=gyro_deploy>0.015
+	gyro.scale=Vector3.ONE*maxf(0.01,gyro_deploy)
+	gyro.position=Vector3(0,1.13*gyro_deploy,0)
+	gyro_rotor.rotation.x=phase*3.2
+	# Fold the visible deck into the wheel; the board pivot and all
+	# attached glider/tread geometry remain independently animated.
+	for mesh_index in range(2):
+		var deck_piece:=board.get_child(mesh_index) as Node3D
+		deck_piece.scale=Vector3.ONE*maxf(0.01,1.0-gyro_deploy)
+		deck_piece.visible=gyro_deploy<0.985
 	handles.visible=hang>0.015
 	if first_person_view:
 		for part in lower_arms:
@@ -258,12 +327,14 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 				visual_lift = ground_hop*0.30
 			5:
 				visual_lift = 0.0
-	if glide>0.01:
-		# Flip the *visual* hanging rig overhead. The actual board physics,
-		# collision basis, velocity and camera direction remain unchanged.
-		rotation=Vector3(0.0,0.0,PI*glide)
+	if gliding:
+		# The glider trick spins the ENTIRE visual rig, including the
+		# character, grips and wings. It never spins the deck alone.
+		var spin_progress:=clampf(float(extra.get("glider_spin",1.0)),0.0,1.0)
+		var whole_spin:=TAU*smoothstep(0.0,1.0,spin_progress) if not returning and spin_progress<1.0 else 0.0
+		rotation=Vector3(0.0,0.0,PI*glide*(1.0-return_arc)+whole_spin)
 		visual_pivot=0.95
-		visual_lift=glide*0.55
+		visual_lift=glide*0.55*(1.0-return_arc)
 	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
 	var compression := clampf(landing, 0.0, 1.0)
 	var recoil := clampf(impact, 0.0, 1.0)
@@ -275,11 +346,11 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var hip := Vector3(lean+balance-side_ride*0.13, lerpf(1.29, 0.80, bend) + tuck*0.10+dive_amount*0.10+rocket*0.16-superman*0.14, lerpf(0.02, 0.23, bend) + recoil * 0.08)
 	var chest := hip + Vector3(lean * 0.38, lerpf(0.55, 0.42, bend)*(1.0-0.64*dive_amount), -0.31*bend-0.40*dive_amount)
 	var shoulder := chest + Vector3(0, 0.22*(1.0-0.75*dive_amount), -0.05*bend-0.24*dive_amount)
-	# Sidewall stance: low surfer crouch, one hand on the deck, wide
-	# stabilizing foot stance and the opposite arm extended away.
-	hip=hip.lerp(Vector3(-signf(side_ride)*0.25,0.72,0.15),sideways)
-	chest=chest.lerp(Vector3(-signf(side_ride)*0.34,1.05,-0.13),sideways)
-	shoulder=shoulder.lerp(Vector3(-signf(side_ride)*0.36,1.23,-0.14),sideways)
+	# Gyro stance: tucked pilot inside the rolling cage, feet on the
+	# inner platform and both hands on stationary side grips.
+	hip=hip.lerp(Vector3(0.0,0.76,0.14),gyro_deploy)
+	chest=chest.lerp(Vector3(0.0,1.10,-0.08),gyro_deploy)
+	shoulder=shoulder.lerp(Vector3(0.0,1.26,-0.08),gyro_deploy)
 	hip=hip.lerp(Vector3(0.0,1.65,0.10),hang)
 	chest=chest.lerp(Vector3(0.0,1.13,0.04),hang)
 	shoulder=shoulder.lerp(Vector3(0.0,0.89,0.0),hang)
@@ -301,7 +372,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	head.rotation.x=lerpf(head.rotation.x,PI,hang)
 	# The board leaves the feet, rotates around its longitudinal axis,
 	# then returns to level at the catch. No bank is added to the root.
-	board.position.y = 0.13 - tuck * 0.24
+	board.position=Vector3(0,0.13-tuck*0.24+0.14*(inverted if not airborne else 0.0),0)
 	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
 	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount+grab*0.29-one_foot*0.12
 	board.rotation.y = shifty*0.75-grab*0.20+(spin_angle if cycle==4 and idle>0.85 else shove*0.40)+indy*0.32+method_grab*0.48+cross_grab*0.28-drift*0.16
@@ -319,6 +390,21 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		board.rotation.z = shifty*0.18+grab*0.15-(spin_angle if cycle==3 and idle>0.85 else heel*0.25)
 		board.position.y -= heel*0.24+shove*0.16+double_kick*0.25+varial*0.25+superman*0.32
 		board.rotation.z += (spin_angle*2.0 if cycle==13 and idle>0.85 else double_kick*0.2)+(spin_angle if cycle==14 and idle>0.85 else varial*0.18)+method_grab*0.34-indy*0.22
+	if gliding:
+		# No separate kickflip during gliding. The board remains attached
+		# to the whole-rig rotation until the release phase.
+		board.rotation=Vector3.ZERO
+		if returning:
+			# World-relative arc: glide wing overhead -> free glide around
+			# the rider -> feet. Convert back to the animated root basis.
+			var root_basis:=Basis.from_euler(rotation)
+			var correction:=Vector3.UP*visual_pivot-root_basis*Vector3.UP*visual_pivot+Vector3.UP*visual_lift
+			var arc_position:=Vector3(sin(PI*return_arc)*1.30,lerpf(2.32,0.13,return_arc),-sin(PI*return_arc)*0.32)
+			board.position=root_basis.inverse()*(arc_position-correction)
+			board.rotation.z=PI*(1.0-return_arc)-rotation.z
+			if return_progress>=0.68:
+				board.position=Vector3(0,0.13,0)
+				board.rotation=Vector3.ZERO
 	for i in range(2):
 		var sign_value := -1.0 if i == 0 else 1.0
 		# Front (left) foot flicks diagonally over the nose. The back
@@ -360,7 +446,12 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		if ground_idle>0.0 and ground_variant in [1,2,3]:
 			foot = board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34)
 		foot += Vector3(side_ride*0.12,sideways*0.10*(1.0 if sign_value*side_ride>0.0 else 0.0),-side_ride*sign_value*0.12)
-		foot=foot.lerp(Vector3(sign_value*0.47,0.205,sign_value*0.44),sideways)
+		foot=foot.lerp(Vector3(sign_value*0.23,0.53,sign_value*0.24),gyro_deploy)
+		if returning:
+			# Feet are free during the transfer, then settle on the deck.
+			var catch_blend:=smoothstep(0.53,0.72,return_progress)
+			foot=foot.lerp(Vector3(sign_value*0.30,0.42,sign_value*0.34),release*(1.0-catch_blend))
+			foot=foot.lerp(board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34),catch_blend)
 		foot=foot.lerp(Vector3(sign_value*0.22,2.27,0.20+sign_value*0.09),hang)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
@@ -399,10 +490,9 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		hand.y += rocket*0.22+tuck_spin*0.16
 		hand.z -= superman*0.48
 		hand += Vector3(side_ride*0.20,side_ride*sign_value*0.26,sideways*0.10)
-		if sign_value==signf(side_ride):
-			hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.54,0.09,-0.38),sideways)
-		else:
-			hand=hand.lerp(Vector3(-signf(side_ride)*0.94,1.40,0.20),sideways)
+		hand=hand.lerp(Vector3(sign_value*0.35,1.17,-0.34),gyro_deploy)
+		if returning:
+			hand=hand.lerp(Vector3(sign_value*0.56,1.03,-0.05),release*(1.0-smoothstep(0.68,0.90,return_progress)))
 		hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.37,0.36,0.0),hang)
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)

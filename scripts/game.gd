@@ -15,6 +15,8 @@ var aim_cursor: ImageTexture
 var reactive_sky: ShaderMaterial
 var sky_level := -1
 var sky_clock := 0.0
+var mountain_level := -1
+var mountain_phase := -1
 var aim_cursor_active := false
 var mouse_aim_active := true
 var replay
@@ -241,6 +243,15 @@ func _process(delta: float) -> void:
 		if level!=sky_level:
 			sky_level=level
 			reactive_sky.set_shader_parameter("intensity",float(level)/12.0)
+		var distance_value:=maxf(0.0,float(runner.distance))
+		var escalation:=clampi(int(distance_value/600.0),0,28)
+		var wave_step:=int(distance_value/85.0)%4096
+		if escalation!=mountain_level:
+			mountain_level=escalation
+			reactive_sky.set_shader_parameter("mountain_scale",float(escalation)/28.0)
+		if wave_step!=mountain_phase:
+			mountain_phase=wave_step
+			reactive_sky.set_shader_parameter("mountain_phase",float(wave_step)*0.075)
 	if not paused and (not run_finished or replay_active):
 		_poll_camera_stick(delta)
 	if replay_active:
@@ -1423,6 +1434,8 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.rider_ground_idle = float(state.get("rider_ground_idle",0.0))
 	runner.rider_inverted = float(state.get("rider_inverted",0.0))
 	runner.rider_glider=float(state.get("rider_glider",0.0))
+	runner.rider_glider_return=float(state.get("rider_glider_return",-1.0))
+	runner.rider_glider_spin=float(state.get("rider_glider_spin",1.0))
 	runner.drift_amount = float(state.get("drift_amount",0.0))
 	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
 	runner.momentum_reserve = float(state["reserve"])

@@ -22,7 +22,7 @@ func _run_tests() -> void:
 	# The avatar is articulated geometry, with a separate curved deck.
 	var model: Node3D = runner.get("rider_model")
 	var flip_board: Node3D = runner.get("board_pivot")
-	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 4:
+	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 5:
 		_fail("Block rider or curved board geometry is missing.")
 		return
 	var sprite_camera: Camera3D = game.get("view_camera")
@@ -88,14 +88,38 @@ func _run_tests() -> void:
 	if model_head.position.y >= neutral_head-0.12:
 		_fail("Inverted rider does not lower into the hanging pose.")
 		return
+	var ceiling_treads:Node3D=model.get("treads")
+	if not ceiling_treads.visible:
+		_fail("Grounded inverted riding is missing ceiling treads.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":1.0})
+	var gyro_probe:Node3D=model.get("gyro")
+	if not gyro_probe.visible or gyro_probe.scale.x<0.9 or ceiling_treads.visible:
+		_fail("Sidewall gyro did not replace ceiling treads.")
+		return
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
 	var glider_rig:Node3D=model.get("wings")
-	if not glider_rig.visible or glider_rig.scale.x<0.9:
+	if not glider_rig.visible or glider_rig.scale.x<0.9 or ceiling_treads.visible or gyro_probe.visible:
 		_fail("High-altitude glider pose does not deploy wings.")
 		return
 	var handle_rig: Node3D = model.get("handles")
 	if not handle_rig.visible or handle_rig.scale.y<0.9:
 		_fail("Inverted rider did not deploy handles.")
+		return
+	model.call("pose",0.0,0.0,true,0.5,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_spin":0.5})
+	if absf(model.rotation.z)>0.05 and absf(absf(model.rotation.z)-TAU)>0.05:
+		_fail("Glider flip failed to rotate the whole rig.")
+		return
+	if absf(flip_board.rotation.z)>0.05:
+		_fail("Glider flip still rotates only the board.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.72})
+	if flip_board.position.distance_to(Vector3(0,0.13,0))>0.02 or glider_rig.scale.x<0.95:
+		_fail("Glider wings retracted before the board catch.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.90})
+	if glider_rig.scale.x>=0.85:
+		_fail("Glider wings did not retract after the catch.")
 		return
 	# Loop branch reverses longitudinal direction at its crown, bypass
 	# remains upright and forward. Test geometry independently of seeds.
@@ -405,7 +429,8 @@ func _run_tests() -> void:
 	if not bool(runner.get("grounded")) or runner.transform.basis.y.dot(floor_frame.basis.y) < 0.98:
 		_fail("Sideways shallow floor contact failed to recover.")
 		return
-	# Head-first contact with a ceiling is blocked before the feet cross.
+	# Upright airborne contact with the inverted rideable face should
+	# reorient the board and attach without penetrating the slab.
 	game.call("_restart")
 	await process_frame
 	var ceiling: Transform3D = course.call("surface_frame", 864.0, 0.0, 1)
@@ -417,10 +442,9 @@ func _run_tests() -> void:
 	runner.set("air_velocity", -ceiling.basis.z * 22.0 - ceiling.basis.y * 10.0)
 	runner.transform = Transform3D(head_first, ceiling.origin + ceiling.basis.y * 2.3)
 	runner.call("_advance_flight", 0.1, course, 0.0)
-	var head_projection: Vector3 = course.call("project_position", runner.position + head_first.y * 1.5 - head_first.z * 0.15, float(runner.get("distance")))
-	var head_gap: float = course.call("surface_clearance", head_projection.x, head_projection.y, head_projection.z, 1)
-	if bool(runner.call("is_grounded")) or head_gap < 0.34:
-		_fail("Head-first collision passed through the ceiling.")
+	var attached_ceiling:Transform3D=course.call("surface_frame",float(runner.get("distance")),float(runner.get("lane")),int(runner.get("surface_side")))
+	if not bool(runner.call("is_grounded")) or runner.transform.basis.y.dot(attached_ceiling.basis.y)<0.98:
+		_fail("Upright rider did not attach to the contacted ceiling.")
 		return
 	# Jump on both sides of a fast twisting bank. No foot may cross
 	# through the slab even when the local normal rotates during flight.

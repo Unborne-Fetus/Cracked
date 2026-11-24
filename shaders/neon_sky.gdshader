@@ -1,5 +1,7 @@
 shader_type sky;
 uniform float intensity : hint_range(0.0,1.0) = 0.0;
+uniform float mountain_scale : hint_range(0.0,1.0) = 0.0;
+uniform float mountain_phase = 0.0;
 float hash31(vec3 p) {
 	p=fract(p*0.1031);
 	p+=dot(p,p.yzx+33.33);
@@ -26,8 +28,12 @@ void sky(){
 	color+=vec3(0.25,0.045,0.14)*pow(max(0.0,cosdist),25.0)*(0.4+power);
 	color=mix(color,sun,disc*stripe);
 	// Layered jagged purple mountain ranges, with neon crest.
-	float ridge=-0.015+0.035*sin(a*9.0)+0.017*sin(a*23.0+0.8)+0.009*sin(a*41.0);
-	float far_ridge=0.025+0.029*sin(a*6.0+0.8)+0.015*sin(a*15.0);
+	// Distance raises the ceiling of the ranges while the repeating
+	// elevation wave alternates valleys with enormous angular peaks.
+	float swell=0.5+0.5*sin(mountain_phase);
+	float scale=1.0+mountain_scale*(1.5+3.0*swell);
+	float ridge=-0.035+scale*(0.045+0.035*sin(a*9.0+mountain_phase*0.17)+0.017*sin(a*23.0+0.8)+0.009*sin(a*41.0));
+	float far_ridge=-0.015+scale*(0.052+0.029*sin(a*6.0+0.8-mountain_phase*0.11)+0.015*sin(a*15.0));
 	color=mix(color,vec3(0.16,0.025,0.21)*(0.8+power*0.5),1.0-smoothstep(far_ridge-0.002,far_ridge+0.002,y));
 	color=mix(color,vec3(0.052,0.012,0.085),1.0-smoothstep(ridge-0.002,ridge+0.002,y));
 	color+=vec3(0.4,0.025,0.38)*exp(-abs(y-ridge)*220.0)*(0.35+power*0.8);

@@ -1,5 +1,11 @@
 # Vector Velocity changelog
 
+## 2026-11-23 — Transforming board and evolving skyline
+- Mountains rise and recede with course progress, with increasing peak height deeper into a run.
+- Grounded inverted riding deploys animated ceiling treads; sideways wall riding transforms the deck into a gyro wheel.
+- Swept wall/ceiling contacts can attach and reorient upright airborne riders to the actual contacted face.
+- High-altitude glider tricks rotate the full rig; the return animation releases the grips, arcs the board underneath, catches it and then folds the wings.
+
 ## 2026-11-23 — Pursuit drones, fullpipe seam, synthwave sky and glider
 - Drones match pace and stay ahead; telegraphed hits remove 40% momentum and reserve, eliminations restore speed and reserve.
 - More frequent sustained wall and ceiling segments, unique sidewall grip pose.

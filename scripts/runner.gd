@@ -58,6 +58,11 @@ var rewarded_loops: Dictionary = {}
 var loop_reward_timer := 0.0
 var combat_enabled := false
 var rider_glider := 0.0
+var rider_glider_return := -1.0
+var rider_glider_spin := 1.0
+var glider_idle_clock := 0.0
+const GLIDER_RETURN_TIME := 1.35
+const GLIDER_SPIN_TIME := 0.85
 var glide_height := 0.0
 var clearance_clock := 0.0
 var height := 0.0
@@ -130,7 +135,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_spin":rider_glider_spin,"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot: float = rider_model.get("visual_pivot")
 	var lift: float = rider_model.get("visual_lift")
 	var correction := Vector3.UP*pivot - Basis.from_euler(rider_model.rotation)*Vector3.UP*pivot
@@ -157,8 +162,32 @@ func _update_rider_animation(delta: float) -> void:
 		glide_height=position.y-road_frame.origin.y
 	else:
 		glide_height=0.0
-	var glider_target:=smoothstep(32.0,50.0,glide_height) if not grounded and not diving else 0.0
-	rider_glider=move_toward(rider_glider,glider_target,delta*2.8)
+	# Releasing starts early enough to finish the catch before contact.
+	# Once initiated, the sequence completes rather than reversing.
+	if rider_glider_return>=0.0:
+		if grounded:
+			rider_glider_return=maxf(rider_glider_return,0.74)
+		rider_glider_return=minf(1.0,rider_glider_return+delta/GLIDER_RETURN_TIME)
+		if rider_glider_return>=1.0:
+			rider_glider=0.0
+			rider_glider_return=-1.0
+			rider_glider_spin=1.0
+			glider_idle_clock=0.0
+	elif rider_glider>0.01 and (grounded or diving or glide_height<32.0):
+		rider_glider_return=0.74 if grounded else 0.0
+		rider_glider_spin=1.0
+		glider_idle_clock=0.0
+	else:
+		var glider_target:=smoothstep(38.0,50.0,glide_height) if not grounded and not diving else 0.0
+		if rider_glider>0.65 and not grounded and not diving and glide_height>=32.0:
+			glider_target=1.0
+		rider_glider=move_toward(rider_glider,glider_target,delta*2.8)
+		if rider_glider>0.95 and glide_height>55.0:
+			glider_idle_clock+=delta
+			if glider_idle_clock>5.0 and rider_glider_spin>=1.0:
+				rider_glider_spin=0.0
+				glider_idle_clock=0.0
+		rider_glider_spin=minf(1.0,rider_glider_spin+delta/GLIDER_SPIN_TIME)
 	var idle_trick := not grounded and not diving and rider_glider<0.1 and air_time > 0.45 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
 	rider_trick_mix = move_toward(rider_trick_mix,1.0 if idle_trick else 0.0,delta*5.0)
 	if idle_trick:
@@ -197,6 +226,9 @@ func reset_run(course: Node3D) -> void:
 	rider_course = course
 	fall_grace = 0.0
 	rider_glider=0.0
+	rider_glider_return=-1.0
+	rider_glider_spin=1.0
+	glider_idle_clock=0.0
 	glide_height=0.0
 	clearance_clock=0.0
 	rider_clearance = 0.0
@@ -300,7 +332,12 @@ func _double_jump() -> bool:
 		return false
 	double_jump_available = false
 	double_jumps += 1
-	kickflip_progress = 0.0
+	if rider_glider>0.65 and rider_glider_return<0.0:
+		rider_glider_spin=0.0
+		glider_idle_clock=0.0
+		kickflip_progress=1.0
+	else:
+		kickflip_progress=0.0
 	var up := air_basis.y
 	var impulse := jump_impulse_for_speed(speed) * 0.75
 	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
@@ -584,7 +621,7 @@ func _body_sweep(course: Node3D, from_pos: Vector3, to_pos: Vector3, from_s: flo
 			# Do not reattach at the edge; head/torso contacts only deflect.
 			var face: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
 			best_fraction = fraction
-			best = {"fraction": fraction, "normal": face.basis.y, "side": side}
+			best = {"fraction": fraction, "normal": face.basis.y, "side": side, "s":hit.x, "lane":hit.y}
 	return best
 
 func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
@@ -631,6 +668,27 @@ func _recover_floor_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3,
 	_finish_landing(course)
 	return true
 
+func _magnetic_face(course: Node3D, at: float, across: float, face: Transform3D) -> bool:
+	# The board can reorient to a real sidewall or ceiling on impact.
+	# No magnetic snap through an ordinary flat road or an open edge.
+	if face.basis.y.y>0.58 or not bool(course.call("support_at",at,across)):
+		return false
+	var kind: String=course.call("section_name",at)
+	if kind=="LOOP ROUTE" and across<0.0 and face.basis.y.y<0.15:
+		return speed>=float(course.call("loop_required_speed",at))
+	return bool(course.call("is_extreme_bank",kind)) or kind in ["BANKED TURN","BANKED DESCENT","CAMBER WAVE","STACKED ROUTES","SPLIT ROUTE","LOOP ROUTE"]
+
+func _attach_magnetic_face(course: Node3D, at: float, across: float, side: int, face: Transform3D) -> void:
+	distance=at
+	lane=float(course.call("wrap_pipe_lane",at,across))
+	surface_side=side
+	_apply_landing_result(face)
+	# Preserve the tangential velocity, but do not fling the rider
+	# across the entire wall after the contact snaps the board to it.
+	lateral_speed=clampf(air_velocity.dot(face.basis.x)*float(side),-24.0,24.0)
+	speed=maxf(MIN_SPEED,speed)
+	_finish_landing(course)
+
 func _recover_bank_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, guess_s: float) -> bool:
 	if air_time<0.18:
 		return false
@@ -647,10 +705,14 @@ func _recover_bank_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, 
 	var normal_velocity:=air_velocity.dot(face.basis.y)
 	# The board has to face the actual riding face. Head-first contact
 	# and a deliberate jump away from the bank still use the sweep.
-	if alignment<0.20 or gap< -0.10 or old_gap< -0.12 or normal_velocity>1.5:
+	var magnetic:=_magnetic_face(course,float(contact["s"]),float(contact["lane"]),face)
+	if (alignment<0.20 and not magnetic) or gap< -0.10 or old_gap< -0.12 or normal_velocity>1.5:
 		return false
 	if gap>0.32 or gap>old_gap+0.07:
 		return false
+	if magnetic:
+		_attach_magnetic_face(course,float(contact["s"]),float(contact["lane"]),int(contact["side"]),face)
+		return true
 	if str(kind)=="LOOP ROUTE" and float(contact["lane"])<0.0 and face.basis.y.y<0.15 and speed<float(course.call("loop_required_speed",float(contact["s"]))):
 		return false
 	distance=float(contact["s"])
@@ -812,6 +874,15 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		# rather than allowing the feet to tunnel across the slab later.
 		next_pos = previous_pos.lerp(next_pos, float(body_contact["fraction"])) + normal * 0.08
 		var incoming := air_velocity.dot(normal)
+		var hit_s:float=body_contact["s"]
+		var hit_lane:float=body_contact["lane"]
+		var hit_side:int=body_contact["side"]
+		var hit_face:Transform3D=course.call("surface_frame",hit_s,hit_lane,hit_side)
+		# A swept torso/head hit is a legitimate contact on a rideable
+		# wall or ceiling, even if the airborne rider is upright.
+		if _magnetic_face(course,hit_s,hit_lane,hit_face):
+			_attach_magnetic_face(course,hit_s,hit_lane,hit_side,hit_face)
+			return
 		# A torso corner can touch first during a normal landing on a
 		# slope. In that case settle the feet onto the same face instead
 		# of repeatedly bouncing. Head-first impacts still deflect.
@@ -857,6 +928,9 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		if not bool(course.call("support_at", hit.x, hit.y)):
 			continue
 		var landing_frame: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
+		if _magnetic_face(course,hit.x,hit.y,landing_frame):
+			_attach_magnetic_face(course,hit.x,hit.y,side,landing_frame)
+			break
 		var recovery_landing := recover_air_roll and landing_frame.basis.y.y > 0.55 and air_basis.y.dot(landing_frame.basis.y) > -0.15 and air_velocity.dot(landing_frame.basis.y) < 0.0
 		if air_basis.y.dot(landing_frame.basis.y) < 0.25 and not recovery_landing:
 			# The bank swept into the runner sideways or head-first. Keep
