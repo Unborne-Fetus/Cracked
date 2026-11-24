@@ -4,10 +4,12 @@
   audio.loop = true;
   audio.preload = "auto";
   audio.volume = 0;
-  let enabled = false, started = false, pending = false, paused = false, target = 0;
+  let enabled = false, adaptive = true, speed = 0, started = false, pending = false, paused = false, target = 0;
   let timer = 0;
   function fade() {
-    target = enabled ? 0.42 : 0;
+    const t = Math.max(0, Math.min(1, (speed - 20) / 160));
+    const blend = t * t * (3 - 2 * t);
+    target = enabled ? (adaptive ? 0.34 + 0.28 * blend : 0.42) : 0;
     if (timer) return;
     timer = window.setInterval(() => {
       const remaining = target - audio.volume;
@@ -31,7 +33,16 @@
   }
   window.velocityMusic = {
     start,
+    configure(on, adapt, value) {
+      enabled = Boolean(on); adaptive = Boolean(adapt);
+      speed = Number.isFinite(value) ? Math.max(0, value) : 0;
+      fade();
+    },
     setEnabled(value) { enabled = Boolean(value); fade(); },
+    setSpeed(value) {
+      speed = Number.isFinite(value) ? Math.max(0, value) : 0;
+      if (enabled && adaptive) fade();
+    },
     setPaused(value) {
       value = Boolean(value);
       if (paused === value) return;

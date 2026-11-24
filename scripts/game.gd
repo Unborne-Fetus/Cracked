@@ -52,6 +52,7 @@ var binding_picker: OptionButton
 var keyboard_rebind: Button
 var pad_rebind: Button
 var audio_toggle: CheckButton
+var music_toggle: CheckButton
 var trails_toggle: CheckButton
 var vibration_toggle: CheckButton
 var board_request: HTTPRequest
@@ -914,10 +915,11 @@ func _create_hud() -> void:
 	add_child(layer)
 	var root := Control.new()
 	layer.add_child(root)
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var streaks: Control = effects.make_trails()
 	root.add_child(streaks)
 	streaks.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	streaks.z_index = 1
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slide_indicator = PanelContainer.new()
 	root.add_child(slide_indicator)
@@ -1248,13 +1250,17 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	reset_bind.custom_minimum_size.y = 34
 	reset_bind.pressed.connect(func() -> void: extras.keys.clear(); extras.pads.clear(); _apply_bindings(); extras.save_profile(); _refresh_profile())
 	_add_extra(reset_bind)
+	music_toggle = CheckButton.new()
+	music_toggle.text = "Soundtrack"
+	music_toggle.toggled.connect(func(v: bool) -> void: extras.soundtrack = v; effects.music_enabled = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
+	_add_extra(music_toggle)
 	audio_toggle = CheckButton.new()
 	audio_toggle.text = "Adaptive soundtrack"
-	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.music_enabled = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
+	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.adaptive_music = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
 	_add_extra(audio_toggle)
 	trails_toggle = CheckButton.new()
 	trails_toggle.text = "Speed streaks"
-	trails_toggle.toggled.connect(func(v: bool) -> void: extras.trails = v; effects.trails_enabled = v; extras.save_profile())
+	trails_toggle.toggled.connect(func(v: bool) -> void: extras.trails = v; effects.set_trails_enabled(v); extras.save_profile())
 	_add_extra(trails_toggle)
 	vibration_toggle = CheckButton.new()
 	vibration_toggle.text = "Controller vibration"
@@ -1277,11 +1283,13 @@ func _add_extra(control: Control) -> void:
 func _load_extras() -> void:
 	extras.load_profile()
 	_apply_bindings()
-	effects.music_enabled = extras.music
+	effects.music_enabled = extras.soundtrack
+	effects.adaptive_music = extras.music
 	effects.configure_music()
-	effects.trails_enabled = extras.trails
+	effects.set_trails_enabled(extras.trails)
 	effects.vibration_enabled = extras.vibration
 	leaderboard_url = str(ProjectSettings.get_setting("velocity/leaderboard_url", ""))
+	music_toggle.set_pressed_no_signal(extras.soundtrack)
 	audio_toggle.set_pressed_no_signal(extras.music)
 	trails_toggle.set_pressed_no_signal(extras.trails)
 	vibration_toggle.set_pressed_no_signal(extras.vibration)

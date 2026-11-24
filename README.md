@@ -114,3 +114,5 @@ Gyro deployment now articulates 24 fixed-size curved rim panels from rail casset
 Replay speed cycles through 0.5x, 1x and 2x using numeric state. Restored cosmetic selection in Run / Profile / Controls, with the original achievement unlocks and colors shared across transformations. Spider feet now extend 4.25 m to either side. Glider return includes a distinct separated free-fall interval, swoop underneath, catch and wing fold; this visual sequence does not alter flight physics.
 
 Overpasses use independent swept deck contacts. Spider form has 2.5 m visual ceiling standoff. Glider catch is 1.1 s, reverse deployment is 1.2 s and direct gyro transfer is 0.78 s. A separate glider diving pose retains the grip/wing configuration. The skyline uses a deforming annular neon grid mesh, with terrain height and motion driven by speed.
+
+Soundtrack and Adaptive soundtrack are separate preferences: disabling adaptation keeps a constant-volume score, while disabling Soundtrack mutes it. Speed streaks use a full-screen animated radial overlay that becomes brighter and longer with speed.

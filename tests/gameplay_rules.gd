@@ -19,6 +19,24 @@ func _run_tests() -> void:
 	course.set("showcase_layout", true)
 	game.call("_restart")
 	await process_frame
+	# Visual/audio preferences remain independent and the streak overlay fills the HUD.
+	var run_effects: Node = game.get("effects")
+	var streak_overlay: Control = run_effects.get("streaks")
+	if streak_overlay.size.x < 2.0 or streak_overlay.size.y < 2.0:
+		_fail("Speed streak overlay has no drawable area.")
+		return
+	run_effects.call("set_trails_enabled", true)
+	if not streak_overlay.visible or float(run_effects.call("streak_intensity", 45.0)) < 0.15 or float(run_effects.call("streak_intensity", 150.0)) < 0.95:
+		_fail("Enabled streaks are invisible at useful speeds.")
+		return
+	run_effects.call("set_trails_enabled", false)
+	if streak_overlay.visible:
+		_fail("Speed streak toggle does not hide the overlay.")
+		return
+	run_effects.call("set_trails_enabled", bool(game.get("extras").get("trails")))
+	if absf(float(run_effects.call("soundtrack_gain", true, false, 0.0)) - 0.42) > 0.001 or absf(float(run_effects.call("soundtrack_gain", true, false, 200.0)) - 0.42) > 0.001 or float(run_effects.call("soundtrack_gain", false, true, 200.0)) != 0.0 or float(run_effects.call("soundtrack_gain", true, true, 200.0)) <= float(run_effects.call("soundtrack_gain", true, true, 20.0)):
+		_fail("Soundtrack mute and adaptive gain are not independent.")
+		return
 	# The avatar is articulated geometry, with a separate curved deck.
 	var model: Node3D = runner.get("rider_model")
 	var flip_board: Node3D = runner.get("board_pivot")

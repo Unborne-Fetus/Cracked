@@ -6,7 +6,8 @@ var records: Dictionary = {}
 var cosmetic := 0
 var keys: Dictionary = {}
 var pads: Dictionary = {}
-var music := true
+var music := true # Legacy key now controls adaptation only.
+var soundtrack := true
 var trails := true
 var vibration := true
 var player_id := ""
@@ -27,6 +28,7 @@ func load_profile() -> void:
 		keys = cfg.get_value("controls", "keys", {})
 		pads = cfg.get_value("controls", "pads", {})
 		music = bool(cfg.get_value("effects", "music", true))
+		soundtrack = bool(cfg.get_value("effects", "soundtrack", true))
 		trails = bool(cfg.get_value("effects", "trails", true))
 		vibration = bool(cfg.get_value("effects", "vibration", true))
 		player_id = str(cfg.get_value("profile", "player_id", ""))
@@ -44,6 +46,7 @@ func save_profile() -> void:
 	cfg.set_value("controls", "keys", keys)
 	cfg.set_value("controls", "pads", pads)
 	cfg.set_value("effects", "music", music)
+	cfg.set_value("effects", "soundtrack", soundtrack)
 	cfg.set_value("effects", "trails", trails)
 	cfg.set_value("effects", "vibration", vibration)
 	cfg.save("user://velocity_profile.cfg")
