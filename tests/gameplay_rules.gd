@@ -142,17 +142,17 @@ func _run_tests() -> void:
 		_fail("Controller deadzone failed.")
 		return
 	# Recenter must correct the camera without modifying gameplay state.
-	var camera: Camera3D = game.get("view_camera")
+	var recenter_camera: Camera3D = game.get("view_camera")
 	var before_recenter: Transform3D = runner.transform
 	var before_recenter_speed: float = runner.get("speed")
 	var before_recenter_mode: bool = game.get("first_person")
-	camera.basis = Basis(Vector3.UP, PI)
+	recenter_camera.basis = Basis(Vector3.UP, PI)
 	var center_key := InputEventKey.new()
 	center_key.pressed = true
 	center_key.keycode = KEY_G
 	game.call("_input", center_key)
 	var centered_goal: Basis = game.get("camera_goal")
-	if camera.basis.z.dot(centered_goal.z) < 0.999 or runner.transform != before_recenter or float(runner.get("speed")) != before_recenter_speed or bool(game.get("first_person")) != before_recenter_mode:
+	if recenter_camera.basis.z.dot(centered_goal.z) < 0.999 or runner.transform != before_recenter or float(runner.get("speed")) != before_recenter_speed or bool(game.get("first_person")) != before_recenter_mode:
 		_fail("Camera recenter did not restore view independently of movement.")
 		return
 	# Controls must remain independent: C slides, Tab toggles camera.
