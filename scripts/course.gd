@@ -556,6 +556,8 @@ func _validate_routes(index: int, kind: String, points: Array[Transform3D], step
 	var best: Dictionary = {}
 	var best_score := -INF
 	for target: float in [-44.0, -28.0, -14.0, 0.0, 14.0, 28.0, 44.0]:
+		if kind=="LOOP ROUTE" and target<14.0:
+			continue
 		var v := maxf(7.0, float(initial.get("speed", 22.0)))
 		var lane := float(initial.get("lane", 0.0))
 		var gap := float(initial.get("gap", 92.0))
@@ -1011,6 +1013,13 @@ func _loop_frame(frame: Transform3D, local_s: float, across: float, length: floa
 func loop_progress(distance: float) -> float:
 	return _local_s(distance)/CHUNK_LENGTH
 
+func loop_metric(distance: float, across: float) -> float:
+	var index := chunk_index_at(distance)
+	var length := chunk_starts[index+1]-chunk_starts[index]
+	var s := _local_s(distance)
+	var derivative := (_loop_offset(s+0.05,across,length)-_loop_offset(s-0.05,across,length))/(0.10*length/CHUNK_LENGTH)
+	return maxf(0.35,(Vector3.FORWARD+derivative).length())
+
 func loop_required_speed(distance: float) -> float:
 	var index := chunk_index_at(distance)
 	return sqrt(24.0*(chunk_starts[index+1]-chunk_starts[index])*0.145)*1.05
@@ -1025,9 +1034,16 @@ func _loop_projection(world_pos: Vector3, guess_s: float) -> Vector3:
 	var best_cost := INF
 	# Search locally around the previous progress, never jump to the
 	# other arm of the loop just because it crosses nearby in space.
-	for step: float in [12.0,3.0,0.75]:
+	var guess_frame := sample(guess_s)
+	var branch_sign := -1 if (world_pos-guess_frame.origin).dot(guess_frame.basis.x)<0.0 else 1
+	# The right bypass has no longitudinal reversal; solve its progress
+	# directly. Only the risky loop needs the local nearest-point search.
+	if branch_sign>0:
+		best_s=clampf(guess_s+(world_pos-guess_frame.origin).dot(-guess_frame.basis.z),start+0.001,start+length-0.001)
+	var search_steps: Array[float]=[12.0,3.0,0.75] if branch_sign<0 else [0.75]
+	for step: float in search_steps:
 		var center := best_s
-		for j in range(-5,6):
+		for j in range(-3,4):
 			var at := clampf(center+float(j)*step,start+0.001,start+length-0.001)
 			var frame := sample(at)
 			var s := _local_s(at)
@@ -1035,7 +1051,7 @@ func _loop_projection(world_pos: Vector3, guess_s: float) -> Vector3:
 			var e := smoothstep(0.0,0.22,u)*(1.0-smoothstep(0.78,1.0,u))
 			var t := clampf((u-0.22)/0.56,0.0,1.0)
 			var x := (world_pos-frame.origin).dot(frame.basis.x)
-			for branch: int in [-1,1]:
+			for branch: int in [branch_sign]:
 				var scale_value := 1.0-0.55*e if branch<0 else 1.0
 				var spread := (48.0+84.0*smoothstep(0.0,1.0,t))*e if branch<0 else 26.0*e
 				var magnitude := x*float(branch)
@@ -1573,4 +1589,4 @@ func nearest_road_point(world_pos: Vector3, projected: Vector3) -> Dictionary:
 
 func is_curved_enclosure(distance: float) -> bool:
 	var kind := section_name(distance)
-	return kind == "CORKSCREW TUNNEL" or kind == "HALFPIPE" or kind == "STACKED ROUTES"
+	return kind in ["CORKSCREW TUNNEL","HALFPIPE","STACKED ROUTES","LOOP ROUTE"]

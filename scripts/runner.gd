@@ -55,6 +55,7 @@ var rider_trick_serial := 0
 var active_loop := -1
 var rewarded_loops: Dictionary = {}
 var loop_reward_timer := 0.0
+var combat_enabled := false
 var height := 0.0
 var vertical_speed := 0.0
 var grounded := true
@@ -381,7 +382,8 @@ func _slide_input() -> bool:
 	if touch_slide:
 		return true
 	for device in Input.get_connected_joypads():
-		if pad_down(device, "slide", [JOY_BUTTON_B, JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]):
+		var buttons := [JOY_BUTTON_B,JOY_BUTTON_LEFT_SHOULDER] if combat_enabled else [JOY_BUTTON_B,JOY_BUTTON_LEFT_SHOULDER,JOY_BUTTON_RIGHT_SHOULDER]
+		if pad_down(device,"slide",buttons):
 			return true
 		if Input.get_joy_axis(device, JOY_AXIS_TRIGGER_LEFT) > 0.3 or Input.get_joy_axis(device, JOY_AXIS_TRIGGER_RIGHT) > 0.3:
 			return true
@@ -900,7 +902,8 @@ func tick(delta: float, course: Node3D) -> void:
 			var drift_velocity := drift_amount*screen_steer_sign*minf(38.0,speed*0.70)
 			lateral_speed = clampf(speed*sin(steering_heading)+drift_velocity,-speed*0.90,speed*0.90)+wall_drift
 			var forward_speed := sqrt(maxf(0.0,speed*speed-pow(lateral_speed-wall_drift,2.0)))
-			var next_s := distance + forward_speed*delta
+			var route_metric: float=course.call("loop_metric",distance,lane) if section=="LOOP ROUTE" else 1.0
+			var next_s := distance + forward_speed*delta/route_metric
 			var next_lane := lane + lateral_speed*delta
 			course.call("stream", next_s, speed)
 			# The gold-marked inside rail gently catches missed fork entries

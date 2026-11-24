@@ -128,17 +128,20 @@ func tick(delta: float,course: Node3D,runner: Node3D) -> void:
 			pulses.remove_at(i)
 	for i in range(drones.size()-1,-1,-1):
 		var data:=drones[i]
-		var at:=float(data["s"])
+		var at:=float(data["s"])+maxf(8.0,float(runner.get("speed"))*0.48)*delta
+		data["s"]=at
 		if at<float(runner.get("distance"))-40.0 or not bool(course.call("has_distance",at)):
 			data["node"].queue_free()
 			drones.remove_at(i)
 			continue
 		data["phase"]=float(data["phase"])+delta*2.0
+		var guided: float=course.call("guided_fork_lane",at,float(data["lane"]),float(data["lane"]),0.0)
+		data["lane"]=clampf(guided,-float(course.call("half_width_at",at))+4.0,float(course.call("half_width_at",at))-4.0)
 		var frame: Transform3D=course.call("surface_frame",at,float(data["lane"]),1)
 		var node: Node3D=data["node"]
 		node.transform=Transform3D(frame.basis,frame.origin+frame.basis.y*(5.5+sin(float(data["phase"]))*1.4))
 		var range_to_player:=node.position.distance_to(runner.position)
-		if range_to_player<100.0:
+		if range_to_player<maxf(100.0,float(runner.get("speed"))*1.4):
 			data["charge"]=float(data["charge"])-delta
 			var alert:=float(data["charge"])<0.55
 			(data["ring"] as MeshInstance3D).material_override=alert_mat if alert else drone_mat

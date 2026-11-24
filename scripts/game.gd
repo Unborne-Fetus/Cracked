@@ -180,6 +180,7 @@ func _restart() -> void:
 	course.reset_course(run_seed)
 	runner.reset_run(course)
 	combat.reset(mode==6,run_seed)
+	runner.combat_enabled=mode==6
 	runner.jumps_disabled = mode == 2
 	if mode == 3:
 		first_person = true
@@ -309,7 +310,8 @@ func _update_camera(delta: float) -> void:
 		view_camera.position = pos + takeoff_camera_offset.lerp(view_camera.position - pos, blend)
 	elif first_person:
 		camera_track_s = player_s
-		view_camera.position = pos+up*(slide_eye_height+0.30)-forward*0.36
+		var hang_eye: float=lerpf(slide_eye_height+0.30,1.08,float(runner.rider_inverted))
+		view_camera.position = pos+up*hang_eye-forward*0.36
 		_aim_camera(view_camera.position+(forward-up*0.34)*25.0,up)
 	else:
 		var focus := pos + up * 1.35
@@ -638,14 +640,16 @@ func _pad_button(button: int) -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if paused or (run_finished and not replay_active):
 		return
+	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and mode==6 and not replay_active:
+		combat.fire(view_camera,event.position)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
 		_orbit_input(drag.relative * 0.006)
 		get_viewport().set_input_as_handled()
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and mode==6 and not paused and not run_finished and not replay_active:
-		combat.fire(view_camera,event.position)
 	if event is InputEventMouseButton and not paused and (not run_finished or replay_active):
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_RIGHT:

@@ -117,6 +117,26 @@ func _run_tests() -> void:
 		_fail("First-person body must retain board and legs but hide the head.")
 		return
 	runner.call("set_first_person", bool(game.get("first_person")))
+	var combat_probe: Node3D=game.get("combat")
+	combat_probe.call("reset",true,4)
+	combat_probe.call("_spawn",course,runner)
+	var drones_probe: Array=combat_probe.get("drones")
+	if drones_probe.is_empty():
+		_fail("Combat mode failed to spawn a drone.")
+		return
+	combat_probe.call("tick",0.0,course,runner)
+	var target_drone: Node3D=drones_probe[0]["node"]
+	var saved_camera_pose:=sprite_camera.transform
+	sprite_camera.look_at(target_drone.global_position,Vector3.UP)
+	var aim_point:=sprite_camera.unproject_position(target_drone.global_position)
+	combat_probe.call("fire",sprite_camera,aim_point)
+	combat_probe.set("cooldown",0.0)
+	combat_probe.call("fire",sprite_camera,aim_point)
+	if int(combat_probe.get("score"))!=1:
+		_fail("Combat energy pulses did not tag and remove a drone.")
+		return
+	combat_probe.call("reset",false)
+	sprite_camera.transform=saved_camera_pose
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
 		_fail("Uphill sliding must be available.")
 		return
@@ -223,6 +243,17 @@ func _run_tests() -> void:
 	game.call("_recenter_camera")
 	if absf(float(game.get("orbit_yaw"))) > 0.001 or absf(float(game.get("orbit_pitch"))) > 0.001:
 		_fail("Recenter failed to reset orbit offsets.")
+		return
+	# Changing board yaw at a fixed position cannot rotate the camera.
+	game.call("_update_camera",1.0)
+	var track_camera_goal: Basis=game.get("camera_goal")
+	var saved_rider_pose: Transform3D=runner.transform
+	runner.transform=Transform3D(saved_rider_pose.basis.rotated(saved_rider_pose.basis.y,0.6),saved_rider_pose.origin)
+	game.call("_update_camera",1.0)
+	var carved_camera_goal: Basis=game.get("camera_goal")
+	runner.transform=saved_rider_pose
+	if track_camera_goal.z.dot(carved_camera_goal.z)<0.999:
+		_fail("Camera follows board yaw rather than track heading.")
 		return
 	# Controls must remain independent: C slides, Tab toggles camera.
 	for code in [KEY_SHIFT, KEY_CTRL, KEY_C]:
@@ -1015,7 +1046,7 @@ func _run_tests() -> void:
 	course.set("route_forecast", {"gap": 100.0, "speed": 80.0, "storm_speed": 30.0})
 	course.get("sustained_roll_queue").clear()
 	var branch_kind: String = course.call("_kind", 8)
-	if branch_kind not in ["SPLIT ROUTE", "STACKED ROUTES"]:
+	if branch_kind not in ["SPLIT ROUTE", "STACKED ROUTES","LOOP ROUTE"]:
 		_fail("Split route cadence did not produce a branching section.")
 		return
 	var map_point: Vector3 = course.call("surface_position", 8.0, 12.0)

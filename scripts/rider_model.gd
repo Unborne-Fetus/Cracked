@@ -17,6 +17,7 @@ var visual_lift := 0.0
 var visual_pivot := 0.0
 var handles: Node3D
 var sideways_amount := 0.0
+var first_person_view := false
 # Visual dimensions only. The gameplay collision envelope is unchanged.
 const LEG_LENGTH := 0.61
 const ARM_LENGTH := 0.34
@@ -106,6 +107,7 @@ func _ready() -> void:
 	pose(0.0, 0.0, false, 1.0)
 
 func set_first_person(enabled: bool) -> void:
+	first_person_view=enabled
 	head.visible = not enabled
 	torso.visible = not enabled
 	for part in upper_arms:
@@ -192,6 +194,9 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var side_ride := clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang)
 	var sideways := absf(side_ride)
 	handles.visible=hang>0.015
+	if first_person_view:
+		for part in lower_arms:
+			part.visible=hang>0.45
 	handles.scale.y=maxf(0.01,hang)
 	var ground_idle := clampf(float(extra.get("ground_idle",0.0)),0.0,1.0) if not airborne else 0.0
 	var ground_hop := sin(PI*ground_idle)
