@@ -521,7 +521,7 @@ func _make_ui() -> void:
 func _update_hud() -> void:
 	var s: float = runner.call("progress")
 	distance_label.text = "DISTANCE  %d m  •  WORLD %d" % [int(expedition.total_distance + maxf(0.0, s)), expedition.world] if expedition.endless else "DISTANCE  %d m / %d m" % [maxi(0, int(s)), int(course.get("length"))]
-	var display_time := elapsed + (expedition.total_time if expedition.endless else 0.0)
+	var display_time: float = elapsed + (float(expedition.total_time) if expedition.endless else 0.0)
 	time_label.text = "TIME  %02d:%05.2f" % [int(display_time / 60.0), fmod(display_time, 60.0)]
 	best_label.text = "BEST  %d m" % int(maxf(endless_best, expedition.total_distance + s) if expedition.endless else maxf(best, s))
 	energy_meter.value = float(runner.get("energy"))
