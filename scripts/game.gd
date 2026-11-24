@@ -43,6 +43,10 @@ var run_day := ""
 var extras_page: VBoxContainer
 var extras_button: Button
 var extra_items: Array[Control] = []
+var option_items: Array[Control] = []
+var control_items: Array[Control] = []
+var controls_page: VBoxContainer
+var binding_label: Label
 var mode_picker: OptionButton
 var profile_label: Label
 var stats_label: Label
@@ -149,6 +153,7 @@ func _ready() -> void:
 	add_child(extras)
 	effects = EffectsScript.new()
 	add_child(effects)
+	effects.make_trails()
 	replay = ReplayScript.new()
 	add_child(replay)
 	replay.load_last()
@@ -292,6 +297,7 @@ func _process(delta: float) -> void:
 	if replay_active:
 		if replay_playing:
 			_seek_replay(minf(replay.duration(), replay_time + delta * replay_rate), false)
+			_update_speed_trail(delta * replay_rate)
 			if replay_time >= replay.duration():
 				_set_replay_playing(false)
 		_update_camera(delta)
@@ -300,7 +306,15 @@ func _process(delta: float) -> void:
 	if paused:
 		return
 	_update_camera(delta)
+	if not run_finished:
+		_update_speed_trail(delta)
 	_update_hud()
+
+func _update_speed_trail(delta: float) -> void:
+	var pose: Transform3D = runner.global_transform
+	# Attach just above and behind the rider, including when inverted.
+	pose.origin += pose.basis.y * 0.75 + pose.basis.z * 0.95
+	effects.sample_trail(pose, course.origin_shift, float(runner.speed), delta)
 
 func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> bool:
 	# Check the actual bank frame along the sightline, not world-up.
@@ -627,31 +641,34 @@ func _toggle_camera() -> void:
 	runner.set_first_person(first_person)
 	_update_camera(1.0/60.0)
 
+func _active_menu_items() -> Array[Control]:
+	if controls_page.visible:
+		return control_items
+	if extras_page.visible:
+		return extra_items
+	if options_page.visible:
+		return option_items
+	return [resume_button, options_button, extras_button]
+
 func _pad_focus() -> void:
 	if not paused:
 		return
-	if extras_page.visible:
-		extra_items[clampi(pad_menu_index, 0, extra_items.size() - 1)].grab_focus()
-	elif options_page.visible:
-		if pad_menu_index == 0:
-			units_picker.grab_focus()
-		else:
-			back_button.grab_focus()
-	elif pad_menu_index == 0:
-		resume_button.grab_focus()
-	elif pad_menu_index == 1:
-		options_button.grab_focus()
-	else:
-		extras_button.grab_focus()
+	var items := _active_menu_items()
+	if not items.is_empty():
+		items[clampi(pad_menu_index, 0, items.size() - 1)].grab_focus()
 
 func _pad_direction(x: int, y: int) -> void:
+	var items := _active_menu_items()
+	if items.is_empty():
+		return
 	if y != 0:
-		var count := extra_items.size() if extras_page.visible else (2 if options_page.visible else 3)
-		pad_menu_index = posmod(pad_menu_index + y, count)
+		pad_menu_index = posmod(pad_menu_index + y, items.size())
 		_pad_focus()
-	elif x != 0 and extras_page.visible:
-		var selected := extra_items[pad_menu_index]
-		if selected is OptionButton:
+	elif x != 0:
+		var selected := items[clampi(pad_menu_index, 0, items.size() - 1)]
+		if selected == units_picker:
+			_set_units(1 if x > 0 else 0)
+		elif selected is OptionButton:
 			var picker := selected as OptionButton
 			for offset in range(1,picker.item_count+1):
 				var candidate:=posmod(picker.selected+x*offset,picker.item_count)
@@ -659,8 +676,14 @@ func _pad_direction(x: int, y: int) -> void:
 					picker.select(candidate)
 					picker.item_selected.emit(candidate)
 					break
-	elif x != 0 and options_page.visible and pad_menu_index == 0:
-		_set_units(1 if x > 0 else 0)
+
+func _back_menu() -> void:
+	if controls_page.visible:
+		_show_options(true)
+	elif options_page.visible or extras_page.visible:
+		_show_options(false)
+	else:
+		_set_paused(false)
 
 func _update_combat_cursor(active: bool) -> void:
 	if DisplayServer.get_name()=="headless" or aim_cursor_active==active:
@@ -710,18 +733,15 @@ func _pad_button(button: int) -> bool:
 		_start_replay()
 		return true
 	if button == JOY_BUTTON_START:
-		if paused and (options_page.visible or extras_page.visible):
-			_show_options(false)
+		if paused:
+			_back_menu()
 		else:
-			_set_paused(not paused)
+			_set_paused(true)
 		return true
 	if paused:
 		match button:
 			JOY_BUTTON_B, JOY_BUTTON_BACK:
-				if options_page.visible or extras_page.visible:
-					_show_options(false)
-				else:
-					_set_paused(false)
+				_back_menu()
 			JOY_BUTTON_DPAD_UP:
 				_pad_direction(0, -1)
 			JOY_BUTTON_DPAD_DOWN:
@@ -731,25 +751,16 @@ func _pad_button(button: int) -> bool:
 			JOY_BUTTON_DPAD_RIGHT:
 				_pad_direction(1, 0)
 			JOY_BUTTON_A:
-				if extras_page.visible:
-					var control := extra_items[pad_menu_index]
-					if control is OptionButton:
-						_pad_direction(1, 0)
-					elif control is CheckButton:
-						control.button_pressed = not control.button_pressed
-					elif control is Button and not control.disabled:
-						control.pressed.emit()
-				elif options_page.visible:
-					if pad_menu_index == 0:
-						_set_units(0 if imperial else 1)
-					else:
-						_show_options(false)
-				elif pad_menu_index == 0:
-					_set_paused(false)
-				elif pad_menu_index == 1:
-					_show_options(true)
-				else:
-					_show_extras()
+				var items := _active_menu_items()
+				var control := items[clampi(pad_menu_index, 0, items.size() - 1)]
+				if control == units_picker:
+					_set_units(0 if imperial else 1)
+				elif control is OptionButton:
+					_pad_direction(1, 0)
+				elif control is CheckButton:
+					control.button_pressed = not control.button_pressed
+				elif control is Button and not control.disabled:
+					control.pressed.emit()
 		return true
 	if combat.enabled and not run_finished and button==JOY_BUTTON_RIGHT_SHOULDER:
 		_fire_center()
@@ -864,10 +875,10 @@ func _input(event: InputEvent) -> void:
 	controls_hint.text = "A/D turn  ·  Q/E drift  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
-		if paused and options_page.visible:
-			_show_options(false)
+		if paused:
+			_back_menu()
 		else:
-			_set_paused(not paused)
+			_set_paused(true)
 		return
 	if paused:
 		return
@@ -916,10 +927,6 @@ func _create_hud() -> void:
 	var root := Control.new()
 	layer.add_child(root)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var streaks: Control = effects.make_trails()
-	root.add_child(streaks)
-	streaks.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	streaks.z_index = 1
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slide_indicator = PanelContainer.new()
 	root.add_child(slide_indicator)
@@ -1119,6 +1126,12 @@ func _show_options(value: bool) -> void:
 	options_page.visible = value
 	if is_instance_valid(extras_page):
 		extras_page.visible = false
+	if is_instance_valid(controls_page):
+		controls_page.visible = false
+	if value and is_instance_valid(cosmetic_picker):
+		for index in range(cosmetic_picker.item_count):
+			cosmetic_picker.set_item_disabled(index,not extras.cosmetic_unlocked(index))
+		cosmetic_picker.select(extras.cosmetic)
 	binding_action = ""
 	pad_menu_index = 0
 	_pad_focus()
@@ -1176,7 +1189,7 @@ func _create_pause_menu() -> void:
 	pause_page.add_child(options_button)
 	options_button.pressed.connect(func() -> void: _show_options(true))
 	options_button.focus_entered.connect(func() -> void: pad_menu_index = 1)
-	extras_button = _menu_button("RUN / PROFILE / CONTROLS")
+	extras_button = _menu_button("RUN & PROFILE")
 	pause_page.add_child(extras_button)
 	extras_button.pressed.connect(_show_extras)
 	extras_button.focus_entered.connect(func() -> void: pad_menu_index = 2)
@@ -1193,16 +1206,12 @@ func _create_pause_menu() -> void:
 	units_picker.add_item("Metric (km/h, m)")
 	units_picker.add_item("Imperial (mph, ft, mi)")
 	units_picker.item_selected.connect(func(index: int) -> void: _set_units(index))
-	options_page.add_child(units_picker)
-	units_picker.focus_entered.connect(func() -> void: pad_menu_index = 0)
-	back_button = _menu_button("BACK")
-	options_page.add_child(back_button)
-	back_button.pressed.connect(func() -> void: _show_options(false))
-	back_button.focus_entered.connect(func() -> void: pad_menu_index = 1)
+	_add_option(units_picker)
 	var pad_hint := _label("STICK / D-PAD  ·  A SELECT  ·  B BACK", 14, Color(0.55, 0.84, 0.96))
 	pad_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pages.add_child(pad_hint)
 	_create_extras_page(pages)
+	_create_settings_pages(pages)
 	_show_options(false)
 	pause_overlay.visible = false
 
@@ -1224,48 +1233,6 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	profile_replay_button.custom_minimum_size.y = 36
 	profile_replay_button.pressed.connect(_start_replay)
 	_add_extra(profile_replay_button)
-	var changelog_button := _menu_button("CHANGELOG")
-	changelog_button.custom_minimum_size.y = 34
-	changelog_button.pressed.connect(func() -> void: OS.shell_open("https://unborne-fetus.github.io/Cracked/changelog.html"))
-	_add_extra(changelog_button)
-	cosmetic_picker=OptionButton.new()
-	for palette_name in ["Original // White & Cyan","Amber // 1 km","Violet // 100 m/s","Emerald // 5 km"]:
-		cosmetic_picker.add_item(palette_name)
-	cosmetic_picker.item_selected.connect(_select_cosmetic)
-	_add_extra(cosmetic_picker)
-	binding_picker = OptionButton.new()
-	for name_value in ["left", "right", "drift_left", "drift_right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
-		binding_picker.add_item(name_value)
-	binding_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
-	_add_extra(binding_picker)
-	keyboard_rebind = _menu_button("REBIND KEY")
-	keyboard_rebind.custom_minimum_size.y = 34
-	keyboard_rebind.pressed.connect(func() -> void: _begin_binding("keyboard"))
-	_add_extra(keyboard_rebind)
-	pad_rebind = _menu_button("REBIND PAD BUTTON")
-	pad_rebind.custom_minimum_size.y = 34
-	pad_rebind.pressed.connect(func() -> void: _begin_binding("pad"))
-	_add_extra(pad_rebind)
-	var reset_bind := _menu_button("RESET BINDINGS")
-	reset_bind.custom_minimum_size.y = 34
-	reset_bind.pressed.connect(func() -> void: extras.keys.clear(); extras.pads.clear(); _apply_bindings(); extras.save_profile(); _refresh_profile())
-	_add_extra(reset_bind)
-	music_toggle = CheckButton.new()
-	music_toggle.text = "Soundtrack"
-	music_toggle.toggled.connect(func(v: bool) -> void: extras.soundtrack = v; effects.music_enabled = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
-	_add_extra(music_toggle)
-	audio_toggle = CheckButton.new()
-	audio_toggle.text = "Adaptive soundtrack"
-	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.adaptive_music = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
-	_add_extra(audio_toggle)
-	trails_toggle = CheckButton.new()
-	trails_toggle.text = "Speed streaks"
-	trails_toggle.toggled.connect(func(v: bool) -> void: extras.trails = v; effects.set_trails_enabled(v); extras.save_profile())
-	_add_extra(trails_toggle)
-	vibration_toggle = CheckButton.new()
-	vibration_toggle.text = "Controller vibration"
-	vibration_toggle.toggled.connect(func(v: bool) -> void: extras.vibration = v; effects.vibration_enabled = v; extras.save_profile())
-	_add_extra(vibration_toggle)
 	profile_label = _label("", 14, Color(0.76, 0.94, 1.0))
 	extras_page.add_child(profile_label)
 	var back := _menu_button("BACK")
@@ -1273,6 +1240,94 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	back.pressed.connect(func() -> void: _show_options(false))
 	_add_extra(back)
 	extras_page.visible = false
+
+func _create_settings_pages(pages: VBoxContainer) -> void:
+	options_page.add_theme_constant_override("separation", 7)
+	options_page.add_child(_label("APPEARANCE", 16, Color(0.75, 0.9, 1.0)))
+	cosmetic_picker=OptionButton.new()
+	for palette_name in ["Original // White & Cyan","Amber // 1 km","Violet // 100 m/s","Emerald // 5 km"]:
+		cosmetic_picker.add_item(palette_name)
+	cosmetic_picker.item_selected.connect(_select_cosmetic)
+	_add_option(cosmetic_picker)
+	options_page.add_child(_label("AUDIO & EFFECTS", 16, Color(0.75, 0.9, 1.0)))
+	music_toggle = CheckButton.new()
+	music_toggle.text = "Soundtrack"
+	music_toggle.toggled.connect(func(v: bool) -> void: extras.soundtrack = v; effects.music_enabled = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
+	_add_option(music_toggle)
+	audio_toggle = CheckButton.new()
+	audio_toggle.text = "Adaptive soundtrack"
+	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.adaptive_music = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
+	_add_option(audio_toggle)
+	trails_toggle = CheckButton.new()
+	trails_toggle.text = "Rider speed trail"
+	trails_toggle.toggled.connect(func(v: bool) -> void: extras.trails = v; effects.set_trails_enabled(v); extras.save_profile())
+	_add_option(trails_toggle)
+	vibration_toggle = CheckButton.new()
+	vibration_toggle.text = "Controller vibration"
+	vibration_toggle.toggled.connect(func(v: bool) -> void: extras.vibration = v; effects.vibration_enabled = v; extras.save_profile())
+	_add_option(vibration_toggle)
+	var control_button := _menu_button("CONTROLS")
+	control_button.custom_minimum_size.y = 36
+	control_button.pressed.connect(_show_controls)
+	_add_option(control_button)
+	var changelog_button := _menu_button("CHANGELOG")
+	changelog_button.custom_minimum_size.y = 34
+	changelog_button.pressed.connect(func() -> void: OS.shell_open("https://unborne-fetus.github.io/Cracked/changelog.html"))
+	_add_option(changelog_button)
+	back_button = _menu_button("BACK")
+	back_button.custom_minimum_size.y = 36
+	back_button.pressed.connect(func() -> void: _show_options(false))
+	_add_option(back_button)
+	controls_page = VBoxContainer.new()
+	controls_page.add_theme_constant_override("separation", 8)
+	pages.add_child(controls_page)
+	controls_page.add_child(_label("CONTROLS", 28, Color(0.1, 0.9, 1.0)))
+	binding_picker = OptionButton.new()
+	for name_value in ["left", "right", "drift_left", "drift_right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
+		binding_picker.add_item(name_value)
+	binding_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
+	_add_control(binding_picker)
+	keyboard_rebind = _menu_button("REBIND KEY")
+	keyboard_rebind.custom_minimum_size.y = 34
+	keyboard_rebind.pressed.connect(func() -> void: _begin_binding("keyboard"))
+	_add_control(keyboard_rebind)
+	pad_rebind = _menu_button("REBIND PAD BUTTON")
+	pad_rebind.custom_minimum_size.y = 34
+	pad_rebind.pressed.connect(func() -> void: _begin_binding("pad"))
+	_add_control(pad_rebind)
+	var reset_bind := _menu_button("RESET BINDINGS")
+	reset_bind.custom_minimum_size.y = 34
+	reset_bind.pressed.connect(func() -> void: extras.keys.clear(); extras.pads.clear(); _apply_bindings(); extras.save_profile(); _refresh_profile())
+	_add_control(reset_bind)
+	binding_label = _label("", 14, Color(0.76, 0.94, 1.0))
+	controls_page.add_child(binding_label)
+	var controls_back := _menu_button("BACK TO OPTIONS")
+	controls_back.custom_minimum_size.y = 36
+	controls_back.pressed.connect(func() -> void: _show_options(true))
+	_add_control(controls_back)
+	controls_page.visible = false
+
+func _add_option(control: Control) -> void:
+	options_page.add_child(control)
+	var idx := option_items.size()
+	option_items.append(control)
+	control.focus_entered.connect(func() -> void: pad_menu_index = idx)
+
+func _add_control(control: Control) -> void:
+	controls_page.add_child(control)
+	var idx := control_items.size()
+	control_items.append(control)
+	control.focus_entered.connect(func() -> void: pad_menu_index = idx)
+
+func _show_controls() -> void:
+	pause_page.hide()
+	options_page.hide()
+	extras_page.hide()
+	controls_page.show()
+	pad_menu_index = 0
+	binding_action = ""
+	_refresh_profile()
+	_pad_focus()
 
 func _add_extra(control: Control) -> void:
 	extras_page.add_child(control)
@@ -1299,9 +1354,7 @@ func _show_extras() -> void:
 	options_page.visible = false
 	extras_page.visible = true
 	mode_picker.select(mode)
-	for index in range(cosmetic_picker.item_count):
-		cosmetic_picker.set_item_disabled(index,not extras.cosmetic_unlocked(index))
-	cosmetic_picker.select(extras.cosmetic)
+	controls_page.hide()
 	profile_replay_button.disabled = not replay.available()
 	pad_menu_index = 0
 	_refresh_profile()
@@ -1321,7 +1374,9 @@ func _refresh_profile() -> void:
 	var action := binding_picker.get_item_text(binding_picker.selected)
 	var key_text := str(extras.keys.get(action, []))
 	var pad_text := str(extras.pads.get(action, []))
-	profile_label.text = ("Press a new " + binding_kind + " input for " + binding_action if not binding_action.is_empty() else "Unlocked %d / 8  |  Daily best %s\n%s\n%s: key %s  /  pad %s" % [extras.achievements.size(), _distance_display(extras.best_for(1, Time.get_date_string_from_system(true))), board_status, action, key_text if key_text != "[]" else "default", pad_text if pad_text != "[]" else "default"])
+	profile_label.text = "Unlocked %d / 8  |  Daily best %s\n%s" % [extras.achievements.size(), _distance_display(extras.best_for(1, Time.get_date_string_from_system(true))), board_status]
+	if is_instance_valid(binding_label):
+		binding_label.text = ("Press a new " + binding_kind + " input for " + binding_action if not binding_action.is_empty() else "%s: key %s  /  pad %s" % [action, key_text if key_text != "[]" else "default", pad_text if pad_text != "[]" else "default"])
 
 func _begin_binding(kind: String) -> void:
 	binding_kind = kind
@@ -1498,6 +1553,7 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.speed = float(state["speed"])
 	if snap_camera:
 		mountain_pose_ready = false
+		effects.clear_trail()
 	runner.grounded = bool(state["grounded"])
 	runner.is_sliding = bool(state["sliding"])
 	runner.diving = bool(state["diving"])

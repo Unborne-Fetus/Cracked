@@ -19,21 +19,29 @@ func _run_tests() -> void:
 	course.set("showcase_layout", true)
 	game.call("_restart")
 	await process_frame
-	# Visual/audio preferences remain independent and the streak overlay fills the HUD.
+	# Trail samples are world-space, not HUD lines, and respect the toggle.
 	var run_effects: Node = game.get("effects")
-	var streak_overlay: Control = run_effects.get("streaks")
-	if streak_overlay.size.x < 2.0 or streak_overlay.size.y < 2.0:
-		_fail("Speed streak overlay has no drawable area.")
-		return
+	var rider_trail: MeshInstance3D = run_effects.get("trail")
 	run_effects.call("set_trails_enabled", true)
-	if not streak_overlay.visible or float(run_effects.call("streak_intensity", 45.0)) < 0.15 or float(run_effects.call("streak_intensity", 150.0)) < 0.95:
-		_fail("Enabled streaks are invisible at useful speeds.")
+	run_effects.call("sample_trail", Transform3D(Basis.IDENTITY, Vector3.ZERO), Vector3.ZERO, 90.0, 0.02)
+	run_effects.call("sample_trail", Transform3D(Basis.IDENTITY, Vector3(2,1,-4)), Vector3.ZERO, 90.0, 0.02)
+	if not rider_trail.visible or rider_trail.mesh.get_surface_count() != 2:
+		_fail("World-space rider trail failed to generate.")
+		return
+	run_effects.call("sample_trail", Transform3D(Basis.IDENTITY, Vector3(-998,1,-8)), Vector3(1000,0,0), 90.0, 0.02)
+	if (run_effects.get("trail_points") as Array).size() != 3:
+		_fail("Rider trail broke during origin shift.")
 		return
 	run_effects.call("set_trails_enabled", false)
-	if streak_overlay.visible:
-		_fail("Speed streak toggle does not hide the overlay.")
+	if rider_trail.visible or rider_trail.mesh.get_surface_count() != 0:
+		_fail("Rider trail toggle does not clear the mesh.")
 		return
 	run_effects.call("set_trails_enabled", bool(game.get("extras").get("trails")))
+	var settings_page: Control = game.get("options_page")
+	var controls_menu: Control = game.get("controls_page")
+	if (game.get("cosmetic_picker") as Control).get_parent() != settings_page or (game.get("trails_toggle") as Control).get_parent() != settings_page or (game.get("binding_picker") as Control).get_parent() != controls_menu:
+		_fail("Settings are not grouped under Options.")
+		return
 	if absf(float(run_effects.call("soundtrack_gain", true, false, 0.0)) - 0.42) > 0.001 or absf(float(run_effects.call("soundtrack_gain", true, false, 200.0)) - 0.42) > 0.001 or float(run_effects.call("soundtrack_gain", false, true, 200.0)) != 0.0 or float(run_effects.call("soundtrack_gain", true, true, 200.0)) <= float(run_effects.call("soundtrack_gain", true, true, 20.0)):
 		_fail("Soundtrack mute and adaptive gain are not independent.")
 		return
