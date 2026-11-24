@@ -65,6 +65,18 @@ func _run_tests() -> void:
 	if absf(flip_board.rotation.y) > 0.01:
 		_fail("Diving fails to override idle trick.")
 		return
+	model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,false,0.0,5.0*1.15+0.575,1.0,0.0,0.0,0.0,{"flip_clear":true})
+	if absf(absf(model.rotation.x)-PI)>0.05:
+		_fail("Air idle front flip missing.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"ground_idle":0.5})
+	if absf(absf(model.rotation.y)-PI)>0.05 or float(model.get("visual_lift"))<0.3:
+		_fail("Ground idle hop/spin missing.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"inverted":1.0})
+	if model_head.position.y >= neutral_head-0.12:
+		_fail("Inverted rider does not brace.")
+		return
 	runner.set("grounded", false)
 	runner.set("kickflip_progress", 0.5)
 	runner.call("update_rider_sprite", sprite_camera)
@@ -417,6 +429,19 @@ func _run_tests() -> void:
 	runner.call("_check_fall",course,high_position,high_projection,0.5)
 	if bool(runner.get("fallen")):
 		_fail("Long airtime falsely killed a rider above the road.")
+		return
+	# Steering changes actual heading and produces a curved trajectory.
+	runner.set("grounded",true)
+	runner.set("distance",8.0)
+	runner.set("lane",0.0)
+	runner.set("speed",40.0)
+	runner.set("touch_axis",1.0)
+	runner.call("sync_pose",course)
+	for turn_tick in range(12):
+		runner.call("tick",1.0/60.0,course)
+	var turn_surface: Transform3D = course.call("surface_frame",float(runner.get("distance")),float(runner.get("lane")),1)
+	if float(runner.get("steering_heading")) < 0.25 or (-runner.transform.basis.z).dot(turn_surface.basis.x) < 0.20:
+		_fail("Steering still strafes instead of turning the board.")
 		return
 	# Crossing a road edge must detach instead of clamping the lane.
 	game.call("_restart")
@@ -779,6 +804,16 @@ func _run_tests() -> void:
 	var wide_edge: Transform3D = course.call("surface_frame",split_s,52.0,1)
 	if narrow_edge.origin.distance_to(fork_left.origin) >= wide_edge.origin.distance_to(fork_right.origin):
 		_fail("High ridge and low channel have identical widths.")
+		return
+	var guide_right: float = course.call("guided_fork_lane",split_s,15.0,0.0,0.0)
+	var guide_left: float = course.call("guided_fork_lane",split_s,-15.0,0.0,0.0)
+	if not bool(course.call("support_at",split_s,guide_right)) or not bool(course.call("support_at",split_s,guide_left)) or guide_right<=0.0 or guide_left>=0.0:
+		_fail("Inner fork guidance failed to select supported branches.")
+		return
+	var middle_point := (fork_left.origin+fork_right.origin)*0.5
+	var middle_projection := Vector3(split_s,0.0,0.0)
+	if not bool(course.call("fork_gap_recoverable",middle_point,middle_projection)):
+		_fail("Rider between branches cannot attempt a recovery.")
 		return
 	var fork_projected: Vector3 = course.call("project_position", fork_left.origin, split_s)
 	if absf(fork_projected.y + 28.0) > 0.2:

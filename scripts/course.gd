@@ -927,6 +927,43 @@ func _local_s(distance: float) -> float:
 	var index := chunk_index_at(distance)
 	return (distance - chunk_starts[index]) * CHUNK_LENGTH / (chunk_starts[index + 1] - chunk_starts[index])
 
+func fork_inner_lane(distance: float, side: float) -> float:
+	if not has_distance(distance):
+		return 0.0
+	var kind := section_name(distance)
+	if kind not in ["SPLIT ROUTE", "STACKED ROUTES"]:
+		return 0.0
+	var local_s := floorf(_local_s(distance)) + 0.5
+	if _cell_supported(kind,local_s,2.0):
+		return 0.0
+	# Match the actual inner boundary of the emitted 4m mesh cells.
+	for inner: float in [4.0,8.0,12.0,16.0]:
+		if _cell_supported(kind,local_s,inner+2.0):
+			return signf(side)*(inner+0.75)
+	return signf(side)*16.75
+
+func guided_fork_lane(distance: float, current_lane: float, proposed: float, steer: float) -> float:
+	var side := signf(current_lane)
+	if absf(current_lane) < 0.5:
+		side = -1.0 if steer < -0.05 else 1.0
+	var inner := fork_inner_lane(distance,side)
+	if inner == 0.0:
+		return proposed
+	# Inner edge is an assisted rail, NOT a surface across the gap.
+	# Stay on the selected branch; only outer edges remain unassisted.
+	return maxf(proposed,inner) if side > 0.0 else minf(proposed,inner)
+
+func fork_gap_recoverable(world_pos: Vector3, projected: Vector3) -> bool:
+	var at := projected.x
+	var inner := absf(fork_inner_lane(at,1.0))
+	if inner <= 0.0 or absf(projected.y) > inner+3.0:
+		return false
+	var left := surface_frame(at,-inner,1)
+	var right := surface_frame(at,inner,1)
+	# The lower deck remains a possible landing until the rider has
+	# genuinely fallen well beneath it. Do not kill due to lateral gap.
+	return world_pos.y >= minf(left.origin.y,right.origin.y)-30.0
+
 func support_at(distance: float, across: float) -> bool:
 	if not has_distance(distance) or absf(across) > half_width_at(distance):
 		return false
@@ -1073,8 +1110,9 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			if not _cell_supported(kind, float(i) + 0.5, z - 2.0) and not _cell_supported(kind, float(i) + 0.5, z + 2.0):
 				continue
 			var edge := j == 0 or j == CROSS_STEPS
+			var inner_edge := kind in ["SPLIT ROUTE","STACKED ROUTES"] and j > 0 and j < CROSS_STEPS and _cell_supported(kind,float(i)+0.5,z-2.0) != _cell_supported(kind,float(i)+0.5,z+2.0)
 			var vertex := i * stride + j
-			_line(grid, grid_top[vertex], grid_top[vertex + stride], edge_line0 if edge else line0, edge_line1 if edge else line1)
+			_line(grid, grid_top[vertex], grid_top[vertex + stride], Color(1.0,0.68,0.15) if inner_edge else edge_line0 if edge else line0, Color(1.0,0.68,0.15) if inner_edge else edge_line1 if edge else line1)
 			_line(grid, grid_bottom[vertex], grid_bottom[vertex + stride], under_line0, under_line1)
 		for side: float in [-1.0, 1.0]:
 			_quad(fill, _profile_vertex(points[i], kind, float(i), side * width0), _profile_vertex(points[i], kind, float(i), side * width0, -THICKNESS), _profile_vertex(points[i+1], kind, float(i + 1), side * width1), _profile_vertex(points[i+1], kind, float(i + 1), side * width1, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))

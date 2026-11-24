@@ -13,6 +13,8 @@ var white: StandardMaterial3D
 var shadow: StandardMaterial3D
 var deck_mat: StandardMaterial3D
 var edge_mat: StandardMaterial3D
+var visual_lift := 0.0
+var visual_pivot := 0.0
 # Visual dimensions only. The gameplay collision envelope is unchanged.
 const LEG_LENGTH := 0.61
 const ARM_LENGTH := 0.34
@@ -117,7 +119,7 @@ func _joint(a: Vector3, b: Vector3, bend: Vector3, segment_length: float) -> Vec
 func _pulse(value: float, start: float, peak: float, end: float) -> float:
 	return smoothstep(start, peak, value) * (1.0 - smoothstep(peak, end, value))
 
-func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false, dive_blend: float = 0.0, trick_clock: float = 0.0, trick_mix: float = 0.0, flourish: float = 0.0, bank: float = 0.0, brace: float = 0.0) -> void:
+func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false, dive_blend: float = 0.0, trick_clock: float = 0.0, trick_mix: float = 0.0, flourish: float = 0.0, bank: float = 0.0, brace: float = 0.0, extra: Dictionary = {}) -> void:
 	var dive_amount := maxf(dive_blend,1.0 if dive else 0.0) if airborne else 0.0
 	# All phases are derived from recorded simulation time; camera orbit
 	# and render rate never alter the animation or the player's physics.
@@ -128,16 +130,40 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	# Each 1.15-second airborne idle is a different board trick.
 	# The endpoints ease back to neutral so they can blend/cancel cleanly.
 	var idle := clampf(trick_mix,0.0,1.0) * (1.0-dive_amount) if airborne and not flipping else 0.0
-	var cycle := posmod(int(floor(trick_clock/1.15)),3)
+	var cycle := posmod(int(floor(trick_clock/1.15)),9)
 	var progress := fposmod(trick_clock,1.15)/1.15
 	var trick := sin(PI*progress)*idle
 	var shifty := trick if cycle == 0 else 0.0
 	var grab := trick if cycle == 1 else 0.0
 	var one_foot := trick if cycle == 2 else 0.0
+	var heel := trick if cycle == 3 else 0.0
+	var shove := trick if cycle == 4 else 0.0
+	var front_flip := trick if cycle == 5 else 0.0
+	var back_flip := trick if cycle == 6 else 0.0
+	var scissor := trick if cycle == 7 else 0.0
+	var barrel := trick if cycle == 8 else 0.0
+	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
+	var ground_idle := clampf(float(extra.get("ground_idle",0.0)),0.0,1.0) if not airborne else 0.0
+	var ground_hop := sin(PI*ground_idle)
+	# Idle rotations are isolated from the actual rider contact basis.
+	var spin_angle := TAU*smoothstep(0.10,0.90,progress)
+	var can_flip := bool(extra.get("flip_clear",false)) and idle>0.85 and absf(brace)<0.2
+	rotation = Vector3.ZERO
+	visual_pivot = 0.0
+	visual_lift = 0.0
+	if can_flip and cycle in [5,6,8]:
+		visual_pivot = 0.95
+		if cycle==8:
+			rotation.z = spin_angle
+		else:
+			rotation.x = spin_angle if cycle==5 else -spin_angle
+	elif ground_idle>0.0:
+		rotation.y = TAU*smoothstep(0.12,0.88,ground_idle)
+		visual_lift = ground_hop*0.42
 	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
 	var compression := clampf(landing, 0.0, 1.0)
 	var recoil := clampf(impact, 0.0, 1.0)
-	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18 + grab*0.35 + brace*0.30, 0.0, 1.0)
+	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18 + grab*0.35 + brace*0.30 + inverted*0.35 + (front_flip+back_flip+barrel)*0.20 + ground_hop*0.20, 0.0, 1.0)
 	var lean := clampf(steer, -1.0, 1.0) * 0.19 - bank*0.09 + shifty*0.08
 	var balance := sin(phase * 4.2) * 0.035 * (1.0 - bend) if not airborne else 0.0
 	# Taller neutral stance (about 2.2m including the deck). Longer legs
@@ -148,7 +174,8 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	torso.position = chest
 	torso.rotation.x = -0.52*bend-0.85*dive_amount+recoil*0.23
 	torso.rotation.z = -lean * 1.25
-	torso.rotation.y = -steer * 0.12 - shifty * 0.55 + grab * 0.25
+	torso.rotation.y = -steer*0.12-shifty*0.55+grab*0.25+scissor*0.30
+	torso.rotation.x += inverted*0.16
 	hips.position = hip
 	hips.rotation.z = -lean * 0.5
 	head.position = shoulder + Vector3(0,0.32*(1.0-0.62*dive_amount),-0.11*bend-0.23*dive_amount)
@@ -160,9 +187,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	board.position.y = 0.13 - tuck * 0.24
 	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
 	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount+grab*0.29-one_foot*0.12
-	board.rotation.y = shifty*0.75-grab*0.20
+	board.rotation.y = shifty*0.75-grab*0.20 + (spin_angle if cycle==4 and idle>0.85 else shove*0.40)
 	if not flipping:
-		board.rotation.z = shifty*0.18 + grab*0.15
+		board.rotation.z = shifty*0.18+grab*0.15-(spin_angle if cycle==3 and idle>0.85 else heel*0.25)
+		board.position.y -= heel*0.24+shove*0.16
 	for i in range(2):
 		var sign_value := -1.0 if i == 0 else 1.0
 		# Front (left) foot flicks diagonally over the nose. The back
@@ -188,6 +216,11 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			foot = foot.lerp(planted, idle)
 			if not front:
 				foot += Vector3(one_foot*0.42,one_foot*0.33,one_foot*0.25)
+			if heel>0.0 or shove>0.0:
+				foot = Vector3(sign_value*(0.30+heel*0.32),0.205+maxf(heel,shove)*0.46,-0.34 if front else 0.34)
+			if scissor>0.0:
+				foot += Vector3(sign_value*scissor*0.38,scissor*0.27,-sign_value*scissor*0.48)
+			foot.y += (front_flip+back_flip+barrel)*0.10
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
@@ -208,7 +241,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			hand = hand.lerp(board.position+board.basis*Vector3(-0.46,0.12,-0.25), grab*0.78)
 		else:
 			hand += Vector3(0.04,cheer*0.48+shifty*0.14,0.10*one_foot)
-		hand.y += brace*0.15 + sign_value*bank*0.12
+		hand.y += brace*0.15+sign_value*bank*0.12+ground_hop*0.18
+		hand = hand.lerp(arm_start+Vector3(sign_value*0.20,-0.42,0.28),inverted*0.80)
+		hand.x += sign_value*(scissor*0.20+barrel*0.12)
+		hand.z += (front_flip-back_flip)*0.18
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)

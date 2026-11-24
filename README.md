@@ -8,7 +8,7 @@ An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 
 | Input | Action |
 | --- | --- |
-| A / D or Left / Right | Steer across the track |
+| A / D or Left / Right | Turn and carve the board |
 | Hold Shift, Ctrl, C, S or Down | Slide |
 | Space | Jump; press again for one midair jump |
 | F (hold in air) | Dive |
@@ -94,3 +94,5 @@ The articulated rider is taller, with longer limbs and a higher neutral stance. 
 Fall detection now uses nearby supported road geometry and a short confirmed escape interval rather than an airtime timeout. Solid obstacle sweeps stop the board at the first contact and reflect its motion even after the obstacle has been hit. The taller model has an upturned tail, terrain-sampled board clearance, and an animated nose-down diving pose with swept-back arms. AFTERIMAGE revises the soundtrack toward lower-register dark drum-and-bass, reduced piercing highs, and less constant lead/guitar layering.
 
 Split routes now have contrasting terrain: a narrow high rolling ridge and broad low banked channel, plus a rolling upper flyover and a lower bowl on stacked routes. Geometry, normals, projection and forecast all use these independent branch profiles. Air idle tricks cycle through a shifty, a grab and a one-foot extension; diving, landing and impact override tricks. Bank compensation, landing brace and gate flourishes are replay-recorded visual states. NIGHT CIRCUIT is a new 174 BPM original soundtrack built around longer harmonic progressions, a recurring theme, separate drops and a bridge, with distorted guitar used only for accents.
+
+**Changelog:** [Latest changes](https://unborne-fetus.github.io/Cracked/changelog.html) ([repository history](CHANGELOG.md)). Open Pause → Run / Profile / Controls → Changelog. Forks use visible gold inner-edge guidance, and heading-based steering rotates the physical rider and momentum vector. Air tricks cycle across nine variants; ground idles and inverted braces are visual-only and replayed.

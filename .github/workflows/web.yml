@@ -169,6 +169,22 @@ jobs:
           page.write_text(html.replace('</body>', badge + '</body>', 1), encoding="utf-8")
           PY
           printf 'V. %s\n' "$VERSION" > build/web/version.txt
+          cp CHANGELOG.md build/web/CHANGELOG.md
+          python3 - <<'PY'
+          from pathlib import Path
+          from html import escape
+          source = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          parts = []
+          for line in source.splitlines():
+              if line.startswith("# "):
+                  parts.append("<h1>"+escape(line[2:])+"</h1>")
+              elif line.startswith("## "):
+                  parts.append("<h2>"+escape(line[3:])+"</h2>")
+              elif line.startswith("- "):
+                  parts.append("<p>• "+escape(line[2:])+"</p>")
+          Path("build/web/changelog.html").write_text('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vector Velocity — Changelog</title><style>body{background:#080c1a;color:#e5f7ff;font:16px/1.6 system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 20px}h1,h2,a{color:#35e8ff}h2{border-bottom:1px solid #275166;padding-bottom:8px;margin-top:34px}p{margin:8px 0}</style><a href="./">Back to Vector Velocity</a>'+"".join(parts)+"</html>",encoding="utf-8")
+          PY
+          test -s build/web/changelog.html
           touch build/web/.nojekyll
           test -s build/web/index.html
           test -s build/web/version.txt

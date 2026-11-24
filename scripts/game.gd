@@ -255,7 +255,7 @@ func _update_camera(delta: float) -> void:
 	var player_lane: float = runner.lane
 	var frame: Transform3D = course.surface_frame(player_s, player_lane, int(runner.surface_side))
 	var up := frame.basis.y
-	var forward := -frame.basis.z
+	var forward: Vector3 = -runner.transform.basis.z if runner.is_grounded() else -frame.basis.z
 	var pos: Vector3 = runner.position
 	var actively_sliding: bool = runner.is_grounded() and runner.is_sliding
 	slide_eye_height = lerpf(slide_eye_height, 0.85 if actively_sliding else 1.55, 1.0 - exp(-delta * 10.0))
@@ -1025,6 +1025,10 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	profile_replay_button.custom_minimum_size.y = 36
 	profile_replay_button.pressed.connect(_start_replay)
 	_add_extra(profile_replay_button)
+	var changelog_button := _menu_button("CHANGELOG")
+	changelog_button.custom_minimum_size.y = 34
+	changelog_button.pressed.connect(func() -> void: OS.shell_open("https://unborne-fetus.github.io/Cracked/changelog.html"))
+	_add_extra(changelog_button)
 	# Cosmetic unlock data stays in the profile. The first approved rider
 	# is a single white sprite set, so defer palette selection for now.
 	extras_page.add_child(_label("RIDER  //  WHITE SILHOUETTE", 14, Color(0.76, 0.94, 1.0)))
@@ -1285,6 +1289,9 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.rider_brace = float(state.get("rider_brace",0.0))
 	runner.rider_trick_mix = float(state.get("rider_trick_mix",0.0))
 	runner.rider_trick_clock = float(state.get("rider_trick_clock",0.0))
+	runner.steering_heading = float(state.get("steering_heading",0.0))
+	runner.rider_ground_idle = float(state.get("rider_ground_idle",0.0))
+	runner.rider_inverted = float(state.get("rider_inverted",0.0))
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0
