@@ -14,7 +14,7 @@ const BEHIND := 2
 const REBASE_DISTANCE := 2048.0
 const RECOVERY_ACCEL := 18.0
 const RECOVERY_HALF_WIDTH := 6.0
-const SPECIAL_TRACKS: Array[String] = ["SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"]
+const SPECIAL_TRACKS: Array[String] = ["SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM", "LOOP ROUTE"]
 const RunnerRules = preload("res://scripts/runner.gd")
 const ObstacleGrid = preload("res://shaders/obstacle_grid.gdshader")
 const StormRules = preload("res://scripts/storm.gd")
@@ -164,7 +164,9 @@ func _kind(index: int) -> String:
 	# A branching stretch roughly every 3–5 ordinary sections, rather
 	# than one appearance per 23-profile bag. Stacked decks count too.
 	if not showcase_layout and index >= 2 and (sections_since_split >= 4 or (sections_since_split >= 2 and rng.randf() < 0.40)):
-		return "STACKED ROUTES" if rng.randf() < 0.18 else "SPLIT ROUTE"
+		if index >= 4 and not recent_kinds.has("LOOP ROUTE") and rng.randf()<0.30:
+			return "LOOP ROUTE"
+		return "STACKED ROUTES" if rng.randf()<0.18 else "SPLIT ROUTE"
 	if terrain_bag.is_empty():
 		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY", "SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"])
 	var candidates: Array[int] = []
@@ -305,8 +307,8 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		# Independent, seeded longitudinal variation. Stretch technical
 		# sections, rather than squeezing banks below the safe base length.
 		length *= rng.randf_range(1.0, 1.45)
-		if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
-			length = maxf(length, maxf(560.0, planned_speed * 6.0))
+		if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
+			length = maxf(length,maxf(560.0,planned_speed*6.0))
 	var step_length := length / float(STEPS)
 	var strength := 1.0 if showcase_layout and index < 6 else rng.randf_range(0.72, 1.22)
 	var start_yaw := yaw
@@ -370,7 +372,7 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 				points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
 				forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 	last_kind = kind
-	if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+	if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 		sections_since_split = 0
 	else:
 		sections_since_split += 1
@@ -427,7 +429,7 @@ func _make_points(kind: String, start_yaw: float, target_yaw: float, bank_sign: 
 
 func _plan_live_obstacles(index: int, kind: String, points: Array[Transform3D], step_length: float, planned_speed: float) -> Array[Dictionary]:
 	var layout: Array[Dictionary] = []
-	if kind in ["SPLIT ROUTE", "STACKED ROUTES", "CORKSCREW TUNNEL", "HALFPIPE", "GAP CROSSING"] or is_extreme_bank(kind):
+	if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE", "CORKSCREW TUNNEL", "HALFPIPE", "GAP CROSSING"] or is_extreme_bank(kind):
 		return layout
 	# Multiple staggered objects per visible obstacle row. Reserve a
 	# broad reachable corridor, but no longer keep the centre empty.
@@ -540,6 +542,8 @@ func _forecast_grade(index: int, kind: String, points: Array[Transform3D], at: f
 	var i := clampi(int(round(at)), 1, STEPS - 1)
 	var frame := points[i]
 	var slope := (_ramp_lift(index, kind, float(i + 1), lane) - _ramp_lift(index, kind, float(i - 1), lane)) / (2.0 * step_length)
+	if kind=="LOOP ROUTE":
+		return (-_loop_frame(frame,float(i),lane,step_length*float(STEPS)).basis.z).y
 	if kind in ["STACKED ROUTES", "SPLIT ROUTE"]:
 		var change := (_cross_xy(kind, float(i + 1), lane) - _cross_xy(kind, float(i - 1), lane)) / (2.0 * step_length)
 		return (-frame.basis.z + frame.basis.x * change.x + frame.basis.y * (slope + change.y)).normalized().y
@@ -812,11 +816,16 @@ func surface_position(distance: float, across: float) -> Vector3:
 	var index := chunk_index_at(distance)
 	var kind := section_name(distance)
 	var local_s := _local_s(distance)
+	if kind=="LOOP ROUTE":
+		return _loop_frame(sample(distance),local_s,across,chunk_starts[index+1]-chunk_starts[index]).origin
 	return _profile_vertex(sample(distance), kind, local_s, across, _ramp_lift(index, kind, local_s, across))
 
 func surface_frame(distance: float, across: float, side: int = 1) -> Transform3D:
 	var frame := sample(distance)
 	var kind := section_name(distance)
+	if kind=="LOOP ROUTE":
+		var index := chunk_index_at(distance)
+		return _loop_frame(frame,_local_s(distance),across,chunk_starts[index+1]-chunk_starts[index],side)
 	if _special_profile(kind):
 		var local_s := _local_s(distance)
 		var normal := _cross_normal(kind, local_s, across)
@@ -848,7 +857,7 @@ func lane_limit(distance: float = -1.0) -> float:
 	return (HALF_WIDTH if distance < 0.0 else half_width_at(distance)) - 0.75
 
 func _special_profile(kind: String) -> bool:
-	return kind in ["CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SPLIT ROUTE"]
+	return kind in ["CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SPLIT ROUTE", "LOOP ROUTE"]
 
 func _profile_envelope(local_s: float) -> float:
 	return smoothstep(0.0, 45.0, local_s) * (1.0 - smoothstep(147.0, 192.0, local_s))
@@ -894,7 +903,7 @@ func _cross_xy(kind: String, local_s: float, across: float) -> Vector2:
 	return Vector2(across, 0.0)
 
 func _cross_normal(kind: String, local_s: float, across: float) -> Vector2:
-	if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+	if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 		# Derive actual bank from each branch's geometry, not the spine.
 		# Avoid differentiating across the disconnected center.
 		var lo := across - 0.08
@@ -913,7 +922,7 @@ func _cross_normal(kind: String, local_s: float, across: float) -> Vector2:
 	return Vector2.UP * -1.0
 
 func _cell_supported(kind: String, local_s: float, across: float) -> bool:
-	if kind == "SPLIT ROUTE":
+	if kind in ["SPLIT ROUTE","LOOP ROUTE"]:
 		var opening := 12.0 * _branch_envelope(local_s)
 		return absf(across) >= opening
 	if kind == "GAP CROSSING":
@@ -931,7 +940,7 @@ func fork_inner_lane(distance: float, side: float) -> float:
 	if not has_distance(distance):
 		return 0.0
 	var kind := section_name(distance)
-	if kind not in ["SPLIT ROUTE", "STACKED ROUTES"]:
+	if kind not in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 		return 0.0
 	var local_s := floorf(_local_s(distance)) + 0.5
 	if _cell_supported(kind,local_s,2.0):
@@ -968,12 +977,88 @@ func support_at(distance: float, across: float) -> bool:
 	if not has_distance(distance) or absf(across) > half_width_at(distance):
 		return false
 	var kind := section_name(distance)
-	if kind not in ["SPLIT ROUTE", "GAP CROSSING", "STACKED ROUTES"]:
+	if kind not in ["SPLIT ROUTE", "GAP CROSSING", "STACKED ROUTES", "LOOP ROUTE"]:
 		return true
 	var local_s := floorf(_local_s(distance)) + 0.5
 	# Match the emitted mesh cells (4 m across, 1 normalized metre long).
 	var cell := clampf(floorf((across + HALF_WIDTH) / 4.0), 0.0, 29.0) * 4.0 - HALF_WIDTH + 2.0
 	return _cell_supported(kind, local_s, cell)
+
+func _loop_offset(local_s: float, across: float, length: float) -> Vector3:
+	var u := clampf(local_s/CHUNK_LENGTH,0.0,1.0)
+	var e := smoothstep(0.0,0.22,u)*(1.0-smoothstep(0.78,1.0,u))
+	var t := clampf((u-0.22)/0.56,0.0,1.0)
+	var w := smoothstep(0.0,12.0,absf(across))
+	if across>=0.0:
+		return Vector3(across+26.0*e*w,-6.0*e*w,0.0)
+	# A real vertical loop with longitudinal reversal at its crown.
+	# Gradual lateral progression separates its ascending/descending arms.
+	var radius := length*0.145
+	var spread := 48.0+84.0*smoothstep(0.0,1.0,t)
+	return Vector3(across*(1.0-0.55*e)-spread*e*w,radius*(1.0-cos(TAU*t))*w,-radius*sin(TAU*t)*w)
+
+func _loop_frame(frame: Transform3D, local_s: float, across: float, length: float, side: int = 1) -> Transform3D:
+	var offset := _loop_offset(local_s,across,length)
+	var derivative := (_loop_offset(local_s+0.05,across,length)-_loop_offset(local_s-0.05,across,length))/(0.10*length/CHUNK_LENGTH)
+	var forward := (-frame.basis.z+frame.basis*derivative).normalized()
+	var right := (frame.basis.x-forward*frame.basis.x.dot(forward)).normalized()
+	var up := right.cross(forward).normalized()
+	var point := frame*offset
+	if side<0:
+		point -= up*THICKNESS
+	return Transform3D(Basis(right*float(side),up*float(side),-forward).orthonormalized(),point)
+
+func loop_progress(distance: float) -> float:
+	return _local_s(distance)/CHUNK_LENGTH
+
+func loop_required_speed(distance: float) -> float:
+	var index := chunk_index_at(distance)
+	return sqrt(24.0*(chunk_starts[index+1]-chunk_starts[index])*0.145)*1.05
+
+func _loop_projection(world_pos: Vector3, guess_s: float) -> Vector3:
+	var index := chunk_index_at(guess_s)
+	var start := chunk_starts[index]
+	var length := chunk_starts[index+1]-start
+	var best_s := guess_s
+	var best_lane := 0.0
+	var best_height := 0.0
+	var best_cost := INF
+	# Search locally around the previous progress, never jump to the
+	# other arm of the loop just because it crosses nearby in space.
+	for step: float in [12.0,3.0,0.75]:
+		var center := best_s
+		for j in range(-5,6):
+			var at := clampf(center+float(j)*step,start+0.001,start+length-0.001)
+			var frame := sample(at)
+			var s := _local_s(at)
+			var u := s/CHUNK_LENGTH
+			var e := smoothstep(0.0,0.22,u)*(1.0-smoothstep(0.78,1.0,u))
+			var t := clampf((u-0.22)/0.56,0.0,1.0)
+			var x := (world_pos-frame.origin).dot(frame.basis.x)
+			for branch: int in [-1,1]:
+				var scale_value := 1.0-0.55*e if branch<0 else 1.0
+				var spread := (48.0+84.0*smoothstep(0.0,1.0,t))*e if branch<0 else 26.0*e
+				var magnitude := x*float(branch)
+				var lane_value := (magnitude-spread)/scale_value
+				if lane_value<12.0:
+					var low := 0.0
+					var high := 12.0
+					for k in range(9):
+						var mid := (low+high)*0.5
+						if mid*scale_value+spread*smoothstep(0.0,12.0,mid)<magnitude:
+							low = mid
+						else:
+							high = mid
+					lane_value = (low+high)*0.5
+				lane_value *= float(branch)
+				var surface := _loop_frame(frame,s,clampf(lane_value,-HALF_WIDTH,HALF_WIDTH),length)
+				var cost := world_pos.distance_squared_to(surface.origin)+pow(at-guess_s,2.0)*0.025
+				if cost<best_cost:
+					best_cost=cost
+					best_s=at
+					best_lane=lane_value
+					best_height=(world_pos-surface.origin).dot(surface.basis.y)
+	return Vector3(best_s,best_lane,best_height)
 
 func _profile_vertex(frame: Transform3D, kind: String, local_s: float, lateral: float, lift: float = 0.0) -> Vector3:
 	var xy := _cross_xy(kind, local_s, lateral)
@@ -1041,6 +1126,10 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			var normal := _cross_normal(kind, local_s, across)
 			var normal3 := frame.basis.x * normal.x + frame.basis.y * normal.y
 			var point := frame.origin + frame.basis.x * xy.x + frame.basis.y * xy.y + normal3 * lift
+			if kind=="LOOP ROUTE":
+				var loop_frame := _loop_frame(frame,local_s,across,step_length*float(STEPS))
+				point = loop_frame.origin
+				normal3 = loop_frame.basis.y
 			var vertex := row * stride + column
 			top[vertex] = point
 			bottom[vertex] = point - normal3 * THICKNESS
@@ -1087,7 +1176,7 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 				stream1 = _profile_envelope(float(i + 1)) * (1.0 - smoothstep(7.0, 12.0, absf((next_z0 + next_z1) * 0.5 - slipstream_center(index, float(i + 1)))))
 			var color0 := dark0.lerp(Color(0.11, 0.36, 0.65), shortcut0 * 0.85).lerp(Color(0.03, 0.58, 0.26), recovery0)
 			var color1 := dark1.lerp(Color(0.11, 0.36, 0.65), shortcut1 * 0.85).lerp(Color(0.03, 0.58, 0.26), recovery1)
-			if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+			if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 				var branch_color := Color(0.25, 0.10, 0.035) if z0+z1 < 0.0 else Color(0.025, 0.20, 0.27)
 				color0 = color0.lerp(branch_color, _branch_envelope(float(i))*0.72)
 				color1 = color1.lerp(branch_color, _branch_envelope(float(i+1))*0.72)
@@ -1110,11 +1199,15 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			if not _cell_supported(kind, float(i) + 0.5, z - 2.0) and not _cell_supported(kind, float(i) + 0.5, z + 2.0):
 				continue
 			var edge := j == 0 or j == CROSS_STEPS
-			var inner_edge := kind in ["SPLIT ROUTE","STACKED ROUTES"] and j > 0 and j < CROSS_STEPS and _cell_supported(kind,float(i)+0.5,z-2.0) != _cell_supported(kind,float(i)+0.5,z+2.0)
+			var inner_edge := kind in ["SPLIT ROUTE","STACKED ROUTES","LOOP ROUTE"] and j > 0 and j < CROSS_STEPS and _cell_supported(kind,float(i)+0.5,z-2.0) != _cell_supported(kind,float(i)+0.5,z+2.0)
 			var vertex := i * stride + j
 			_line(grid, grid_top[vertex], grid_top[vertex + stride], Color(1.0,0.68,0.15) if inner_edge else edge_line0 if edge else line0, Color(1.0,0.68,0.15) if inner_edge else edge_line1 if edge else line1)
 			_line(grid, grid_bottom[vertex], grid_bottom[vertex + stride], under_line0, under_line1)
 		for side: float in [-1.0, 1.0]:
+			if kind=="LOOP ROUTE":
+				var edge_vertex := i*stride+(0 if side<0.0 else CROSS_STEPS)
+				_quad(fill,top[edge_vertex],bottom[edge_vertex],top[edge_vertex+stride],bottom[edge_vertex+stride],edge_line0,edge_line1)
+				continue
 			_quad(fill, _profile_vertex(points[i], kind, float(i), side * width0), _profile_vertex(points[i], kind, float(i), side * width0, -THICKNESS), _profile_vertex(points[i+1], kind, float(i + 1), side * width1), _profile_vertex(points[i+1], kind, float(i + 1), side * width1, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))
 	var solid := MeshInstance3D.new()
 	solid.mesh = fill.commit()
@@ -1196,6 +1289,8 @@ func sample(distance: float) -> Transform3D:
 	return frame
 
 func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
+	if has_distance(guess_s) and section_name(guess_s)=="LOOP ROUTE":
+		return _loop_projection(world_pos,guess_s)
 	# Project onto the nearest cross-section locally. Bounded Newton-like
 	# steps avoid snapping to a different branch of a twisted track.
 	var s := maxf(0.0, guess_s)
@@ -1216,6 +1311,8 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 	var across := offset.dot(local_frame.basis.x)
 	var raw_y := offset.dot(local_frame.basis.y)
 	var kind := section_name(s)
+	if kind=="LOOP ROUTE":
+		return _loop_projection(world_pos,s)
 	if _special_profile(kind):
 		var local_s := _local_s(s)
 		if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
@@ -1265,6 +1362,8 @@ func rider_section_name(distance: float, across: float) -> String:
 			return "HIGH RIDGE" if across < 0.0 else "LOW CHANNEL"
 		if kind == "STACKED ROUTES":
 			return "ROLLING FLYOVER" if across < 0.0 else "LOW BOWL"
+		if kind == "LOOP ROUTE":
+			return "RISK LOOP // +24 M/S" if across<0.0 else "SAFE BYPASS"
 	return kind
 
 func section_name(distance: float) -> String:
@@ -1450,6 +1549,7 @@ func distance_to_rideable_surface(world_pos: Vector3, projected: Vector3) -> flo
 	return nearest
 
 func nearest_road_point(world_pos: Vector3, projected: Vector3) -> Dictionary:
+	var floor_y := INF
 	var nearest := INF
 	var point := Vector3.ZERO
 	for offset: float in [0.0, -8.0, 8.0, -24.0, 24.0, -48.0, 48.0]:
@@ -1464,11 +1564,12 @@ func nearest_road_point(world_pos: Vector3, projected: Vector3) -> Dictionary:
 				continue
 			for side: int in [1, -1]:
 				var face := surface_frame(at, test_lane, side)
+				floor_y = minf(floor_y,face.origin.y)
 				var separation := world_pos.distance_squared_to(face.origin)
 				if separation < nearest:
 					nearest = separation
 					point = face.origin
-	return {"distance": sqrt(nearest), "point": point}
+	return {"distance": sqrt(nearest), "point": point, "floor_y":floor_y}
 
 func is_curved_enclosure(distance: float) -> bool:
 	var kind := section_name(distance)

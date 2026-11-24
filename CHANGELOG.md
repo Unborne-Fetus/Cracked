@@ -1,5 +1,12 @@
 # Vector Velocity changelog
 
+## 2026-11-23 — Loop routes, rider hanging poses, camera and arcade combat
+- Falls require sustained downward movement beneath nearby supported road; high or sideways flight alone cannot kill the rider.
+- Track-aligned camera does not rotate with carving; revised first-person eye placement and field of view.
+- Joint and board transform crossfades, sideways riding poses and retractable upside-down grip handles.
+- Optional vertical loop branch with safe bypass, minimum speed at the crown and one-time momentum reward.
+- Optional Combat run mode with robotic drones, energy pulse tagging and shield depletion.
+
 ## 2026-11-23 — First-person body, sky, drift and camera
 - Visible animated legs, boots and hoverboard in first person.
 - Procedural neon twilight skybox with stars, aurora and distant silhouettes.

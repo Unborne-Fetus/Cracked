@@ -6,6 +6,11 @@ const StormScript = preload("res://scripts/storm.gd")
 const ExtrasScript = preload("res://scripts/run_extras.gd")
 const EffectsScript = preload("res://scripts/run_effects.gd")
 const ReplayScript = preload("res://scripts/replay.gd")
+const CombatScript = preload("res://scripts/arcade_combat.gd")
+var combat
+var combat_label: Label
+var crosshair: Label
+var pulse_button: Button
 var replay
 var replay_active := false
 var replay_playing := false
@@ -18,7 +23,7 @@ var replay_play_button: Button
 var replay_speed_button: Button
 var watch_replay_button: Button
 var profile_replay_button: Button
-const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice"]
+const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice", "Combat"]
 var extras
 var effects
 var mode := 0
@@ -132,6 +137,8 @@ func _ready() -> void:
 	replay = ReplayScript.new()
 	add_child(replay)
 	replay.load_last()
+	combat=CombatScript.new()
+	add_child(combat)
 	_create_hud()
 	_create_replay_panel()
 	_create_pause_menu()
@@ -172,6 +179,7 @@ func _restart() -> void:
 	course.fixed_daily_layout = mode == 1
 	course.reset_course(run_seed)
 	runner.reset_run(course)
+	combat.reset(mode==6,run_seed)
 	runner.jumps_disabled = mode == 2
 	if mode == 3:
 		first_person = true
@@ -198,6 +206,10 @@ func _physics_process(delta: float) -> void:
 	var was_grounded: bool = runner.is_grounded()
 	var previous_speed: float = runner.speed
 	runner.tick(delta, course)
+	combat.tick(delta,course,runner)
+	if mode==6 and combat.shield<=0.0:
+		_lose("SHIELD DEPLETED")
+		return
 	extras.track(delta, runner, previous_speed)
 	effects.update_run(runner.speed, runner.hits > previous_hits, not was_grounded and runner.is_grounded())
 	if runner.fallen:
@@ -264,7 +276,7 @@ func _update_camera(delta: float) -> void:
 	var player_lane: float = runner.lane
 	var frame: Transform3D = course.surface_frame(player_s, player_lane, int(runner.surface_side))
 	var up := frame.basis.y
-	var forward: Vector3 = -runner.transform.basis.z if runner.is_grounded() else -frame.basis.z
+	var forward: Vector3 = -frame.basis.z
 	var pos: Vector3 = runner.position
 	var actively_sliding: bool = runner.is_grounded() and runner.is_sliding
 	runner.set_first_person(first_person)
@@ -284,11 +296,11 @@ func _update_camera(delta: float) -> void:
 		camera_was_grounded = false
 		# Follow the free player's own pose, not the twisting road below.
 		var air_up: Vector3 = runner.transform.basis.y
-		var air_forward: Vector3 = -runner.transform.basis.z
+		var air_forward: Vector3 = -frame.basis.z
 		camera_track_s = player_s
 		if first_person:
-			view_camera.position = pos + air_up * 1.55
-			_aim_camera(view_camera.position + (air_forward-air_up*0.22)*25.0, air_up)
+			view_camera.position = pos+air_up*1.90-air_forward*0.32
+			_aim_camera(view_camera.position+(air_forward-air_up*0.34)*25.0,air_up)
 		else:
 			view_camera.position = pos - air_forward * 9.0 + air_up * 4.0
 			_aim_camera(pos + air_up * 1.4 + air_forward * 4.0, air_up)
@@ -297,8 +309,8 @@ func _update_camera(delta: float) -> void:
 		view_camera.position = pos + takeoff_camera_offset.lerp(view_camera.position - pos, blend)
 	elif first_person:
 		camera_track_s = player_s
-		view_camera.position = pos + up * slide_eye_height
-		_aim_camera(view_camera.position + (forward-up*0.22)*25.0, up)
+		view_camera.position = pos+up*(slide_eye_height+0.30)-forward*0.36
+		_aim_camera(view_camera.position+(forward-up*0.34)*25.0,up)
 	else:
 		var focus := pos + up * 1.35
 		# Sample the track AT the camera's trailing distance. Using the
@@ -372,8 +384,8 @@ func _update_camera(delta: float) -> void:
 		# Quaternion blending whole tilted frames can introduce unwanted roll.
 		var heading := (-view_camera.basis.z).slerp(-camera_goal.z, 1.0-exp(-delta*CAMERA_RESPONSE))
 		view_camera.basis = _level_camera_basis(heading)
-	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.10, 78.0, 98.0), 1.0 - exp(-delta * 4.0))
-	runner.update_rider_sprite(view_camera)
+	view_camera.fov = lerpf(view_camera.fov,clampf((86.0 if first_person else 78.0)+runner.speed*0.045,78.0,98.0),1.0-exp(-delta*3.0))
+	runner.update_rider_sprite(view_camera,delta)
 
 func _speed_display(meters_per_second: float) -> int:
 	return int(meters_per_second * (2.2369362921 if imperial else 3.6))
@@ -389,6 +401,12 @@ func _distance_display(meters: float) -> String:
 	return "%d m" % int(meters)
 
 func _update_hud() -> void:
+	var combat_visible: bool=mode==6 and not replay_active and not run_finished
+	combat_label.visible=combat_visible
+	crosshair.visible=combat_visible
+	pulse_button.visible=combat_visible
+	if combat_visible:
+		combat_label.text="SHIELD %d%%  //  DRONES %d" % [int(combat.shield),int(combat.score)]
 	slide_indicator.visible = first_person and runner.is_grounded() and runner.is_sliding and not run_finished
 	reserve_meter.value = runner.momentum_reserve
 	reserve_label.text = "MOMENTUM RESERVE  %d%%" % int(round(runner.momentum_reserve / runner.RESERVE_MAX * 100.0))
@@ -414,8 +432,10 @@ func _update_hud() -> void:
 	if replay_active:
 		message_label.visible = false
 	elif not run_finished:
-		message_label.visible = runner.hit_timer > 0.0 or runner.gate_timer > 0.0 or runner.landing_reward_timer > 0.0
-		if runner.hit_timer > 0.0:
+		message_label.visible = runner.hit_timer>0.0 or runner.gate_timer>0.0 or runner.landing_reward_timer>0.0 or runner.loop_reward_timer>0.0
+		if runner.loop_reward_timer>0.0:
+			message_label.text="LOOP COMPLETE // +24 M/S"
+		elif runner.hit_timer > 0.0:
 			message_label.text = "IMPACT  //  MOMENTUM LOST"
 		elif runner.landing_reward_timer > 0.0:
 			message_label.text = runner.landing_reward_text
@@ -459,10 +479,10 @@ func _poll_camera_stick(delta: float) -> void:
 func _apply_camera_orbit(pos: Vector3, track_up: Vector3, track_forward: Vector3, player_s: float) -> void:
 	if absf(orbit_visual_yaw) < 0.0001 and absf(orbit_visual_pitch) < 0.0001 and absf(orbit_visual_zoom - 1.0) < 0.0001:
 		return
-	var up: Vector3 = track_up if runner.is_grounded() else runner.transform.basis.y
-	var forward: Vector3 = track_forward if runner.is_grounded() else -runner.transform.basis.z
+	var up: Vector3 = track_up
+	var forward: Vector3 = track_forward
 	if first_person:
-		var look: Vector3 = forward.rotated(up, orbit_visual_yaw)
+		var look: Vector3 = (forward-up*0.34).normalized().rotated(up,orbit_visual_yaw)
 		var axis: Vector3 = look.cross(up).normalized()
 		if axis.length_squared() > 0.001:
 			look = look.rotated(axis, orbit_visual_pitch)
@@ -534,6 +554,10 @@ func _pad_direction(x: int, y: int) -> void:
 	elif x != 0 and options_page.visible and pad_menu_index == 0:
 		_set_units(1 if x > 0 else 0)
 
+func _fire_center() -> void:
+	if mode==6 and not paused and not run_finished and not replay_active:
+		combat.fire(view_camera,get_viewport().get_visible_rect().size*0.5)
+
 func _pad_button(button: int) -> bool:
 	if replay_active:
 		match button:
@@ -597,6 +621,9 @@ func _pad_button(button: int) -> bool:
 				else:
 					_show_extras()
 		return true
+	if mode==6 and not run_finished and button==JOY_BUTTON_RIGHT_SHOULDER:
+		_fire_center()
+		return true
 	if _bound_pad("recenter", button, JOY_BUTTON_LEFT_STICK):
 		_recenter_camera()
 		return true
@@ -617,6 +644,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and mode==6 and not paused and not run_finished and not replay_active:
+		combat.fire(view_camera,event.position)
 	if event is InputEventMouseButton and not paused and (not run_finished or replay_active):
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_RIGHT:
@@ -705,6 +734,10 @@ func _input(event: InputEvent) -> void:
 			_set_paused(not paused)
 		return
 	if paused:
+		return
+	if mode==6 and not run_finished and key.keycode==KEY_Z:
+		_fire_center()
+		get_viewport().set_input_as_handled()
 		return
 	if _bound_key("recenter", key.keycode, KEY_G):
 		get_viewport().set_input_as_handled()
@@ -805,6 +838,20 @@ func _create_hud() -> void:
 	reserve_fill.bg_color = Color(0.98, 0.68, 0.21)
 	reserve_meter.add_theme_stylebox_override("fill", reserve_fill)
 	stack.add_child(reserve_meter)
+	combat_label=_label("",16,Color(1.0,0.52,0.77))
+	stack.add_child(combat_label)
+	crosshair=_label("+",25,Color(0.65,1.0,1.0))
+	root.add_child(crosshair)
+	crosshair.set_anchors_preset(Control.PRESET_CENTER)
+	crosshair.offset_left=-12
+	crosshair.offset_right=12
+	crosshair.offset_top=-14
+	crosshair.offset_bottom=14
+	crosshair.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	crosshair.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	pulse_button=_button("PULSE",-394,-276,124,true)
+	root.add_child(pulse_button)
+	pulse_button.pressed.connect(_fire_center)
 	minimap = preload("res://scripts/elevation_map.gd").new()
 	minimap.clip_contents = true
 	root.add_child(minimap)
@@ -1232,6 +1279,7 @@ func _start_replay() -> void:
 		return
 	_set_paused(false)
 	replay_active = true
+	combat.reset(false)
 	run_finished = true
 	replay_time = 0.0
 	replay_rate = 1.0

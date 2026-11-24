@@ -52,6 +52,9 @@ var rider_ground_clock := 0.0
 var rider_ground_idle := 0.0
 var rider_inverted := 0.0
 var rider_trick_serial := 0
+var active_loop := -1
+var rewarded_loops: Dictionary = {}
+var loop_reward_timer := 0.0
 var height := 0.0
 var vertical_speed := 0.0
 var grounded := true
@@ -117,12 +120,12 @@ func _ready() -> void:
 	avatar.add_child(rider_model)
 	board_pivot = rider_model.get("board")
 
-func update_rider_sprite(_camera: Camera3D) -> void:
+func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 	if not is_instance_valid(rider_model):
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot: float = rider_model.get("visual_pivot")
 	var lift: float = rider_model.get("visual_lift")
 	var correction := Vector3.UP*pivot - Basis.from_euler(rider_model.rotation)*Vector3.UP*pivot
@@ -143,13 +146,13 @@ func _update_rider_animation(delta: float) -> void:
 	rider_bank = lerpf(rider_bank, bank_target, 1.0-exp(-delta*7.0))
 	var brace_target := 1.0 if not grounded and air_time > 0.25 and air_velocity.y < -10.0 else 0.0
 	rider_brace = move_toward(rider_brace, brace_target, delta*4.0)
-	rider_inverted = move_toward(rider_inverted,smoothstep(0.0,0.85,-transform.basis.y.y),delta*5.0)
+	rider_inverted=move_toward(rider_inverted,smoothstep(0.15,0.85,-transform.basis.y.y) if grounded else 0.0,delta*3.0)
 	var idle_trick := not grounded and not diving and air_time > 0.45 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
 	rider_trick_mix = move_toward(rider_trick_mix,1.0 if idle_trick else 0.0,delta*5.0)
 	if idle_trick:
 		rider_trick_clock += delta
-	elif grounded:
-		rider_trick_clock = 0.0
+	elif rider_trick_mix<=0.001 and grounded:
+		rider_trick_clock=0.0
 	var calm_ground := grounded and not is_sliding and absf(steering_heading)<0.10 and speed<55.0 and rider_inverted<0.1 and rider_impact<0.1 and rider_landing<0.1
 	if calm_ground:
 		rider_ground_clock += delta
@@ -188,6 +191,9 @@ func reset_run(course: Node3D) -> void:
 	rider_ground_idle = 0.0
 	rider_inverted = 0.0
 	rider_trick_serial = 0
+	active_loop = -1
+	rewarded_loops.clear()
+	loop_reward_timer = 0.0
 	rider_ground_variant = 0
 	drift_amount = 0.0
 	steering_heading = 0.0
@@ -336,7 +342,7 @@ func relative_normal_acceleration(course: Node3D, at: float, _across: float, for
 	var curvature := (-after.basis.z.y + before.basis.z.y) / (2.0 * CONTACT_PROBE)
 	var upright := smoothstep(0.25, 0.90, frame.basis.y.y)
 	var kind: String = course.call("section_name", at)
-	if bool(course.call("is_extreme_bank", kind)) or kind in ["STACKED ROUTES", "SPLIT ROUTE", "HALFPIPE"]:
+	if bool(course.call("is_extreme_bank", kind)) or kind in ["STACKED ROUTES", "SPLIT ROUTE", "HALFPIPE","LOOP ROUTE"]:
 		upright = 0.0
 	# A gentle, bounded relative acceleration prevents violent launches at
 	# uncapped speeds. Manual jumping still works through the banks.
@@ -490,6 +496,7 @@ func _begin_flight(frame: Transform3D, impulse: float, curved_launch: bool = fal
 	kickflip_progress = 0.0 if trick else 1.0
 	recover_air_roll = curved_launch
 	grounded = false
+	active_loop = -1
 	double_jump_available = true
 	diving = false
 	dive_seconds = 0.0
@@ -600,10 +607,15 @@ func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: floa
 	if float(info["distance"]) <= FALL_DEPTH:
 		fall_grace = 0.0
 		return
-	var offset: Vector3 = point - Vector3(info["point"])
-	var horizontal := Vector3(offset.x,0.0,offset.z)
-	var escaping := offset.y < -FALL_DEPTH or (horizontal.length() > FALL_SIDE_DISTANCE and air_velocity.dot(horizontal) > 0.0)
-	fall_grace = fall_grace + delta if escaping else 0.0
+	# Horizontal projection error increases during very high jumps.
+	# Only sustained downward travel beneath all nearby rideable faces
+	# constitutes a fall; height and lateral separation alone never do.
+	var floor_y: float = info.get("floor_y",INF)
+	if not is_finite(floor_y):
+		var reference: Transform3D = course.call("sample",projected.x)
+		floor_y = reference.origin.y
+	var escaping := point.y < floor_y-FALL_DEPTH and air_velocity.y < -0.1
+	fall_grace = fall_grace+delta if escaping else 0.0
 	if fall_grace > 0.22:
 		fallen = true
 
@@ -693,7 +705,10 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	# Stream ahead before projecting onto the route. A rebase must shift
 	# free-flight positions too, otherwise they would jump by kilometres.
 	var old_origin: Vector3 = course.get("origin_shift")
-	var predicted_s := maxf(0.0, distance + air_velocity.dot(-old_frame.basis.z) * delta)
+	var predicted_s := maxf(0.0,distance+air_velocity.dot(-old_frame.basis.z)*delta)
+	if str(course.call("section_name",distance))=="LOOP ROUTE":
+		var loop_tangent: Transform3D = course.call("surface_frame",distance,lane,surface_side)
+		predicted_s=maxf(0.0,distance+air_velocity.dot(-loop_tangent.basis.z)*delta)
 	course.call("stream", maxf(distance, predicted_s), speed)
 	var new_origin: Vector3 = course.get("origin_shift")
 	var shift := new_origin - old_origin
@@ -819,13 +834,31 @@ func tick(delta: float, course: Node3D) -> void:
 		landing_blend = maxf(0.0, landing_blend - delta)
 	hit_timer = maxf(0.0, hit_timer - delta)
 	gate_timer = maxf(0.0, gate_timer - delta)
+	loop_reward_timer = maxf(0.0,loop_reward_timer-delta)
 	landing_reward_timer = maxf(0.0, landing_reward_timer - delta)
 	if grounded:
 		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
 		var section: String = course.call("section_name", distance)
-		var curved_launch := section in ["HALFPIPE", "CORKSCREW TUNNEL", "STACKED ROUTES", "SPLIT ROUTE"]
+		var curved_launch := section in ["HALFPIPE", "CORKSCREW TUNNEL", "STACKED ROUTES", "SPLIT ROUTE","LOOP ROUTE"]
 		uphill = grade > 0.025
+		if section=="LOOP ROUTE" and lane<0.0 and surface_side>0:
+			var progress: float = course.call("loop_progress",distance)
+			var loop_index: int = course.call("chunk_index_at",distance)
+			if progress<0.24:
+				active_loop=loop_index
+			if progress>0.38 and progress<0.64 and frame.basis.y.y<0.15 and speed<float(course.call("loop_required_speed",distance)):
+				active_loop=-1
+				_begin_flight(frame,0.0,true)
+				return
+			if progress>=0.78 and active_loop==loop_index and not rewarded_loops.has(loop_index):
+				rewarded_loops[loop_index]=true
+				speed+=24.0
+				momentum_reserve=minf(RESERVE_MAX,momentum_reserve+12.0)
+				loop_reward_timer=2.0
+				active_loop=-1
+		else:
+			active_loop=-1
 		var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
 		var natural_lift := natural_lift_impulse(normal_accel, speed)
 		if landing_timer <= 0.0 and (queued_jump or natural_lift > 0.0):

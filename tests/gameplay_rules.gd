@@ -22,7 +22,7 @@ func _run_tests() -> void:
 	# The avatar is articulated geometry, with a separate curved deck.
 	var model: Node3D = runner.get("rider_model")
 	var flip_board: Node3D = runner.get("board_pivot")
-	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 2:
+	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 3:
 		_fail("Block rider or curved board geometry is missing.")
 		return
 	var sprite_camera: Camera3D = game.get("view_camera")
@@ -86,7 +86,18 @@ func _run_tests() -> void:
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"inverted":1.0})
 	if model_head.position.y >= neutral_head-0.12:
-		_fail("Inverted rider does not brace.")
+		_fail("Inverted rider does not lower into the hanging pose.")
+		return
+	var handle_rig: Node3D = model.get("handles")
+	if not handle_rig.visible or handle_rig.scale.y<0.9:
+		_fail("Inverted rider did not deploy handles.")
+		return
+	# Loop branch reverses longitudinal direction at its crown, bypass
+	# remains upright and forward. Test geometry independently of seeds.
+	var loop_top: Transform3D = course.call("_loop_frame",Transform3D.IDENTITY,96.0,-30.0,640.0)
+	var bypass_top: Transform3D = course.call("_loop_frame",Transform3D.IDENTITY,96.0,30.0,640.0)
+	if loop_top.basis.y.y> -0.9 or bypass_top.basis.y.y<0.9 or loop_top.origin.y<bypass_top.origin.y+100.0:
+		_fail("Optional loop has no inverted crest or separate bypass.")
 		return
 	runner.set("grounded", false)
 	runner.set("kickflip_progress", 0.5)
@@ -440,6 +451,10 @@ func _run_tests() -> void:
 	runner.set("air_velocity",Vector3(0,-15,0))
 	var high_projection: Vector3 = course.call("project_position",high_position,52.0)
 	runner.call("_check_fall",course,high_position,high_projection,0.5)
+	var distant_high := high_position+Vector3(0,80,180)
+	var distant_projection: Vector3 = course.call("project_position",distant_high,52.0)
+	runner.set("air_velocity",Vector3(0,-10,100))
+	runner.call("_check_fall",course,distant_high,distant_projection,0.5)
 	if bool(runner.get("fallen")):
 		_fail("Long airtime falsely killed a rider above the road.")
 		return

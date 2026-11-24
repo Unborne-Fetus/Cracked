@@ -15,6 +15,8 @@ var deck_mat: StandardMaterial3D
 var edge_mat: StandardMaterial3D
 var visual_lift := 0.0
 var visual_pivot := 0.0
+var handles: Node3D
+var sideways_amount := 0.0
 # Visual dimensions only. The gameplay collision envelope is unchanged.
 const LEG_LENGTH := 0.61
 const ARM_LENGTH := 0.34
@@ -80,6 +82,16 @@ func _ready() -> void:
 	outline.mesh = rails.commit()
 	outline.material_override = edge_mat
 	board.add_child(outline)
+	handles=Node3D.new()
+	handles.name="RetractableHandles"
+	board.add_child(handles)
+	for side: float in [-1.0,1.0]:
+		var grip := _block(handles,Vector3(0.17,0.11,0.48),edge_mat)
+		grip.position=Vector3(side*0.37,0.36,0.0)
+		for z: float in [-0.21,0.21]:
+			var post := _block(handles,Vector3(0.10,0.36,0.10),deck_mat)
+			post.position=Vector3(side*0.37,0.18,z)
+	handles.visible=false
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
 	torso = _block(self, Vector3(0.56, 0.78, 0.34), white)
@@ -128,6 +140,13 @@ func _pulse(value: float, start: float, peak: float, end: float) -> float:
 	return smoothstep(start, peak, value) * (1.0 - smoothstep(peak, end, value))
 
 func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false, dive_blend: float = 0.0, trick_clock: float = 0.0, trick_mix: float = 0.0, flourish: float = 0.0, bank: float = 0.0, brace: float = 0.0, extra: Dictionary = {}) -> void:
+	var blend := clampf(float(extra.get("pose_blend",1.0)),0.0,1.0)
+	var previous_root := transform
+	var previous_parts: Array[Transform3D]=[]
+	for child in get_children():
+		previous_parts.append((child as Node3D).transform)
+	var previous_lift := visual_lift
+	var previous_pivot := visual_pivot
 	var dive_amount := maxf(dive_blend,1.0 if dive else 0.0) if airborne else 0.0
 	# All phases are derived from recorded simulation time; camera orbit
 	# and render rate never alter the animation or the player's physics.
@@ -169,6 +188,11 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
 	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
 	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
+	var hang := inverted
+	var side_ride := clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang)
+	var sideways := absf(side_ride)
+	handles.visible=hang>0.015
+	handles.scale.y=maxf(0.01,hang)
 	var ground_idle := clampf(float(extra.get("ground_idle",0.0)),0.0,1.0) if not airborne else 0.0
 	var ground_hop := sin(PI*ground_idle)
 	# Idle rotations are isolated from the actual rider contact basis.
@@ -209,15 +233,19 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var balance := sin(phase * 4.2) * 0.035 * (1.0 - bend) if not airborne else 0.0
 	# Taller neutral stance (about 2.2m including the deck). Longer legs
 	# stay visibly bent during the low speed tuck rather than scaling down.
-	var hip := Vector3(lean + balance, lerpf(1.29, 0.80, bend) + tuck*0.10+dive_amount*0.10+rocket*0.16-superman*0.14, lerpf(0.02, 0.23, bend) + recoil * 0.08)
+	var hip := Vector3(lean+balance-side_ride*0.13, lerpf(1.29, 0.80, bend) + tuck*0.10+dive_amount*0.10+rocket*0.16-superman*0.14, lerpf(0.02, 0.23, bend) + recoil * 0.08)
 	var chest := hip + Vector3(lean * 0.38, lerpf(0.55, 0.42, bend)*(1.0-0.64*dive_amount), -0.31*bend-0.40*dive_amount)
 	var shoulder := chest + Vector3(0, 0.22*(1.0-0.75*dive_amount), -0.05*bend-0.24*dive_amount)
+	hip=hip.lerp(Vector3(0.0,1.65,0.10),hang)
+	chest=chest.lerp(Vector3(0.0,1.13,0.04),hang)
+	shoulder=shoulder.lerp(Vector3(0.0,0.89,0.0),hang)
 	torso.position = chest
 	torso.rotation.x = -0.52*bend-0.85*dive_amount+recoil*0.23
 	torso.rotation.z = -lean * 1.25
 	torso.rotation.y = -steer*0.12-shifty*0.55+grab*0.25+scissor*0.30
 	torso.rotation.x += inverted*0.16-superman*0.85+nose_grab*0.35-tail_grab*0.28
-	torso.rotation.z += -drift*0.28+method_grab*0.35
+	torso.rotation.z += -drift*0.28+method_grab*0.35-side_ride*0.32
+	torso.rotation.x=lerpf(torso.rotation.x,PI,hang)
 	torso.rotation.y += indy*0.36-cross_grab*0.45+body_spin*0.1
 	hips.position = hip
 	hips.rotation.z = -lean * 0.5
@@ -225,6 +253,8 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	head.rotation.x = -0.12*bend-0.48*dive_amount+recoil*0.10
 	head.rotation.z = -lean * 0.40
 	head.rotation.y = -steer * 0.09 + shifty*0.30 - bank*0.15
+	head.position=head.position.lerp(Vector3(0,0.67,0.03),hang)
+	head.rotation.x=lerpf(head.rotation.x,PI,hang)
 	# The board leaves the feet, rotates around its longitudinal axis,
 	# then returns to level at the catch. No bank is added to the root.
 	board.position.y = 0.13 - tuck * 0.24
@@ -285,6 +315,8 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 				foot += Vector3(0.0,rocket*0.14,-rocket*0.25)
 		if ground_idle>0.0 and ground_variant in [1,2,3]:
 			foot = board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34)
+		foot += Vector3(side_ride*0.12,sideways*0.10*(1.0 if sign_value*side_ride>0.0 else 0.0),-side_ride*sign_value*0.12)
+		foot=foot.lerp(Vector3(sign_value*0.22,2.27,0.20+sign_value*0.09),hang)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
@@ -321,6 +353,18 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		hand.x += sign_value*(split_kick*0.22+drift*0.10)
 		hand.y += rocket*0.22+tuck_spin*0.16
 		hand.z -= superman*0.48
+		hand += Vector3(side_ride*0.20,side_ride*sign_value*0.26,sideways*0.10)
+		hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.37,0.36,0.0),hang)
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)
+	# Crossfade every joint, deck and visual root. A landing or dive can
+	# interrupt a trick without teleporting limbs to a new pose.
+	if blend<1.0:
+		var goal_rotation := quaternion
+		quaternion=previous_root.basis.get_rotation_quaternion().slerp(goal_rotation,blend)
+		visual_lift=lerpf(previous_lift,visual_lift,blend)
+		visual_pivot=lerpf(previous_pivot,visual_pivot,blend)
+		for i in range(get_child_count()):
+			var child := get_child(i) as Node3D
+			child.transform=previous_parts[i].interpolate_with(child.transform,blend)
