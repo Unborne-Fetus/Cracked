@@ -424,7 +424,7 @@ func _orbit_input(amount: Vector2) -> void:
 func _poll_camera_stick(delta: float) -> void:
 	var motion := Vector2.ZERO
 	for device in Input.get_connected_joypads():
-		var candidate := Vector2(runner.pad_axis(Input.get_joy_axis(device, JOY_AXIS_RIGHT_X)), runner.pad_axis(Input.get_joy_axis(device, JOY_AXIS_RIGHT_Y)))
+		var candidate: Vector2 = Vector2(runner.pad_axis(Input.get_joy_axis(device, JOY_AXIS_RIGHT_X)), runner.pad_axis(Input.get_joy_axis(device, JOY_AXIS_RIGHT_Y)))
 		if candidate.length_squared() > motion.length_squared():
 			motion = candidate
 	_orbit_input(motion * delta * 2.4)
@@ -432,26 +432,26 @@ func _poll_camera_stick(delta: float) -> void:
 func _apply_camera_orbit(pos: Vector3, track_up: Vector3, track_forward: Vector3, player_s: float) -> void:
 	if absf(orbit_yaw) < 0.0001 and absf(orbit_pitch) < 0.0001 and absf(orbit_zoom - 1.0) < 0.0001:
 		return
-	var up := track_up if runner.is_grounded() else runner.transform.basis.y
-	var forward := track_forward if runner.is_grounded() else -runner.transform.basis.z
+	var up: Vector3 = track_up if runner.is_grounded() else runner.transform.basis.y
+	var forward: Vector3 = track_forward if runner.is_grounded() else -runner.transform.basis.z
 	if first_person:
-		var look := forward.rotated(up, orbit_yaw)
-		var axis := look.cross(up).normalized()
+		var look: Vector3 = forward.rotated(up, orbit_yaw)
+		var axis: Vector3 = look.cross(up).normalized()
 		if axis.length_squared() > 0.001:
 			look = look.rotated(axis, orbit_pitch)
 		camera_goal = _level_camera_basis(look)
 		return
-	var focus := pos + up * 1.35
+	var focus: Vector3 = pos + up * 1.35
 	# Orbit a track-relative hemisphere, allowing a full 360-degree yaw.
 	# Limit downward pitch only when the actual track blocks the view.
-	var base_arm := view_camera.position - focus
+	var base_arm: Vector3 = view_camera.position - focus
 	var arm_length := clampf(base_arm.length() * orbit_zoom, 2.5, 30.0)
-	var azimuth := (-forward).rotated(up, orbit_yaw)
+	var azimuth: Vector3 = (-forward).rotated(up, orbit_yaw)
 	var base_pitch := atan2(base_arm.dot(up), maxf(0.01, (base_arm - up * base_arm.dot(up)).length()))
 	var elevation := clampf(base_pitch + orbit_pitch, deg_to_rad(-70.0), deg_to_rad(85.0))
-	var direction := azimuth * cos(elevation) + up * sin(elevation)
+	var direction: Vector3 = azimuth * cos(elevation) + up * sin(elevation)
 	for scale_value: float in [1.0, 0.75, 0.50, 0.30]:
-		var candidate := focus + direction * arm_length * scale_value
+		var candidate: Vector3 = focus + direction * arm_length * scale_value
 		var projection: Vector3 = course.project_position(candidate, player_s)
 		var clearance: float = course.surface_clearance(projection.x, projection.y, projection.z, int(runner.surface_side))
 		if bool(course.support_at(projection.x, projection.y)) and clearance < 0.7:
