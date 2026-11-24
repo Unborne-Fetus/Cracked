@@ -7,13 +7,8 @@ var vibration_enabled := true
 var speed := 0.0
 var paused := false
 var audio: AudioStreamPlayer
-var soundtrack: AudioStreamSynchronized
 var music_intensity := 0.0
-const MUSIC_PATHS: Array[String] = [
-	"res://audio/generated/foundation.ogg",
-	"res://audio/generated/harmony.ogg",
-	"res://audio/generated/velocity.ogg"
-]
+const MUSIC_PATH := "res://audio/generated/soundtrack.ogg"
 var clock := 0.0
 var streaks: Control
 
@@ -54,29 +49,21 @@ func activate_audio() -> void:
 	if not music_enabled or DisplayServer.get_name() == "headless":
 		return
 	if not is_instance_valid(audio):
-		# Build-time rendered stereo stems share an identical sample count.
-		# Synchronized playback avoids beat drift, pitch changes and runtime
-		# sample generation stalls in the Web export.
-		var synced := AudioStreamSynchronized.new()
-		synced.stream_count = MUSIC_PATHS.size()
-		for index in range(MUSIC_PATHS.size()):
-			if not ResourceLoader.exists(MUSIC_PATHS[index]):
-				push_warning("Soundtrack assets missing: run tools/render_soundtrack.py")
-				return
-			var clip := load(MUSIC_PATHS[index]) as AudioStreamOggVorbis
-			if clip == null:
-				return
-			clip.loop = true
-			clip.loop_offset = 0.0
-			synced.set_sync_stream(index, clip)
-		synced.set_sync_stream_volume(0, 0.0)
-		synced.set_sync_stream_volume(1, -8.0)
-		synced.set_sync_stream_volume(2, -45.0)
-		soundtrack = synced
+		if not ResourceLoader.exists(MUSIC_PATH):
+			push_warning("Soundtrack assets missing: run tools/render_soundtrack.py")
+			return
+		var clip := load(MUSIC_PATH) as AudioStreamOggVorbis
+		if clip == null:
+			return
+		clip.loop = true
+		clip.loop_offset = 0.0
 		audio = AudioStreamPlayer.new()
-		audio.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
-		audio.stream = soundtrack
-		audio.volume_db = -7.0
+		# Browser sample playback is handled by Web Audio rather than
+		# the frame-bound Godot mixer, so track generation cannot starve it.
+		if OS.has_feature("web"):
+			audio.playback_type = AudioServer.PLAYBACK_TYPE_SAMPLE
+		audio.stream = clip
+		audio.volume_db = -9.0
 		add_child(audio)
 		audio.play()
 	audio.stream_paused = paused
@@ -95,13 +82,8 @@ func _process(delta: float) -> void:
 		streaks.queue_redraw()
 	if not is_instance_valid(audio):
 		return
-	# Smooth gain changes instead of accelerating the BPM, so the score
-	# remains musically coherent even after sudden collisions.
-	audio.volume_db = move_toward(audio.volume_db, -7.0 if music_enabled else -80.0, delta * 95.0)
-	if soundtrack == null:
-		return
+	# The composition stays at one tempo. Subtle speed-driven volume
+	# changes preserve the musical energy without multiple streaming stems.
 	var target := smoothstep(25.0, 155.0, speed)
 	music_intensity = lerpf(music_intensity, target, 1.0 - exp(-delta * 1.65))
-	soundtrack.set_sync_stream_volume(0, 0.0)
-	soundtrack.set_sync_stream_volume(1, lerpf(-9.0, 0.0, music_intensity))
-	soundtrack.set_sync_stream_volume(2, linear_to_db(maxf(0.006, smoothstep(0.15, 0.88, music_intensity))))
+	audio.volume_db = move_toward(audio.volume_db, lerpf(-10.0, -6.0, music_intensity) if music_enabled else -80.0, delta * 50.0)

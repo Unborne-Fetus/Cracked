@@ -75,6 +75,10 @@ var minimap: Control
 var camera_track_s := 0.0
 var camera_track_clearance := 0.0
 var camera_rotation_ready := false
+var orbit_yaw := 0.0
+var orbit_pitch := 0.0
+var orbit_zoom := 1.0
+var orbit_drag := false
 var camera_goal := Basis.IDENTITY
 var camera_height := 0.0
 var slide_eye_height := 1.55
@@ -146,6 +150,10 @@ func _restart() -> void:
 	run_finished = false
 	run_time = 0.0
 	camera_rotation_ready = false
+	orbit_yaw = 0.0
+	orbit_pitch = 0.0
+	orbit_zoom = 1.0
+	orbit_drag = false
 	camera_height = 0.0
 	slide_eye_height = 1.55
 	camera_offset = Vector3.ZERO
@@ -197,6 +205,8 @@ func _physics_process(delta: float) -> void:
 	replay.record(run_time, delta, runner, course, storm)
 
 func _process(delta: float) -> void:
+	if not paused and (not run_finished or replay_active):
+		_poll_camera_stick(delta)
 	if replay_active:
 		if replay_playing:
 			_seek_replay(minf(replay.duration(), replay_time + delta * replay_rate), false)
@@ -319,6 +329,7 @@ func _update_camera(delta: float) -> void:
 		var air_look := from_forward if first_person else from_forward * 13.0 - from_up * 2.6
 		var air_goal := _level_camera_basis(air_look)
 		camera_goal = air_goal.slerp(camera_goal, blend).orthonormalized()
+	_apply_camera_orbit(pos, up, forward, player_s)
 	var camera_projection: Vector3 = course.project_position(view_camera.position, camera_track_s)
 	camera_track_clearance = float(course.surface_clearance(camera_projection.x, camera_projection.y, camera_projection.z, int(runner.surface_side)))
 	camera_offset = view_camera.position - pos
@@ -406,7 +417,56 @@ func _lose(reason: String) -> void:
 	message_label.visible = true
 	restart_button.visible = true
 
+func _orbit_input(amount: Vector2) -> void:
+	orbit_yaw = wrapf(orbit_yaw - amount.x, -PI, PI)
+	orbit_pitch = clampf(orbit_pitch + amount.y, deg_to_rad(-70.0), deg_to_rad(78.0))
+
+func _poll_camera_stick(delta: float) -> void:
+	var motion := Vector2.ZERO
+	for device in Input.get_connected_joypads():
+		var candidate := Vector2(runner.pad_axis(Input.get_joy_axis(device, JOY_AXIS_RIGHT_X)), runner.pad_axis(Input.get_joy_axis(device, JOY_AXIS_RIGHT_Y)))
+		if candidate.length_squared() > motion.length_squared():
+			motion = candidate
+	_orbit_input(motion * delta * 2.4)
+
+func _apply_camera_orbit(pos: Vector3, track_up: Vector3, track_forward: Vector3, player_s: float) -> void:
+	if absf(orbit_yaw) < 0.0001 and absf(orbit_pitch) < 0.0001 and absf(orbit_zoom - 1.0) < 0.0001:
+		return
+	var up := track_up if runner.is_grounded() else runner.transform.basis.y
+	var forward := track_forward if runner.is_grounded() else -runner.transform.basis.z
+	if first_person:
+		var look := forward.rotated(up, orbit_yaw)
+		var axis := look.cross(up).normalized()
+		if axis.length_squared() > 0.001:
+			look = look.rotated(axis, orbit_pitch)
+		camera_goal = _level_camera_basis(look)
+		return
+	var focus := pos + up * 1.35
+	# Orbit a track-relative hemisphere, allowing a full 360-degree yaw.
+	# Limit downward pitch only when the actual track blocks the view.
+	var base_arm := view_camera.position - focus
+	var arm_length := clampf(base_arm.length() * orbit_zoom, 2.5, 30.0)
+	var azimuth := (-forward).rotated(up, orbit_yaw)
+	var base_pitch := atan2(base_arm.dot(up), maxf(0.01, (base_arm - up * base_arm.dot(up)).length()))
+	var elevation := clampf(base_pitch + orbit_pitch, deg_to_rad(-70.0), deg_to_rad(85.0))
+	var direction := azimuth * cos(elevation) + up * sin(elevation)
+	for scale_value: float in [1.0, 0.75, 0.50, 0.30]:
+		var candidate := focus + direction * arm_length * scale_value
+		var projection: Vector3 = course.project_position(candidate, player_s)
+		var clearance: float = course.surface_clearance(projection.x, projection.y, projection.z, int(runner.surface_side))
+		if bool(course.support_at(projection.x, projection.y)) and clearance < 0.7:
+			continue
+		if _camera_line_clear(candidate, focus, projection.x, player_s):
+			view_camera.position = candidate
+			camera_track_s = projection.x
+			_aim_camera(focus, up)
+			return
+
 func _recenter_camera() -> void:
+	orbit_yaw = 0.0
+	orbit_pitch = 0.0
+	orbit_zoom = 1.0
+	orbit_drag = false
 	# Rebuild the chase arm and heading without changing camera mode,
 	# player orientation, momentum or position. In flight use the actual
 	# flight basis instead of the bank underneath the player.
@@ -534,7 +594,30 @@ func _pad_button(button: int) -> bool:
 		return true
 	return false
 
+func _unhandled_input(event: InputEvent) -> void:
+	if paused or (run_finished and not replay_active):
+		return
+	if event is InputEventScreenDrag:
+		var drag := event as InputEventScreenDrag
+		_orbit_input(drag.relative * 0.006)
+		get_viewport().set_input_as_handled()
+
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and not paused and (not run_finished or replay_active):
+		var mouse := event as InputEventMouseButton
+		if mouse.button_index == MOUSE_BUTTON_RIGHT:
+			orbit_drag = mouse.pressed
+			get_viewport().set_input_as_handled()
+			return
+		if mouse.pressed and mouse.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			orbit_zoom = clampf(orbit_zoom * (0.88 if mouse.button_index == MOUSE_BUTTON_WHEEL_UP else 1.14), 0.55, 2.4)
+			get_viewport().set_input_as_handled()
+			return
+	if event is InputEventMouseMotion and orbit_drag and not paused:
+		var motion_event := event as InputEventMouseMotion
+		_orbit_input(motion_event.relative * 0.006)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventJoypadButton:
 		var pad := event as InputEventJoypadButton
 		if pad.pressed:
@@ -543,14 +626,14 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			effects.activate_audio()
-			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  L3 center  ·  START pause  ·  X retry"
+			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  RIGHT STICK look  ·  L3 center  ·  START pause  ·  X retry"
 			if _pad_button(pad.button_index):
 				get_viewport().set_input_as_handled()
 		return
 	if event is InputEventJoypadMotion:
 		var motion := event as InputEventJoypadMotion
 		if absf(motion.axis_value) > 0.35:
-			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  L3 center  ·  START pause  ·  X retry"
+			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  RIGHT STICK look  ·  L3 center  ·  START pause  ·  X retry"
 		if paused and (motion.axis == JOY_AXIS_LEFT_X or motion.axis == JOY_AXIS_LEFT_Y):
 			var value := signf(motion.axis_value) if absf(motion.axis_value) > 0.65 else 0.0
 			var horizontal := motion.axis == JOY_AXIS_LEFT_X
@@ -599,7 +682,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	effects.activate_audio()
-	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  G center  ·  ESC pause  ·  R retry"
+	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if paused and options_page.visible:
@@ -726,7 +809,7 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  G center  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
+	var hint := _label("A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
 	controls_hint = hint
 	hint.anchor_top = 1.0
@@ -755,7 +838,7 @@ func _create_hud() -> void:
 	var view := _button("VIEW", -138, -20, 202, true)
 	root.add_child(view)
 	view.pressed.connect(_toggle_camera)
-	var recenter := _button("CENTER", -266, -148, 202, true)
+	var recenter := _button("CENTER", -394, -276, 202, true)
 	root.add_child(recenter)
 	recenter.pressed.connect(_recenter_camera)
 	var dive := _button("DIVE", -266, -148, 124, true)
@@ -815,6 +898,8 @@ func _set_units(index: int, persist: bool = true) -> void:
 
 func _set_paused(value: bool) -> void:
 	paused = value
+	if value:
+		orbit_drag = false
 	effects.set_paused(value)
 	pause_overlay.visible = value
 	pad_menu_axis = Vector2.ZERO
@@ -1133,6 +1218,10 @@ func _start_replay() -> void:
 	replay_rate = 1.0
 	replay_speed_button.text = "1x"
 	camera_rotation_ready = false
+	orbit_yaw = 0.0
+	orbit_pitch = 0.0
+	orbit_zoom = 1.0
+	orbit_drag = false
 	camera_was_grounded = true
 	camera_offset = Vector3.ZERO
 	camera_height = 0.0

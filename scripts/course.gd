@@ -40,6 +40,7 @@ var fixed_daily_layout := false
 # Fixed sequence is a test fixture only, never the default live course.
 var showcase_layout := false
 var recent_kinds: Array[String] = []
+var sections_since_split := 0
 # Archive the exact generated geometry, not merely the seed: endless
 # generation is adaptive to the player's speed and storm gap.
 const REPLAY_CHUNK_LIMIT := 768
@@ -76,6 +77,7 @@ func reset_course(seed_value: int) -> void:
 	rng.seed = seed_value
 	terrain_bag.clear()
 	recent_kinds.clear()
+	sections_since_split = 0
 	last_kind = ""
 	sustained_roll_queue.clear()
 	sustained_roll_sign = 1.0
@@ -158,6 +160,10 @@ func _kind(index: int) -> String:
 		var recovery: Array[String] = ["RECOVERY RUN", "LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"]
 		recovery.erase(last_kind)
 		return recovery[rng.randi_range(0, recovery.size() - 1)]
+	# A branching stretch roughly every 3–5 ordinary sections, rather
+	# than one appearance per 23-profile bag. Stacked decks count too.
+	if not showcase_layout and index >= 2 and (sections_since_split >= 4 or (sections_since_split >= 2 and rng.randf() < 0.40)):
+		return "STACKED ROUTES" if rng.randf() < 0.18 else "SPLIT ROUTE"
 	if terrain_bag.is_empty():
 		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY", "SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"])
 	var candidates: Array[int] = []
@@ -298,6 +304,8 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		# Independent, seeded longitudinal variation. Stretch technical
 		# sections, rather than squeezing banks below the safe base length.
 		length *= rng.randf_range(1.0, 1.45)
+		if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+			length = maxf(length, planned_speed * 3.4)
 	var step_length := length / float(STEPS)
 	var strength := 1.0 if showcase_layout and index < 6 else rng.randf_range(0.72, 1.22)
 	var start_yaw := yaw
@@ -354,6 +362,10 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 				points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
 				forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 	last_kind = kind
+	if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+		sections_since_split = 0
+	else:
+		sections_since_split += 1
 	recent_kinds.append(kind)
 	if recent_kinds.size() > 4:
 		recent_kinds.pop_front()
@@ -733,6 +745,13 @@ func surface_lift(distance: float, across: float) -> float:
 	var local_s := (distance - chunk_starts[index]) * CHUNK_LENGTH / (chunk_starts[index + 1] - chunk_starts[index])
 	return _ramp_lift(index, section_name(distance), local_s, across)
 
+func surface_position(distance: float, across: float) -> Vector3:
+	# Map only needs a point, not a full tangent/normal reconstruction.
+	var index := chunk_index_at(distance)
+	var kind := section_name(distance)
+	var local_s := _local_s(distance)
+	return _profile_vertex(sample(distance), kind, local_s, across, _ramp_lift(index, kind, local_s, across))
+
 func surface_frame(distance: float, across: float, side: int = 1) -> Transform3D:
 	var frame := sample(distance)
 	var kind := section_name(distance)
@@ -861,6 +880,34 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 	var faces := PackedVector3Array()
 	var grid := SurfaceTool.new()
 	grid.begin(Mesh.PRIMITIVE_LINES)
+	# Shared corners appear in up to four cells and both grid axes.
+	# Cache each row once, retaining the exact previous tessellation.
+	var top := PackedVector3Array()
+	var bottom := PackedVector3Array()
+	var grid_top := PackedVector3Array()
+	var grid_bottom := PackedVector3Array()
+	var stride := CROSS_STEPS + 1
+	var vertex_count := (STEPS + 1) * stride
+	top.resize(vertex_count)
+	bottom.resize(vertex_count)
+	grid_top.resize(vertex_count)
+	grid_bottom.resize(vertex_count)
+	for row in range(STEPS + 1):
+		var local_s := float(row)
+		var width := width_for_kind(kind, local_s / float(STEPS))
+		var frame := points[row]
+		for column in range(stride):
+			var across := lerpf(-width, width, float(column) / float(CROSS_STEPS))
+			var lift := _ramp_lift(index, kind, local_s, across)
+			var xy := _cross_xy(kind, local_s, across)
+			var normal := _cross_normal(kind, local_s, across)
+			var normal3 := frame.basis.x * normal.x + frame.basis.y * normal.y
+			var point := frame.origin + frame.basis.x * xy.x + frame.basis.y * xy.y + normal3 * lift
+			var vertex := row * stride + column
+			top[vertex] = point
+			bottom[vertex] = point - normal3 * THICKNESS
+			grid_top[vertex] = point + normal3 * 0.075
+			grid_bottom[vertex] = point - normal3 * (THICKNESS + 0.075)
 	for i in range(STEPS):
 		var s0 := start_s + float(i) * step_length
 		var s1 := s0 + step_length
@@ -870,6 +917,14 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 		var dark1 := track_color(s1, 0.0, 0.72, 0.105)
 		var underside0 := track_color(s0, 0.02, 0.65, 0.065)
 		var underside1 := track_color(s1, 0.02, 0.65, 0.065)
+		var line0 := track_color(s0)
+		var line1 := track_color(s1)
+		var under_line0 := track_color(s0, 0.07)
+		var under_line1 := track_color(s1, 0.07)
+		var edge_line0 := track_color(s0, 0.19)
+		var edge_line1 := track_color(s1, 0.19)
+		var cross_line := track_color(s0, 0.0, 0.8, 0.7)
+		var under_cross_line := track_color(s0, 0.07, 0.8, 0.7)
 		for j in range(CROSS_STEPS):
 			var z0 := lerpf(-width0, width0, float(j) / float(CROSS_STEPS))
 			var z1 := lerpf(-width0, width0, float(j + 1) / float(CROSS_STEPS))
@@ -877,14 +932,12 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			var next_z1 := lerpf(-width1, width1, float(j + 1) / float(CROSS_STEPS))
 			if not _cell_supported(kind, float(i) + 0.5, (z0 + z1) * 0.5):
 				continue
-			var h0 := _ramp_lift(index, kind, float(i) * STEP, z0)
-			var h1 := _ramp_lift(index, kind, float(i) * STEP, z1)
-			var h2 := _ramp_lift(index, kind, float(i + 1) * STEP, next_z0)
-			var h3 := _ramp_lift(index, kind, float(i + 1) * STEP, next_z1)
-			var a := _profile_vertex(points[i], kind, float(i), z0, h0)
-			var b := _profile_vertex(points[i], kind, float(i), z1, h1)
-			var c := _profile_vertex(points[i+1], kind, float(i + 1), next_z0, h2)
-			var d := _profile_vertex(points[i+1], kind, float(i + 1), next_z1, h3)
+			var vertex := i * stride + j
+			var next_vertex := vertex + stride
+			var a := top[vertex]
+			var b := top[vertex + 1]
+			var c := top[next_vertex]
+			var d := top[next_vertex + 1]
 			var recovery0 := _recovery_strength(index, kind, float(i), (z0 + z1) * 0.5)
 			var recovery1 := _recovery_strength(index, kind, float(i + 1), (next_z0 + next_z1) * 0.5)
 			var shortcut0 := _shortcut_weight(index, kind, float(i), (z0 + z1) * 0.5)
@@ -899,29 +952,25 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			_quad(fill, a, b, c, d, color0.lerp(Color(0.65, 0.24, 1.0), stream0), color1.lerp(Color(0.65, 0.24, 1.0), stream1))
 			for v: Vector3 in [a, c, b, b, c, d]:
 				faces.append(v)
-			var ba := _profile_vertex(points[i], kind, float(i), z0, h0 - THICKNESS)
-			var bb := _profile_vertex(points[i], kind, float(i), z1, h1 - THICKNESS)
-			var bc := _profile_vertex(points[i+1], kind, float(i + 1), next_z0, h2 - THICKNESS)
-			var bd := _profile_vertex(points[i+1], kind, float(i + 1), next_z1, h3 - THICKNESS)
+			var ba := bottom[vertex]
+			var bb := bottom[vertex + 1]
+			var bc := bottom[next_vertex]
+			var bd := bottom[next_vertex + 1]
 			_quad(fill, bb, ba, bd, bc, underside0, underside1)
 			for v: Vector3 in [bb, bd, ba, ba, bd, bc]:
 				faces.append(v)
 			# Both running-surface grid and collider use the same tessellation.
 			if i % 4 == 0:
-				_line(grid, _profile_vertex(points[i], kind, float(i), z0, h0 + 0.075), _profile_vertex(points[i], kind, float(i), z1, h1 + 0.075), track_color(s0, 0.0, 0.8, 0.7), track_color(s0, 0.0, 0.8, 0.7))
-				_line(grid, _profile_vertex(points[i], kind, float(i), z0, h0 - THICKNESS - 0.075), _profile_vertex(points[i], kind, float(i), z1, h1 - THICKNESS - 0.075), track_color(s0, 0.07, 0.8, 0.7), track_color(s0, 0.07, 0.8, 0.7))
+				_line(grid, grid_top[vertex], grid_top[vertex + 1], cross_line, cross_line)
+				_line(grid, grid_bottom[vertex], grid_bottom[vertex + 1], under_cross_line, under_cross_line)
 		for j in range(CROSS_STEPS + 1):
 			var z := lerpf(-width0, width0, float(j) / float(CROSS_STEPS))
-			var next_z := lerpf(-width1, width1, float(j) / float(CROSS_STEPS))
 			if not _cell_supported(kind, float(i) + 0.5, z - 2.0) and not _cell_supported(kind, float(i) + 0.5, z + 2.0):
 				continue
 			var edge := j == 0 or j == CROSS_STEPS
-			var ca := track_color(s0, 0.19 if edge else 0.0)
-			var cb := track_color(s1, 0.19 if edge else 0.0)
-			var lift0 := _ramp_lift(index, kind, float(i) * STEP, z)
-			var lift1 := _ramp_lift(index, kind, float(i + 1) * STEP, next_z)
-			_line(grid, _profile_vertex(points[i], kind, float(i), z, lift0 + 0.075), _profile_vertex(points[i+1], kind, float(i + 1), next_z, lift1 + 0.075), ca, cb)
-			_line(grid, _profile_vertex(points[i], kind, float(i), z, lift0 - THICKNESS - 0.075), _profile_vertex(points[i+1], kind, float(i + 1), next_z, lift1 - THICKNESS - 0.075), track_color(s0, 0.07), track_color(s1, 0.07))
+			var vertex := i * stride + j
+			_line(grid, grid_top[vertex], grid_top[vertex + stride], edge_line0 if edge else line0, edge_line1 if edge else line1)
+			_line(grid, grid_bottom[vertex], grid_bottom[vertex + stride], under_line0, under_line1)
 		for side: float in [-1.0, 1.0]:
 			_quad(fill, _profile_vertex(points[i], kind, float(i), side * width0), _profile_vertex(points[i], kind, float(i), side * width0, -THICKNESS), _profile_vertex(points[i+1], kind, float(i + 1), side * width1), _profile_vertex(points[i+1], kind, float(i + 1), side * width1, -THICKNESS), track_color(s0, 0.19, 0.8, 0.55), track_color(s1, 0.19, 0.8, 0.55))
 	var solid := MeshInstance3D.new()

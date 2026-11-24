@@ -31,7 +31,7 @@ Sliding on flat or downhill track builds momentum rapidly and indefinitely, with
 
 ## Run modes and profile
 
-Pause > Run / Profile / Controls opens daily seeded runs (UTC date, deterministic layout), no-jump, first-person, fast-storm and storm-free practice challenges. Competitive local records are separated by mode and daily date; practice never posts records or unlocks achievements. Eight achievements are retained; cosmetic selection is deferred while the new monochrome rider set is in use. The post-run summary records top speed, airtime, sliding time and momentum loss. Keyboard and gamepad button bindings can be changed and reset in the same menu. Analog steering and trigger slide remain available. The original 64-bar drum-and-bass score intensifies with speed through synchronized arrangement layers; speed streaks and controller impact/landing vibration can be disabled.
+Pause > Run / Profile / Controls opens daily seeded runs (UTC date, deterministic layout), no-jump, first-person, fast-storm and storm-free practice challenges. Competitive local records are separated by mode and daily date; practice never posts records or unlocks achievements. Eight achievements are retained; cosmetic selection is deferred while the new monochrome rider set is in use. The post-run summary records top speed, airtime, sliding time and momentum loss. Keyboard and gamepad button bindings can be changed and reset in the same menu. Analog steering and trigger slide remain available. The original 64-bar drum-and-bass score uses a pre-mixed browser-native audio sample; speed streaks and controller impact/landing vibration can be disabled.
 
 Online daily score submission is supported through a configured `velocity/leaderboard_url` project setting. The server implementation is provided separately and must be deployed before public ranking works. Client scores are unverified; never treat them as cheat-proof.
 
@@ -69,7 +69,7 @@ Browser releases display a readable version number, `V. 0.x`, in the game and br
 
 ## Soundtrack
 
-"Through the Neon" is an original 160 BPM drum-and-bass racing score, with a 96-second arrangement, three synchronized stereo stems, contrasting breakdowns, chord changes and a melodic hook. Speed smoothly brings in the harmonic and high-energy layers while the beat stays steady. All sounds are synthesized offline from the included composition; no third-party recordings are used. CI renders and checks the Vorbis assets before importing Godot. For a local editor build, install NumPy and FFmpeg and run `python tools/render_soundtrack.py` before opening the project. The existing soundtrack toggle still works.
+"Through the Neon" is an original 160 BPM drum-and-bass racing score, with a 96-second arrangement, a single pre-mixed stereo loop, contrasting breakdowns, chord changes and a melodic hook. The browser uses native Web Audio sample playback and smooth speed-dependent volume changes to reduce crackling. All sounds are synthesized offline from the included composition; no third-party recordings are used. CI renders and checks the Vorbis assets before importing Godot. For a local editor build, install NumPy and FFmpeg and run `python tools/render_soundtrack.py` before opening the project. The existing soundtrack toggle still works.
 
 ## Development
 
@@ -78,3 +78,5 @@ Open project.godot with Godot 4.7.2 and press F5. The Web export uses Compatibil
 CI caches the deterministic soundtrack, frees recycled track meshes between regression-test phases, and sets bounded test/deployment timeouts. A pending commit status links to the running build from the beginning of the job.
 
 The player uses three white, 36×32 hoverboard sprite poses derived from the approved pixel-silhouette concept. Nearest-neighbor filtering preserves hard pixel edges, and the sprite turns toward the camera around the actual bank-relative up axis. Cruise, carve and speed/dive poses respond to movement; first-person hides the sprite. Collision, movement, profile unlock data and replay physics are unchanged.
+
+Camera: hold right mouse and drag, use controller right stick, or drag an unoccupied touch area to orbit/look freely; scroll wheel adjusts chase zoom. G / L3 / CENTER restores default framing. The white rider has rear-facing poses and separate side profiles for orbit views. The circular elevation radar clips all terrain to its round boundary and uses faster surface-position sampling. Branch sections are deliberately prioritized every few ordinary chunks, subject to route validation. Mesh generation reuses cross-section vertices and colors without reducing collision resolution.

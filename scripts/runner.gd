@@ -71,6 +71,8 @@ var double_jumps := 0
 const RiderSprites = preload("res://scripts/rider_sprites.gd")
 var rider_sprite: Sprite3D
 var rider_textures: Array[Texture2D] = []
+var rider_side_textures: Array[Texture2D] = []
+var rider_is_side_view := false
 var rider_pose := RiderSprites.CRUISE
 var rider_facing_left := false
 var key_bindings: Dictionary = {}
@@ -89,6 +91,7 @@ func _ready() -> void:
 	avatar = Node3D.new()
 	add_child(avatar)
 	rider_textures = RiderSprites.make_textures()
+	rider_side_textures = RiderSprites.make_textures(true)
 	rider_sprite = Sprite3D.new()
 	rider_sprite.name = "PixelHoverboardRider"
 	rider_sprite.texture = rider_textures[RiderSprites.CRUISE]
@@ -114,13 +117,15 @@ func update_rider_sprite(camera: Camera3D) -> void:
 		next_pose = RiderSprites.BOOST if diving else RiderSprites.CARVE
 	elif is_sliding:
 		next_pose = RiderSprites.BOOST if speed >= 90.0 and absf(lateral_speed) < 5.0 else RiderSprites.CARVE
-	if next_pose != rider_pose:
+	var side_view := absf(relative.x) > absf(relative.z) * (0.85 if rider_is_side_view else 1.20)
+	if next_pose != rider_pose or side_view != rider_is_side_view:
 		rider_pose = next_pose
-		rider_sprite.texture = rider_textures[rider_pose]
+		rider_is_side_view = side_view
+		rider_sprite.texture = rider_side_textures[rider_pose] if side_view else rider_textures[rider_pose]
 	# Hysteresis avoids rapid mirroring when the steering input is neutral.
 	if grounded and absf(lateral_speed) > 2.5:
 		rider_facing_left = lateral_speed * screen_steer_sign < 0.0
-	rider_sprite.flip_h = rider_facing_left
+	rider_sprite.flip_h = relative.x < 0.0 if rider_is_side_view else rider_facing_left
 	# The original collision envelope is unchanged; sprite-only pitch
 	# expresses the jump/dive and never changes contact or momentum.
 	var tilt := 0.0
@@ -168,6 +173,7 @@ func reset_run(course: Node3D) -> void:
 	avatar.scale = Vector3.ONE
 	avatar.position = Vector3.ZERO
 	rider_pose = RiderSprites.CRUISE
+	rider_is_side_view = false
 	rider_facing_left = false
 	rider_sprite.texture = rider_textures[rider_pose]
 	rider_sprite.flip_h = false

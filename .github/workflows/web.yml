@@ -50,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: audio/generated/
-          key: velocity-soundtrack-v1-${{ runner.os }}-${{ hashFiles('tools/render_soundtrack.py') }}
+          key: velocity-soundtrack-v2-${{ runner.os }}-${{ hashFiles('tools/render_soundtrack.py') }}
       - name: Render original racing soundtrack
         if: steps.audio-cache.outputs.cache-hit != 'true'
         timeout-minutes: 3
@@ -60,12 +60,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y ffmpeg
           fi
-          python3 -m venv /tmp/velocity-audio-venv
-          /tmp/velocity-audio-venv/bin/pip install 'numpy>=1.26,<3'
-          /tmp/velocity-audio-venv/bin/python tools/render_soundtrack.py
-          for stem in foundation harmony velocity; do
-            test -s "audio/generated/$stem.ogg"
-          done
+          if python3 -c 'import numpy' 2>/dev/null; then
+            python3 tools/render_soundtrack.py
+          else
+            python3 -m venv /tmp/velocity-audio-venv
+            /tmp/velocity-audio-venv/bin/pip install 'numpy>=1.26,<3'
+            /tmp/velocity-audio-venv/bin/python tools/render_soundtrack.py
+          fi
+          test -s audio/generated/soundtrack.ogg
       - name: Import and validate project
         run: |
           set -euo pipefail
@@ -198,11 +200,8 @@ jobs:
             -f description="$DETAIL" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-      - name: Upload browser build
-        uses: actions/upload-artifact@v4
-        with:
-          name: vector-velocity-web
-          path: build/web/
+      # Pages artifact is already downloadable from the run; do not
+      # upload the identical wasm/pck a second time.
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Prepare GitHub Pages artifact

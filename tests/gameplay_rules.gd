@@ -155,6 +155,15 @@ func _run_tests() -> void:
 	if recenter_camera.basis.z.dot(centered_goal.z) < 0.999 or runner.transform != before_recenter or float(runner.get("speed")) != before_recenter_speed or bool(game.get("first_person")) != before_recenter_mode:
 		_fail("Camera recenter did not restore view independently of movement.")
 		return
+	game.call("_orbit_input", Vector2(0.8, 0.3))
+	game.call("_update_camera", 1.0)
+	if absf(float(game.get("orbit_yaw"))) < 0.7 or absf(float(game.get("orbit_pitch"))) < 0.2:
+		_fail("Free camera orbit input was ignored.")
+		return
+	game.call("_recenter_camera")
+	if absf(float(game.get("orbit_yaw"))) > 0.001 or absf(float(game.get("orbit_pitch"))) > 0.001:
+		_fail("Recenter failed to reset orbit offsets.")
+		return
 	# Controls must remain independent: C slides, Tab toggles camera.
 	for code in [KEY_SHIFT, KEY_CTRL, KEY_C]:
 		if not bool(runner.call("is_slide_key", code)):
@@ -833,6 +842,21 @@ func _run_tests() -> void:
 		signatures[signature] = true
 	if signatures.size() < 4:
 		_fail("Different seeds generate repeating opening courses.")
+		return
+	# Directly exercise the branch cadence without expensive extra meshes.
+	course.set("sections_since_split", 5)
+	course.set("demanding_sections", 0)
+	course.set("last_kind", "TURN")
+	course.set("route_forecast", {"gap": 100.0, "speed": 80.0, "storm_speed": 30.0})
+	course.get("sustained_roll_queue").clear()
+	var branch_kind: String = course.call("_kind", 8)
+	if branch_kind not in ["SPLIT ROUTE", "STACKED ROUTES"]:
+		_fail("Split route cadence did not produce a branching section.")
+		return
+	var map_point: Vector3 = course.call("surface_position", 8.0, 12.0)
+	var map_frame: Transform3D = course.call("surface_frame", 8.0, 12.0, 1)
+	if map_point.distance_to(map_frame.origin) > 0.01:
+		_fail("Fast map position differs from the rideable surface.")
 		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")

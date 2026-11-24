@@ -9,7 +9,7 @@ import tempfile
 import wave
 import numpy as np
 
-SR = 32000
+SR = 44100
 BPM = 160
 BEAT = 60 / BPM
 BARS = 64
@@ -145,7 +145,7 @@ for bar in range(BARS):
     if full:
         for j in (1.75,3.75) if bar%4==3 else (3.5,):
             put(stems[2],pos+j,snare(),.12,-.2)
-        for j,dur,note in motifs[bar%8]:
+        for j,note,dur in motifs[bar%8]:
             if part==6 and bar%2==0:
                 note += 12
             delay(stems[2],pos+j,pluck(note,dur,True),.21,.12)
@@ -170,17 +170,24 @@ for j,stem in enumerate(stems):
 peak=float(np.max(np.abs(sum(stems))))
 gain=min(1.0,.88/max(peak,1e-6))
 OUT.mkdir(parents=True,exist_ok=True)
+# Balance the layers offline. A single browser-native sample avoids
+# three streaming decoders fighting the single-threaded Web renderer.
+mix = (stems[0] + stems[1]*.82 + stems[2]*.70)
+peak=float(np.max(np.abs(mix)))
+gain=min(1.0,.78/max(peak,1e-6))
+mix *= gain
+# A tiny fade at the loop seam prevents an audible discontinuity.
+fade = round(.008*SR)
+mix[:fade] *= np.linspace(0,1,fade,dtype=np.float32)[:,None]
+mix[-fade:] *= np.linspace(1,0,fade,dtype=np.float32)[:,None]
+assert np.isfinite(mix).all() and .02 < float(np.sqrt(np.mean(mix**2))) < .35
 with tempfile.TemporaryDirectory() as tmp:
-    for name,stem in zip(("foundation","harmony","velocity"),stems):
-        wav=Path(tmp)/f"{name}.wav"
-        samples=np.asarray(np.clip(stem*gain,-1,1)*32767,dtype="<i2")
-        rms=float(np.sqrt(np.mean((stem*gain)**2)))
-        assert rms>.008 and np.isfinite(stem).all(), f"Invalid stem: {name}"
-        with wave.open(str(wav),"wb") as f:
-            f.setnchannels(2);f.setsampwidth(2);f.setframerate(SR);f.writeframes(samples.tobytes())
-        target=OUT/f"{name}.ogg"
-        subprocess.run(["ffmpeg","-v","error","-y","-i",str(wav),"-c:a","libvorbis","-q:a","4",str(target)],check=True)
-        length=float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(target)]))
-        assert abs(length-N/SR)<.03 and target.stat().st_size>10000,(name,length)
-        print(f"{name}: {length:.2f}s, {target.stat().st_size:,} bytes, RMS {rms:.3f}")
-print(f"Original soundtrack: {BARS} bars at {BPM} BPM; aligned loops, mixed peak {peak*gain:.3f}.")
+    wav=Path(tmp)/"soundtrack.wav"
+    samples=np.asarray(np.clip(mix,-1,1)*32767,dtype="<i2")
+    with wave.open(str(wav),"wb") as f:
+        f.setnchannels(2);f.setsampwidth(2);f.setframerate(SR);f.writeframes(samples.tobytes())
+    target=OUT/"soundtrack.ogg"
+    subprocess.run(["ffmpeg","-v","error","-y","-i",str(wav),"-c:a","libvorbis","-q:a","5",str(target)],check=True)
+    length=float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(target)]))
+    assert abs(length-N/SR)<.03 and target.stat().st_size>10000,(target,length)
+    print(f"Soundtrack: {length:.2f}s, {target.stat().st_size:,} bytes, peak {peak*gain:.3f}")
