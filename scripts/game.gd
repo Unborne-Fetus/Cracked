@@ -29,6 +29,12 @@ var touch_controls: Control
 var music_enabled := true
 var audio: AudioStreamPlayer
 var pad_jump := false
+var pad_boost := false
+var energy_meter: ProgressBar
+var energy_label: Label
+var lives := 3
+var world_seed := 0
+var camera_initialized := false
 var pad_pause := false
 var touch_mode := false
 
@@ -79,8 +85,9 @@ func _ready() -> void:
 		music_enabled = bool(config.get_value("options", "music", true))
 	_make_ui()
 	_configure_music()
+	world_seed = randi()
 	_reset_stage()
-	_show("ready", "VECTOR VELOCITY", "Run fast. Launch over hills. Dive into descents.", "START RUN")
+	_show("ready", "VECTOR VELOCITY", "Find the next downslope. Dive to land. Escape the collapse.", "START RUN")
 
 func _make_gate() -> void:
 	var mat := StandardMaterial3D.new()
@@ -107,11 +114,13 @@ func _reset_stage() -> void:
 	storm_s = -130.0
 	storm_speed = 17.0 + float(stage - 1) * 0.8
 	caught = 0.0
-	course.call("reset", randi(), stage)
+	course.call("reset", world_seed + stage * 7919, stage)
 	runner.call("reset", course)
 	var length: float = course.get("length")
 	gate.position = Vector3(0.0, float(course.call("elevation", 0.0, length)), -length)
 	camera_ready = false
+	camera_initialized = false
+	collapse.position = Vector3(0.0, float(course.call("elevation", 0.0, storm_s)) + 25.0, -storm_s)
 	_update_camera(1.0)
 	_update_hud()
 
@@ -141,16 +150,18 @@ func _configure_music() -> void:
 func _physics_process(delta: float) -> void:
 	var jump := false
 	var pause_input := false
+	var boost_input := false
 	for id in Input.get_connected_joypads():
 		jump = jump or Input.is_joy_button_pressed(id, JOY_BUTTON_A)
 		pause_input = pause_input or Input.is_joy_button_pressed(id, JOY_BUTTON_START)
+		boost_input = boost_input or Input.is_joy_button_pressed(id, JOY_BUTTON_RIGHT_SHOULDER)
 	if pause_input and not pad_pause:
 		_toggle_pause()
-	if jump and not pad_jump:
-		if status == "running":
-			runner.call("request_jump")
-		elif status in ["ready", "lost", "complete"]:
-			_primary()
+	if jump and not pad_jump and status in ["ready", "lost", "complete", "paused"]:
+		_primary()
+	if boost_input and not pad_boost and status == "running":
+		runner.call("request_boost")
+	pad_boost = boost_input
 	pad_jump = jump
 	pad_pause = pause_input
 	if status != "running":
@@ -159,18 +170,22 @@ func _physics_process(delta: float) -> void:
 	runner.call("tick", delta, course)
 	var s: float = runner.call("progress")
 	course.call("stream", s)
-	storm_speed += delta * (0.85 + 0.018 * elapsed)
+	storm_speed += delta * (0.52 + 0.008 * elapsed)
+	course.call("collapse_behind", storm_s)
 	storm_s += storm_speed * delta
 	collapse.position = Vector3(0.0, float(course.call("elevation", 0.0, storm_s)) + 25.0, -storm_s)
 	caught = caught + delta if storm_s >= s else 0.0
 	if bool(runner.get("fallen")) or caught > 0.35:
 		best = maxf(best, s)
 		_save()
-		_show("lost", "RUN ENDED", "The collapse caught you." if caught > 0.35 else "You left the world.", "TRY AGAIN")
+		lives -= 1
+		var reason := "The collapse caught you." if caught > 0.35 else "You left the world."
+		_show("lost", "WORLD LOST", reason + ("  •  %d attempts left" % lives if lives > 0 else "  •  Expedition ended"), "TRY AGAIN" if lives > 0 else "NEW EXPEDITION")
 	elif s >= float(course.get("length")):
 		best = maxf(best, s)
 		_save()
-		_show("complete", "WORLD CLEARED", "Stage %d complete." % stage, "NEXT WORLD")
+		var rank := "S" if elapsed < 28.0 else ("A" if elapsed < 38.0 else ("B" if elapsed < 52.0 else "C"))
+		_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d good landings  •  %d attempts left" % [runner.get("perfect_landings"), runner.get("good_landings"), lives], "NEXT WORLD")
 
 func _process(delta: float) -> void:
 	if status == "running":
@@ -182,16 +197,20 @@ func _update_camera(delta: float) -> void:
 	var v: float = runner.get("speed")
 	var lateral: float = runner.get("lateral")
 	var forward := Vector3(lateral * 0.25, 0.0, -v).normalized()
-	var pullback := lerpf(8.5, 15.0, smoothstep(25.0, 145.0, v))
-	var target_arm := -forward * pullback + Vector3.UP * lerpf(4.5, 7.2, smoothstep(25.0, 145.0, v))
+	var pullback := lerpf(6.8, 12.5, smoothstep(25.0, 145.0, v))
+	var target_arm := -forward * pullback + Vector3.UP * lerpf(3.5, 5.8, smoothstep(25.0, 145.0, v))
 	camera_arm = camera_arm.lerp(target_arm, 1.0 - exp(-delta * 5.0)) if camera_ready else target_arm
 	camera_ready = true
 	camera.position = p + camera_arm
 	camera.position.y = maxf(camera.position.y, float(course.call("elevation", camera.position.x, -camera.position.z)) + 2.4)
-	var target := p + forward * 9.0 + Vector3.UP * 1.3
+	var look_ahead := lerpf(10.0, 24.0, smoothstep(30.0, 150.0, v))
+	var target := p + forward * look_ahead + Vector3.UP * 1.1
+	var ground_ahead: float = course.call("elevation", target.x, -target.z)
+	target.y = lerpf(target.y, ground_ahead + 2.0, 0.25 if bool(runner.get("grounded")) else 0.48)
 	var direction := (target - camera.position).normalized()
 	var desired := Basis.looking_at(direction, Vector3.UP)
-	camera.basis = camera.basis.slerp(desired, 1.0 - exp(-delta * 8.0)).orthonormalized()
+	camera.basis = camera.basis.slerp(desired, 1.0 - exp(-delta * 8.0)).orthonormalized() if camera_initialized else desired
+	camera_initialized = true
 	camera.fov = lerpf(camera.fov, lerpf(76.0, 104.0, smoothstep(20.0, 155.0, v)), 1.0 - exp(-delta * 3.0))
 
 func _label(text_value: String, size_value: int) -> Label:
@@ -228,6 +247,14 @@ func _make_ui() -> void:
 	best_label.add_theme_color_override("font_color", Color(1.0, 0.86, 0.46))
 	for item in [distance_label, time_label, best_label]:
 		stats.add_child(item)
+	energy_label = _label("BOOST", 14)
+	stats.add_child(energy_label)
+	energy_meter = ProgressBar.new()
+	energy_meter.max_value = 100.0
+	energy_meter.custom_minimum_size = Vector2(155.0, 9.0)
+	energy_meter.show_percentage = false
+	energy_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stats.add_child(energy_meter)
 	cue_label = _label("", 24)
 	root.add_child(cue_label)
 	cue_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -243,7 +270,7 @@ func _make_ui() -> void:
 	touch_controls.offset_right = 220
 	touch_controls.offset_top = -70
 	touch_controls.offset_bottom = -12
-	for name_value in ["LEFT", "RIGHT", "JUMP", "DIVE", "II"]:
+	for name_value in ["LEFT", "RIGHT", "BOOST", "DIVE", "II"]:
 		var b := Button.new()
 		b.text = name_value
 		b.custom_minimum_size = Vector2(84, 52)
@@ -255,8 +282,8 @@ func _make_ui() -> void:
 			"RIGHT":
 				b.button_down.connect(func() -> void: runner.set("touch_steer", 1.0))
 				b.button_up.connect(func() -> void: runner.set("touch_steer", 0.0))
-			"JUMP":
-				b.pressed.connect(func() -> void: runner.call("request_jump"))
+			"BOOST":
+				b.pressed.connect(func() -> void: runner.call("request_boost"))
 			"DIVE":
 				b.button_down.connect(func() -> void: runner.set("touch_dive", true))
 				b.button_up.connect(func() -> void: runner.set("touch_dive", false))
@@ -285,13 +312,13 @@ func _make_ui() -> void:
 	action_button.pressed.connect(_primary)
 	menu_button = _button("RESTART RUN")
 	stack.add_child(menu_button)
-	menu_button.pressed.connect(func() -> void: stage = 1; _reset_stage(); _start())
+	menu_button.pressed.connect(func() -> void: _new_expedition(); _start())
 	music_button = CheckButton.new()
 	music_button.text = "Soundtrack"
 	music_button.set_pressed_no_signal(music_enabled)
 	music_button.toggled.connect(func(v: bool) -> void: music_enabled = v; _configure_music(); _save())
 	stack.add_child(music_button)
-	var hint := _label("A / D  STEER    ·    SPACE  JUMP    ·    HOLD SHIFT  DIVE", 16)
+	var hint := _label("A / D  STEER    ·    HOLD SPACE  DIVE    ·    F  BOOST", 16)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(hint)
 
@@ -300,6 +327,8 @@ func _update_hud() -> void:
 	distance_label.text = "DISTANCE  %d m / %d m" % [maxi(0, int(s)), int(course.get("length"))]
 	time_label.text = "TIME  %02d:%05.2f" % [int(elapsed / 60.0), fmod(elapsed, 60.0)]
 	best_label.text = "BEST  %d m" % int(maxf(best, s))
+	energy_meter.value = float(runner.get("energy"))
+	energy_label.text = "BOOST READY" if energy_meter.value >= 28.0 else "BOOST"
 	cue_label.text = str(runner.get("cue"))
 	cue_label.visible = float(runner.get("cue_time")) > 0.0 and status == "running"
 
@@ -326,12 +355,21 @@ func _primary() -> void:
 		"ready", "paused":
 			_start()
 		"lost":
-			_reset_stage()
+			if lives <= 0:
+				_new_expedition()
+			else:
+				_reset_stage()
 			_start()
 		"complete":
 			stage += 1
 			_reset_stage()
 			_start()
+
+func _new_expedition() -> void:
+	stage = 1
+	lives = 3
+	world_seed = randi()
+	_reset_stage()
 
 func _toggle_pause() -> void:
 	if status == "running":
@@ -342,6 +380,9 @@ func _toggle_pause() -> void:
 		_start()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and status == "running" and not touch_mode:
+		runner.call("request_boost")
+		get_viewport().set_input_as_handled()
 	if event is InputEventScreenTouch:
 		touch_mode = true
 		if status == "running":
@@ -349,15 +390,17 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_SPACE:
-				if status == "running":
-					runner.call("request_jump")
-				else:
+				if status != "running":
 					_primary()
+				get_viewport().set_input_as_handled()
+			KEY_F:
+				if status == "running":
+					runner.call("request_boost")
 				get_viewport().set_input_as_handled()
 			KEY_ESCAPE:
 				_toggle_pause()
 				get_viewport().set_input_as_handled()
 			KEY_R:
-				_reset_stage()
+				_new_expedition()
 				_start()
 				get_viewport().set_input_as_handled()

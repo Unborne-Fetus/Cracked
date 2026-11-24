@@ -24,11 +24,37 @@ func _run() -> void:
 		if absf(float(course.call("elevation", 0.0, s - 0.001)) - float(course.call("elevation", 0.0, s + 0.001))) > 0.01:
 			_fail("Terrain seam.")
 			return
-	runner.call("request_jump")
-	runner.call("tick", 0.016, course)
-	if bool(runner.get("grounded")):
-		_fail("Jump did not launch.")
+	if not rules.should_launch(90.0, -0.02, 0.0) or rules.should_launch(20.0, -0.02, 0.0):
+		_fail("Natural crest takeoff rule is incorrect.")
 		return
+	if rules.landing_quality(Vector3(0.0, -25.0, -50.0), downhill, -0.5) != "PERFECT":
+		_fail("Tangent landing must be perfect.")
+		return
+	runner.set("energy", 50.0)
+	var pre_boost: float = runner.get("speed")
+	runner.call("request_boost")
+	runner.call("tick", 0.016, course)
+	if float(runner.get("energy")) >= 50.0 or float(runner.get("speed")) <= pre_boost:
+		_fail("Boost did not consume energy and increase speed.")
+		return
+	runner.call("reset", course)
+	var launch_s := -1.0
+	for i in range(20, 300):
+		var at := float(i)
+		var slope: Vector2 = course.call("grade", 0.0, at)
+		if rules.should_launch(110.0, float(course.call("curvature", 0.0, at)), slope.y):
+			launch_s = at
+			break
+	if launch_s < 0.0:
+		_fail("Terrain has no launchable crests.")
+		return
+	runner.position = Vector3(0.0, float(course.call("elevation", 0.0, launch_s)) + 0.08, -launch_s)
+	runner.set("speed", 110.0)
+	runner.call("tick", 1.0 / 120.0, course)
+	if bool(runner.get("grounded")):
+		_fail("Natural takeoff did not launch.")
+		return
+	runner.call("reset", course)
 	for i in range(900):
 		runner.call("tick", 1.0 / 60.0, course)
 		course.call("stream", float(runner.call("progress")))

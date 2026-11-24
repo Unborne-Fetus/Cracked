@@ -1,7 +1,7 @@
 extends Node3D
 ## Wide, continuous heightfield. Rendering and movement share the same function.
 const CHUNK := 160.0
-const HALF_WIDTH := 96.0
+const HALF_WIDTH := 110.0
 const CELL := 4.0
 var phase := 0.0
 var stage := 1
@@ -39,12 +39,16 @@ func reset(seed_value: int, stage_value: int) -> void:
 	stream(0.0)
 
 func elevation(x: float, s: float) -> float:
-	# Broad hills, cross-valleys and a net descent. All seams are analytic.
-	var a := 12.0 * sin(s * 0.039 + phase)
-	var b := 5.5 * sin(s * 0.073 + phase * 0.61)
-	var c := 6.5 * sin(s * 0.022 + x * 0.045 + phase)
-	var d := 3.5 * cos(x * 0.081 - s * 0.011)
-	return -s * 0.065 + a + b + c + d
+	# First hill is consistent: accelerating approach, valley, then crest.
+	# Seeded variation blends in smoothly beyond the opening.
+	var blend := smoothstep(80.0, 240.0, s)
+	var local_phase := phase * blend
+	var a := 15.0 * cos(s * 0.038 + local_phase)
+	var b := 5.0 * sin(s * 0.069 + local_phase * 0.61)
+	var c := 8.5 * sin(s * 0.018 + x * 0.042 + local_phase)
+	var d := 4.0 * cos(x * 0.072 - s * 0.012)
+	var hill_scale := 1.0 + minf(float(stage - 1) * 0.045, 0.30)
+	return -s * 0.09 + (a + b + c + d) * hill_scale
 
 func grade(x: float, s: float) -> Vector2:
 	var e := 0.25
@@ -61,7 +65,9 @@ func curvature(x: float, s: float) -> float:
 func _color(x: float, s: float) -> Color:
 	var palettes: Array[Color] = [Color(0.20, 0.56, 0.50), Color(0.68, 0.36, 0.35), Color(0.30, 0.44, 0.72)]
 	var base := palettes[(stage - 1) % palettes.size()]
-	var light := 0.84 + 0.16 * sin(s * 0.045 + x * 0.043)
+	var light := 0.88 + 0.12 * sin(s * 0.045 + x * 0.043)
+	var stripes := 0.04 * sin(s * 0.22)
+	light += stripes
 	var path := 1.0 - smoothstep(48.0, HALF_WIDTH, absf(x))
 	return base.lerp(Color(0.72, 0.74, 0.56), path * 0.21) * Color(light, light, light, 1.0)
 
@@ -87,6 +93,19 @@ func _build(index: int) -> void:
 			_vertex(st, x + CELL, s, start)
 			_vertex(st, x, s + CELL, start)
 			_vertex(st, x + CELL, s + CELL, start)
+	# Deep exposed sides make the terrain look like floating land, not a road.
+	for row in range(int(CHUNK / CELL)):
+		var s := start + float(row) * CELL
+		for side in [-1.0, 1.0]:
+			var x: float = side * HALF_WIDTH
+			var a := Vector3(x, elevation(x, s), -(s - start))
+			var b := Vector3(x, elevation(x, s + CELL), -(s + CELL - start))
+			var lower_a := a - Vector3.UP * 30.0 - Vector3.RIGHT * side * 8.0
+			var lower_b := b - Vector3.UP * 30.0 - Vector3.RIGHT * side * 8.0
+			for point in [a, b, lower_a, lower_a, b, lower_b]:
+				st.set_color(Color(0.28, 0.22, 0.32))
+				st.set_normal(Vector3(side, 0.0, 0.0))
+				st.add_vertex(point)
 	st.index()
 	var ground := MeshInstance3D.new()
 	ground.mesh = st.commit()
@@ -96,8 +115,8 @@ func _build(index: int) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(phase * 100000.0) + index * 9137
 	if index >= 1 and start < length - 100.0:
-		for i in range(3):
-			var at := start + 28.0 + float(i) * 44.0 + rng.randf_range(-6.0, 6.0)
+		for i in range(3 + mini(stage - 1, 2)):
+			var at := start + 24.0 + float(i) * 27.0 + rng.randf_range(-5.0, 5.0)
 			var across := rng.randf_range(-65.0, 65.0)
 			var radius := rng.randf_range(2.0, 4.8)
 			var rock := MeshInstance3D.new()
@@ -116,7 +135,7 @@ func stream(s: float) -> void:
 		if not chunks.has(index):
 			_build(index)
 	for key in chunks.keys():
-		if int(key) < current - 2 or int(key) > current + 7:
+		if int(key) < current - 2 or int(key) >= current + 7:
 			var node: Node3D = chunks[key]["node"]
 			remove_child(node)
 			node.queue_free()
@@ -140,3 +159,9 @@ func obstacle_hit(a: Vector3, b: Vector3) -> bool:
 				rock["used"] = true
 				return true
 	return false
+
+func collapse_behind(s: float) -> void:
+	for key in chunks.keys():
+		if (float(key) + 1.0) * CHUNK < s - 20.0:
+			var node: Node3D = chunks[key]["node"]
+			node.hide()
