@@ -103,7 +103,7 @@ Optional left loop branches have a safe right bypass; complete the inverted loop
 
 Combat is removed from all modes to focus testing on movement and track geometry. Normal obstacle contact still reduces momentum. First-person camera moved forward and look direction is screen-relative even inverted. Grounded riders automatically recover from stalling, and shallow bank contact can settle onto the correct face.
 
-Drones now pursue from ahead, slow the rider by 40% on a successful telegraphed hit, and reward momentum for eliminations. Wall/ceiling sections recur more frequently. The fullpipe closes and wraps at the crown; low-speed traction suppresses sideways drift. High-altitude glider wings and hanging pose are visual only and replayed. The synthwave sky grows more intense with speed; high-speed chunk length and reduced redundant probes target performance.
+Wall/ceiling sections recur more frequently. The fullpipe closes and wraps at the crown; low-speed traction suppresses sideways drift. High-altitude glider wings and hanging pose are visual only and replayed. The synthwave sky grows more intense with speed; high-speed chunk length and reduced redundant probes target performance.
 
 The skyline's mountain height grows and oscillates with progress. Contact-only ceiling treads and a rotating sidewall gyro wheel are independent of airborne glider wings. Rideable walls and ceilings can magnetically reorient a rider on swept contact. Glider double jumps and periodic tricks rotate the whole rig; returning to the deck uses a timed release, transfer, catch and wing fold. All glider animation phases are captured in replay frames.
 

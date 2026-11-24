@@ -237,10 +237,11 @@ func _run_tests() -> void:
 		if script != null and script.resource_path.ends_with("arcade_combat.gd"):
 			_fail("Combat node is still active.")
 			return
-	var modes: Array = game.get("MODES")
-	if modes.has("Combat"):
-		_fail("Combat remains selectable.")
-		return
+	var mode_picker: OptionButton = game.get("mode_picker")
+	for item_index in range(mode_picker.item_count):
+		if mode_picker.get_item_text(item_index) == "Combat":
+			_fail("Combat remains selectable.")
+			return
 	# Stalling on an uphill track must not permanently stop progress.
 	for slide_test: bool in [false,true]:
 		var restart_speed:=0.0
