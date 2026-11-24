@@ -371,7 +371,7 @@ func _update_hud() -> void:
 	clock_label.text = "TIME  %02d:%05.2f" % [int(run_time / 60.0), fmod(run_time, 60.0)]
 	record_label.text = MODES[mode].to_upper() + "  //  BEST " + _distance_display(maxf(extras.best_for(mode, run_day), runner.distance - 8.0))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
-	section_label.text = str(course.biome_name(runner.distance)) + "  //  " + str(course.section_name(runner.distance))
+	section_label.text = str(course.biome_name(runner.distance)) + "  //  " + str(course.rider_section_name(runner.distance, runner.lane))
 	if not runner.is_grounded():
 		slide_label.text = "DIVING  //  CONTROLLED DESCENT" if runner.diving else ("AIRBORNE  //  DOUBLE JUMP READY" if runner.double_jump_available else "AIRBORNE  //  DOUBLE JUMP USED")
 	elif runner.is_sliding:
@@ -1280,6 +1280,11 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.rider_impact = float(state.get("rider_impact", 0.0))
 	runner.rider_clearance = float(state.get("rider_clearance",0.0))
 	runner.rider_dive = float(state.get("rider_dive",1.0 if runner.diving else 0.0))
+	runner.rider_flourish = float(state.get("rider_flourish",0.0))
+	runner.rider_bank = float(state.get("rider_bank",0.0))
+	runner.rider_brace = float(state.get("rider_brace",0.0))
+	runner.rider_trick_mix = float(state.get("rider_trick_mix",0.0))
+	runner.rider_trick_clock = float(state.get("rider_trick_clock",0.0))
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0

@@ -47,6 +47,24 @@ func _run_tests() -> void:
 	if model_head.position.y >= neutral_head - 0.12:
 		_fail("Landing animation does not compress the knees.")
 		return
+	# Three autonomous air poses: shifty, grab, and one-foot.
+	model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.575,1.0)
+	if absf(flip_board.rotation.y) < 0.45:
+		_fail("Air idle shifty does not move the board.")
+		return
+	model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,false,0.0,1.725,1.0)
+	if absf(flip_board.rotation.x) < 0.2:
+		_fail("Air idle grab has no deck tilt.")
+		return
+	model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,false,0.0,2.875,1.0)
+	var trick_rear_foot: Vector3 = model_boots[1].position
+	if trick_rear_foot.y < 0.45:
+		_fail("One-foot idle trick does not lift the rear foot.")
+		return
+	model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,true,1.0,0.575,1.0)
+	if absf(flip_board.rotation.y) > 0.01:
+		_fail("Diving fails to override idle trick.")
+		return
 	runner.set("grounded", false)
 	runner.set("kickflip_progress", 0.5)
 	runner.call("update_rider_sprite", sprite_camera)
@@ -753,6 +771,14 @@ func _run_tests() -> void:
 	var fork_right: Transform3D = course.call("surface_frame", split_s, 28.0, 1)
 	if fork_left.origin.distance_to(fork_right.origin) < 140.0:
 		_fail("Fork branches are not physically separated.")
+		return
+	if fork_left.origin.y - fork_right.origin.y < 45.0:
+		_fail("Fork routes do not have distinct terrain elevations.")
+		return
+	var narrow_edge: Transform3D = course.call("surface_frame",split_s,-52.0,1)
+	var wide_edge: Transform3D = course.call("surface_frame",split_s,52.0,1)
+	if narrow_edge.origin.distance_to(fork_left.origin) >= wide_edge.origin.distance_to(fork_right.origin):
+		_fail("High ridge and low channel have identical widths.")
 		return
 	var fork_projected: Vector3 = course.call("project_position", fork_left.origin, split_s)
 	if absf(fork_projected.y + 28.0) > 0.2:

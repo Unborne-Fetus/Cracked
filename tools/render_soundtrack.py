@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vector Velocity — AFTERIMAGE. Original dark industrial drum-and-bass score.
+"""Vector Velocity — NIGHT CIRCUIT. Original dark melodic industrial drum-and-bass score.
 All instruments and patterns synthesized offline; no borrowed samples.
 Requires numpy and ffmpeg/libvorbis.
 """
@@ -9,7 +9,7 @@ import subprocess, tempfile, wave
 import numpy as np
 
 SR=44100
-BPM=176
+BPM=174
 BEAT=60/BPM
 BARS=112
 N=round(BARS*4*BEAT*SR)
@@ -92,70 +92,102 @@ def lead(note,beats):
     p=TAU*hz(note)*t+.12*np.sin(TAU*6.2*t)
     return np.tanh((np.sin(p)+.35*np.sin(2*p)+.18*np.sin(3*p))*1.35)*envelope(t,.012,.065,dur)
 
-# Ten evolving eight-bar movements: thrash, chopped breaks, odd
-# syncopations, halftime industrial section, then a final double-time riff.
-roots=[38,38,41,37,38,34,43,36]
-alt=[38,41,37,38,34,35,36,37]
-bridge_roots=[34,34,36,36,38,38,41,37]
-final_roots=[38,38,34,36,41,41,37,37]
-riffs=[
- [(0,0,.42),(.5,0,.22),(.75,0,.22),(1,3,.42),(1.5,0,.42),(2,0,.42),(2.5,6,.42),(3,5,.42),(3.5,1,.42)],
- [(0,0,.7),(.75,0,.2),(1,7,.43),(1.5,6,.43),(2,0,.22),(2.25,0,.22),(2.5,3,.7),(3.25,1,.22),(3.5,0,.42)],
- [(0,0,.42),(.5,0,.42),(1,1,.22),(1.25,3,.22),(1.5,5,.42),(2,0,.7),(2.75,6,.22),(3,3,.42),(3.5,1,.42)],
- [(0,0,1.35),(1.5,6,.42),(2,0,1.35),(3.5,1,.42)],
- [(0,0,.22),(.25,0,.22),(.5,0,.22),(.75,1,.22),(1,3,.42),(1.5,0,.42),(2,0,.22),(2.25,0,.22),(2.5,6,.42),(3,5,.22),(3.25,3,.22),(3.5,1,.42)]
+# NIGHT CIRCUIT — 112 bars with an original recurring theme, two drops,
+# a melodic bridge and a final reprise. Drum patterns change independently
+# of harmonic phrases. The sound remains continuous without restarting.
+@lru_cache(maxsize=80)
+def atmosphere(note,beats):
+    dur=beats*BEAT
+    t=time(dur)
+    p=TAU*hz(note)*t
+    voice=(.56*np.sin(p)+.23*np.sin(p*1.004)+.15*np.sin(2*p)+.06*np.sin(3*p))
+    return voice*envelope(t,.13,.30,dur)*(.83+.17*np.sin(TAU*.72*t))
+
+@lru_cache(maxsize=128)
+def pulse(note,beats):
+    dur=beats*BEAT
+    t=time(dur)
+    p=TAU*hz(note)*t
+    # Warm filtered moving bass, deliberately no high whine.
+    mod=(.22+.18*np.sin(TAU*3.2*t))*np.exp(-t*1.6)
+    sig=.7*np.sin(p)+.22*np.sin(2*p+mod*np.sin(3*p))+.08*np.sin(3*p)
+    return np.tanh(sig*1.1)*envelope(t,.008,.045,dur)
+
+# E minor with longer eight-bar progressions and a distinct major-key bridge.
+progressions=[
+ [(40,[52,55,59,66]),(40,[52,55,59,64]),(36,[52,55,60,64]),(36,[52,55,60,67]),(43,[55,59,62,66]),(43,[55,59,62,67]),(38,[54,57,62,66]),(39,[51,54,59,63])],
+ [(40,[52,55,59,64]),(38,[54,57,62,66]),(36,[52,55,60,64]),(36,[52,55,60,67]),(33,[52,57,60,64]),(33,[52,57,60,65]),(35,[54,59,62,66]),(35,[51,54,59,63])],
+ [(43,[55,59,62,69]),(43,[55,59,62,67]),(38,[54,57,62,66]),(38,[54,57,62,69]),(40,[52,55,59,66]),(40,[52,55,59,64]),(36,[52,55,60,67]),(35,[51,54,59,66])]
 ]
 patterns=[
- ([0,.75,1.5,2.5,3.25],[1,3]),
- ([0,.5,1.75,2,2.75,3.5],[1,2.5,3.25]),
- ([0,.25,.5,1.5,2,2.25,2.5,3.5],[1,3]),
+ ([0,2.5],[1,3]),
+ ([0,1.75,2.5,3.5],[1,3]),
+ ([0,.75,2,2.75],[1,2.5,3.5]),
  ([0,1.5,2.75],[2]),
- ([0,.75,1.25,1.75,2.5,3.5,3.75],[.5,1.5,3])
+ ([0,.75,1.5,2.5,3.25],[1,3])
 ]
-hooks=[
- [74,75,81,80,77,73,74,77],
- [74,81,80,77,75,73,68,70],
- [86,85,81,80,77,80,75,73],
- [74,77,80,81,85,80,77,75]
+themes=[
+ [(0,76,1.1),(1.5,79,.42),(2.0,78,.8),(3.0,74,.8)],
+ [(0,71,1.4),(1.75,74,.65),(2.5,76,1.2)],
+ [(0,79,.8),(1,81,.42),(1.5,79,.75),(2.5,78,1.2)],
+ [(0,74,.75),(1,71,.75),(2,72,1.65)],
+ [(0,76,.75),(1,79,.75),(2,83,1.4)],
+ [(0,81,.75),(1,79,.6),(2,78,1.6)],
+ [(0,74,1.1),(1.5,76,.45),(2,78,1.6)],
+ [(0,75,.75),(1,78,.75),(2,71,1.6)]
 ]
+# Intro, build, first drop, variation, bridge, second drop, contrast,
+# reprise, finale, and a continuous handoff to the intro.
+sections=[(0,0),(0,1),(1,1),(1,2),(2,2),(1,3),(2,0),(2,3),(1,4),(1,2),(0,3),(1,4),(2,4),(0,1)]
 for bar in range(BARS):
     beat=bar*4
     part=bar//8
-    p=[0,1,2,1,3,4,2,0,4,2,3,4,1,2][part]
-    root=(bridge_roots if part in (4,7,10) else final_roots if part>=9 else alt if part in (2,5,6,8) else roots)[bar%8]
-    ks,ss=patterns[p]
-    for k in ks:put(beat+k,kick(),.63 if k in (0,2) else .46)
-    for k in ss:put(beat+k,snare(),.54)
-    for k in ([.25,1.75,2.25,3.75] if p in (1,2,4) else [1.75,3.75]):
-        put(beat+k,snare(1),.15,(-.25 if k<2 else .25))
-    for step in range(16):
-        if p==3 and step%2:continue
-        put(beat+step*.25,hat(step%8==6),.050 if step%2==0 else .025,(-.45 if step%2 else .45))
-    if bar%4==3:
-        for k in (3.0,3.25,3.5,3.625,3.75,3.875):
-            put(beat+k,snare(1),.13+.035*(k-3))
-    phrase = riffs[(p+1)%len(riffs)] if bar%8==7 and p!=3 else riffs[p]
-    for offset,interval,length in phrase:
-        note=root+interval
-        put(beat+offset,bass(note-12,length,p in (1,2,4)),.34)
-        for voice,pan in [(0,-.72),(1,.72)]:
-            put(beat+offset,guitar(note,length,voice,p!=3),.14 if part in (0,4,7,10) else .22,pan)
-            put(beat+offset,guitar(note+7,length,voice,p!=3),.065 if part in (0,4,7,10) else .095,pan)
-            if part in (3,6,9,11) and offset in (0,2):
-                put(beat+offset,guitar(note+12,length,voice,False),.085,pan)
-    # Distinct lead phrases enter and leave without an abrupt silent gap.
-    if part in (2,5,8,11,13):
-        melody=hooks[(part+bar//4)%4]
-        for step in range(4 if p==3 else 8):
-            note=melody[(step+bar%4*2)%8]
-            offset=step*(1 if p==3 else .5)
-            sig=lead(note,.82 if p==3 else .39)
-            put(beat+offset,sig,.075,.12)
-            put(beat+offset+.75,sig,.018,-.45)
-    if bar%8==7:
-        t=time(.65)
-        sweep=np.convolve(rng.normal(0,1,len(t)),[.1,.2,.4,.2,.1],mode="same")
-        put(beat+2.0,sweep*envelope(t,.45,.06,.65),.17)
+    prog,pattern=sections[part]
+    root,chord=progressions[prog][bar%8]
+    quiet=part in (0,5,6,10,13)
+    drop=part in (2,3,4,8,9,11,12)
+    ks,ss=patterns[pattern]
+    if part==0 and bar<4:ks=[0,2.5]
+    for k in ks:
+        put(beat+k,kick(drop),.48 if quiet else .60 if k==0 else .46)
+    for k in ss:
+        put(beat+k,snare(),.36 if quiet else .52)
+    ghosts=[.75,2.25,3.75] if drop else [1.75,3.75]
+    for k in ghosts:
+        put(beat+k,snare(1),.09 if quiet else .15,(-.25 if k<2 else .25))
+    for step in range(16 if drop else 8):
+        offset=step*(.25 if drop else .5)
+        put(beat+offset,hat(step%8==6),.043 if step%2==0 else .022,(-.40 if step%2 else .40))
+    if bar%4==3 and not quiet:
+        for k in (3.25,3.5,3.75):
+            put(beat+k,snare(1),.11+.06*(k-3.25))
+    # Sustained harmony and a syncopated bass line, not constant metal chugs.
+    for n,note in enumerate(chord):
+        put(beat,atmosphere(note,4.5),.065 if drop else .105,(-.62 if n%2==0 else .62))
+    bass_pattern=[(0,0,1.36),(1.5,0,.66),(2.25,7,.66),(3,0,.85)] if quiet else ([(0,0,.68),(.75,0,.65),(1.5,12,.42),(2,0,.92),(3,7,.42),(3.5,0,.43)] if bar%2==0 else [(0,0,1.18),(1.25,7,.45),(1.75,0,.42),(2.25,0,.68),(3,12,.43),(3.5,0,.43)])
+    for offset,interval,length in bass_pattern:
+        put(beat+offset,pulse(root-12+interval,length),.43 if drop else .34)
+        if drop:
+            put(beat+offset,bass(root+interval,length,True),.16)
+    # Power chords only at dramatic accents; leave room for percussion.
+    if drop and part not in (4,9):
+        for offset,length in [(0,.64),(2.5,.64)] if bar%2==0 else [(1.5,.48),(3,.65)]:
+            for voice,pan in [(0,-.75),(1,.75)]:
+                put(beat+offset,guitar(root,length,voice,True),.12,pan)
+                put(beat+offset,guitar(root+7,length,voice,True),.075,pan)
+    if part in (1,3,4,6,8,9,11,12):
+        theme=themes[bar%8]
+        for offset,note,length in theme:
+            n=note-12 if part in (1,6) else note
+            sig=lead(n,length)
+            put(beat+offset,sig,.075 if quiet else .10,.08)
+            put(beat+offset+.75,sig,.019,-.45)
+            if part in (11,12) and offset in (0,2):
+                put(beat+offset,atmosphere(n-12,length),.055,.45)
+    if bar%8==7 and part!=13:
+        tt=time(.65)
+        sweep=np.convolve(rng.normal(0,1,len(tt)),[.1,.2,.4,.2,.1],mode="same")
+        put(beat+2.0,sweep*envelope(tt,.45,.06,.65),.07)
 # Loudness control: intentional instrument distortion, not clipped final audio.
 # Keep drum transients and dynamics rather than hard-saturating the
 # complete mix. Soft limiting only affects the loudest peaks.
@@ -177,4 +209,4 @@ with tempfile.TemporaryDirectory() as tmp:
     subprocess.run(["ffmpeg","-v","error","-y","-i",str(wav),"-c:a","libvorbis","-q:a","5",str(target)],check=True)
     length=float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(target)]))
     assert abs(length-N/SR)<.03 and target.stat().st_size>10000
-    print(f"AFTERIMAGE: {BPM} BPM, {length:.2f}s, RMS {rms:.3f}, {target.stat().st_size:,} bytes")
+    print(f"NIGHT CIRCUIT: {BPM} BPM, {length:.2f}s, RMS {rms:.3f}, {target.stat().st_size:,} bytes")

@@ -306,7 +306,7 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		# sections, rather than squeezing banks below the safe base length.
 		length *= rng.randf_range(1.0, 1.45)
 		if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
-			length = maxf(length, maxf(420.0, planned_speed * 5.0))
+			length = maxf(length, maxf(560.0, planned_speed * 6.0))
 	var step_length := length / float(STEPS)
 	var strength := 1.0 if showcase_layout and index < 6 else rng.randf_range(0.72, 1.22)
 	var start_yaw := yaw
@@ -540,8 +540,9 @@ func _forecast_grade(index: int, kind: String, points: Array[Transform3D], at: f
 	var i := clampi(int(round(at)), 1, STEPS - 1)
 	var frame := points[i]
 	var slope := (_ramp_lift(index, kind, float(i + 1), lane) - _ramp_lift(index, kind, float(i - 1), lane)) / (2.0 * step_length)
-	if kind == "STACKED ROUTES":
-		slope += (_cross_xy(kind, float(i + 1), lane).y - _cross_xy(kind, float(i - 1), lane).y) / (2.0 * step_length)
+	if kind in ["STACKED ROUTES", "SPLIT ROUTE"]:
+		var change := (_cross_xy(kind, float(i + 1), lane) - _cross_xy(kind, float(i - 1), lane)) / (2.0 * step_length)
+		return (-frame.basis.z + frame.basis.x * change.x + frame.basis.y * (slope + change.y)).normalized().y
 	return (-frame.basis.z + frame.basis.y * slope).normalized().y
 
 func _validate_routes(index: int, kind: String, points: Array[Transform3D], step_length: float, layout: Array[Dictionary], initial: Dictionary, begin_at: float = 0.0) -> Dictionary:
@@ -861,22 +862,50 @@ func _branch_envelope(local_s: float) -> float:
 func _cross_xy(kind: String, local_s: float, across: float) -> Vector2:
 	var envelope := _profile_envelope(local_s)
 	if kind == "SPLIT ROUTE":
-		var spread := 48.0 * _branch_envelope(local_s)
-		return Vector2(across + signf(across) * spread * smoothstep(0.0, 12.0, absf(across)), 0.0)
+		var u := clampf(local_s / CHUNK_LENGTH, 0.0, 1.0)
+		var e := _branch_envelope(local_s)
+		var weight := smoothstep(0.0, 12.0, absf(across))
+		if across < 0.0:
+			# Narrow high ridge: two distinct crests and alternating camber.
+			var center := 34.0 + 12.0 * sin(TAU * 2.0 * u)
+			var bank := 0.42 * sin(TAU * 1.5 * u)
+			return Vector2(across * (1.0 - 0.32 * e) - 64.0 * e * weight, e * weight * (center + bank * (across + 34.0)))
+		# Wider, deeply sunken sweeping channel: a curved cross section
+		# and gradual descent, followed by an uphill merge.
+		var bowl := pow((across - 34.0) / 26.0, 2.0) * 9.0
+		var channel := -28.0 + 10.0 * sin(TAU * u) + bowl + 0.18 * (across - 34.0) * cos(TAU * u)
+		return Vector2(across * (1.0 + 0.10 * e) + 48.0 * e * weight, e * weight * channel)
 	if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
 		var angle := (PI * 0.975 if kind == "CORKSCREW TUNNEL" else PI * 0.48) * envelope
 		if angle > 0.0001:
 			var radius := HALF_WIDTH / angle
 			var theta := across / radius
 			return Vector2(radius * sin(theta), radius * (1.0 - cos(theta)))
-	if kind == "STACKED ROUTES" and across < 0.0:
-		# Upper deck follows a long, smooth crossover. Blend the inner
-		# edge only while it is joined to the lower road at the seams.
-		var weight := smoothstep(0.0, 4.0, -across) * _branch_envelope(local_s)
-		return Vector2(across + 60.0 * weight, 22.0 * weight)
+	if kind == "STACKED ROUTES":
+		var u := clampf(local_s / CHUNK_LENGTH, 0.0, 1.0)
+		var e := _branch_envelope(local_s)
+		if across < 0.0:
+			# Elevated flyover rises through two rolling crests.
+			var weight := smoothstep(0.0, 4.0, -across) * e
+			return Vector2(across + 60.0 * weight, (28.0 + 10.0*sin(TAU*2.0*u) + 0.23*(across+30.0)*sin(TAU*u))*weight)
+		# Lower deck stays in a sweeping half-bowl, not a flat duplicate.
+		var weight := smoothstep(0.0, 4.0, across) * e
+		return Vector2(across, weight * (-8.0 + 7.0*pow((across-30.0)/30.0,2.0) + 5.0*sin(TAU*u)))
 	return Vector2(across, 0.0)
 
 func _cross_normal(kind: String, local_s: float, across: float) -> Vector2:
+	if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+		# Derive actual bank from each branch's geometry, not the spine.
+		# Avoid differentiating across the disconnected center.
+		var lo := across - 0.08
+		var hi := across + 0.08
+		if across < 0.0:
+			hi = minf(hi, -0.0001)
+		else:
+			lo = maxf(lo, 0.0)
+		var tangent := _cross_xy(kind, local_s, hi) - _cross_xy(kind, local_s, lo)
+		if tangent.length_squared() > 0.000001:
+			return Vector2(-tangent.y, tangent.x).normalized()
 	if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
 		var angle := (PI * 0.975 if kind == "CORKSCREW TUNNEL" else PI * 0.48) * _profile_envelope(local_s)
 		var theta := across / HALF_WIDTH * angle
@@ -1021,6 +1050,10 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 				stream1 = _profile_envelope(float(i + 1)) * (1.0 - smoothstep(7.0, 12.0, absf((next_z0 + next_z1) * 0.5 - slipstream_center(index, float(i + 1)))))
 			var color0 := dark0.lerp(Color(0.11, 0.36, 0.65), shortcut0 * 0.85).lerp(Color(0.03, 0.58, 0.26), recovery0)
 			var color1 := dark1.lerp(Color(0.11, 0.36, 0.65), shortcut1 * 0.85).lerp(Color(0.03, 0.58, 0.26), recovery1)
+			if kind in ["SPLIT ROUTE", "STACKED ROUTES"]:
+				var branch_color := Color(0.25, 0.10, 0.035) if z0+z1 < 0.0 else Color(0.025, 0.20, 0.27)
+				color0 = color0.lerp(branch_color, _branch_envelope(float(i))*0.72)
+				color1 = color1.lerp(branch_color, _branch_envelope(float(i+1))*0.72)
 			_quad(fill, a, b, c, d, color0.lerp(Color(0.65, 0.24, 1.0), stream0), color1.lerp(Color(0.65, 0.24, 1.0), stream1))
 			for v: Vector3 in [a, c, b, b, c, d]:
 				faces.append(v)
@@ -1157,15 +1190,17 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 			# which branch is nearest. Keep off-road coordinates outside.
 			var sign_value := signf(across)
 			var magnitude := absf(across)
-			var spread := 48.0 * _branch_envelope(local_s)
-			if magnitude >= 12.0 + spread:
-				across = sign_value * (magnitude - spread)
+			var e := _branch_envelope(local_s)
+			var spread := (64.0 if sign_value < 0.0 else 48.0) * e
+			var scale_value := 1.0 - 0.32*e if sign_value < 0.0 else 1.0 + 0.10*e
+			if magnitude >= 12.0 * scale_value + spread:
+				across = sign_value * (magnitude - spread) / scale_value
 			else:
 				var low := 0.0
 				var high := 12.0
 				for iteration in range(12):
 					var mid := (low + high) * 0.5
-					if mid + spread * smoothstep(0.0, 12.0, mid) < magnitude:
+					if mid * scale_value + spread * smoothstep(0.0, 12.0, mid) < magnitude:
 						low = mid
 					else:
 						high = mid
@@ -1184,6 +1219,15 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 		var n := _cross_normal(kind, local_s, across)
 		raw_y = (Vector2(offset.dot(local_frame.basis.x), raw_y) - xy).dot(n)
 	return Vector3(s, across, raw_y)
+
+func rider_section_name(distance: float, across: float) -> String:
+	var kind := section_name(distance)
+	if _branch_envelope(_local_s(distance)) > 0.12:
+		if kind == "SPLIT ROUTE":
+			return "HIGH RIDGE" if across < 0.0 else "LOW CHANNEL"
+		if kind == "STACKED ROUTES":
+			return "ROLLING FLYOVER" if across < 0.0 else "LOW BOWL"
+	return kind
 
 func section_name(distance: float) -> String:
 	var index := chunk_index_at(distance)

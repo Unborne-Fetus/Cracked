@@ -117,7 +117,7 @@ func _joint(a: Vector3, b: Vector3, bend: Vector3, segment_length: float) -> Vec
 func _pulse(value: float, start: float, peak: float, end: float) -> float:
 	return smoothstep(start, peak, value) * (1.0 - smoothstep(peak, end, value))
 
-func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false, dive_blend: float = 0.0) -> void:
+func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false, dive_blend: float = 0.0, trick_clock: float = 0.0, trick_mix: float = 0.0, flourish: float = 0.0, bank: float = 0.0, brace: float = 0.0) -> void:
 	var dive_amount := maxf(dive_blend,1.0 if dive else 0.0) if airborne else 0.0
 	# All phases are derived from recorded simulation time; camera orbit
 	# and render rate never alter the animation or the player's physics.
@@ -125,10 +125,20 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var tuck := sin(PI * clampf(flip, 0.0, 1.0)) if flipping else 0.0
 	var flick := _pulse(flip, 0.03, 0.24, 0.50) if flipping else 0.0
 	var catch_pose := _pulse(flip, 0.64, 0.83, 1.0) if flipping else 0.0
+	# Each 1.15-second airborne idle is a different board trick.
+	# The endpoints ease back to neutral so they can blend/cancel cleanly.
+	var idle := clampf(trick_mix,0.0,1.0) * (1.0-dive_amount) if airborne and not flipping else 0.0
+	var cycle := posmod(int(floor(trick_clock/1.15)),3)
+	var progress := fposmod(trick_clock,1.15)/1.15
+	var trick := sin(PI*progress)*idle
+	var shifty := trick if cycle == 0 else 0.0
+	var grab := trick if cycle == 1 else 0.0
+	var one_foot := trick if cycle == 2 else 0.0
+	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
 	var compression := clampf(landing, 0.0, 1.0)
 	var recoil := clampf(impact, 0.0, 1.0)
-	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18, 0.0, 1.0)
-	var lean := clampf(steer, -1.0, 1.0) * 0.19
+	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18 + grab*0.35 + brace*0.30, 0.0, 1.0)
+	var lean := clampf(steer, -1.0, 1.0) * 0.19 - bank*0.09 + shifty*0.08
 	var balance := sin(phase * 4.2) * 0.035 * (1.0 - bend) if not airborne else 0.0
 	# Taller neutral stance (about 2.2m including the deck). Longer legs
 	# stay visibly bent during the low speed tuck rather than scaling down.
@@ -138,18 +148,21 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	torso.position = chest
 	torso.rotation.x = -0.52*bend-0.85*dive_amount+recoil*0.23
 	torso.rotation.z = -lean * 1.25
-	torso.rotation.y = -steer * 0.12
+	torso.rotation.y = -steer * 0.12 - shifty * 0.55 + grab * 0.25
 	hips.position = hip
 	hips.rotation.z = -lean * 0.5
 	head.position = shoulder + Vector3(0,0.32*(1.0-0.62*dive_amount),-0.11*bend-0.23*dive_amount)
 	head.rotation.x = -0.12*bend-0.48*dive_amount+recoil*0.10
 	head.rotation.z = -lean * 0.40
-	head.rotation.y = -steer * 0.09
+	head.rotation.y = -steer * 0.09 + shifty*0.30 - bank*0.15
 	# The board leaves the feet, rotates around its longitudinal axis,
 	# then returns to level at the catch. No bank is added to the root.
 	board.position.y = 0.13 - tuck * 0.24
 	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
-	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount
+	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount+grab*0.29-one_foot*0.12
+	board.rotation.y = shifty*0.75-grab*0.20
+	if not flipping:
+		board.rotation.z = shifty*0.18 + grab*0.15
 	for i in range(2):
 		var sign_value := -1.0 if i == 0 else 1.0
 		# Front (left) foot flicks diagonally over the nose. The back
@@ -168,6 +181,13 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			foot.y -= 0.07 * catch_pose
 		if dive_amount > 0.0 and not flipping:
 			foot = foot.lerp(board.position + board.basis * Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34),dive_amount)
+		if idle > 0.0:
+			# Keep planted feet aligned with the rotated deck; only the
+			# deliberate one-foot trick removes the rear foot.
+			var planted := board.position + board.basis * Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34)
+			foot = foot.lerp(planted, idle)
+			if not front:
+				foot += Vector3(one_foot*0.42,one_foot*0.33,one_foot*0.25)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
@@ -175,13 +195,20 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		boots[i].position = foot
 		boots[i].rotation.x = (-0.38*flick if front else 0.20*tuck) - 0.58*dive_amount
 		boots[i].rotation.z = -0.38 * flick if front else 0.0
-		boots[i].rotation.y = sign_value * 0.13
+		boots[i].rotation.y = sign_value * 0.13 + board.rotation.y * idle
 		# Independent balancing arms: outward for carving, raised during
 		# a trick, forward during a dive, briefly splayed on impact.
 		var arm_start := shoulder + Vector3(sign_value * 0.27, 0, 0)
 		var spread := 0.32 + absf(steer) * 0.14 + tuck * 0.20 + recoil * 0.14
 		var arm_y := -0.43 + 0.27 * tuck + 0.18 * recoil
 		var hand := arm_start + Vector3(sign_value*lerpf(spread,0.12,dive_amount),lerpf(arm_y+sign_value*steer*0.12,-0.10,dive_amount),lerpf(-0.16-0.29*bend+sign_value*balance,0.62,dive_amount))
+		# A real reach toward the deck for the grab; counterbalancing
+		# arms for shifty/one-foot, and a brief gate/landing salute.
+		if i == 0:
+			hand = hand.lerp(board.position+board.basis*Vector3(-0.46,0.12,-0.25), grab*0.78)
+		else:
+			hand += Vector3(0.04,cheer*0.48+shifty*0.14,0.10*one_foot)
+		hand.y += brace*0.15 + sign_value*bank*0.12
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)

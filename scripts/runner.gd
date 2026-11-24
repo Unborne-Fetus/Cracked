@@ -53,6 +53,11 @@ var fall_grace := 0.0
 var rider_course: Node3D
 var rider_clearance := 0.0
 var rider_dive := 0.0
+var rider_flourish := 0.0
+var rider_bank := 0.0
+var rider_brace := 0.0
+var rider_trick_mix := 0.0
+var rider_trick_clock := 0.0
 var air_velocity := Vector3.ZERO
 var air_basis := Basis.IDENTITY
 var recover_air_roll := false
@@ -109,7 +114,7 @@ func update_rider_sprite(_camera: Camera3D) -> void:
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
 	rider_model.position.y = rider_clearance / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive)
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace)
 
 func _update_rider_animation(delta: float) -> void:
 	rider_phase = fposmod(rider_phase + delta * (0.75 + clampf(speed / 100.0, 0.0, 1.5)), TAU * 50.0)
@@ -121,6 +126,17 @@ func _update_rider_animation(delta: float) -> void:
 	rider_landing = move_toward(rider_landing, 0.0, delta * 3.4)
 	rider_impact = move_toward(rider_impact, 0.0, delta * 3.8)
 	rider_dive = move_toward(rider_dive, 1.0 if diving and not grounded else 0.0, delta * 7.0)
+	rider_flourish = move_toward(rider_flourish, maxf(gate_timer, landing_reward_timer * 0.5), delta * 5.0)
+	var bank_target := clampf(transform.basis.x.y, -1.0, 1.0) if grounded else 0.0
+	rider_bank = lerpf(rider_bank, bank_target, 1.0-exp(-delta*7.0))
+	var brace_target := 1.0 if not grounded and air_time > 0.25 and air_velocity.y < -10.0 else 0.0
+	rider_brace = move_toward(rider_brace, brace_target, delta*4.0)
+	var idle_trick := not grounded and not diving and air_time > 0.55 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
+	rider_trick_mix = move_toward(rider_trick_mix, 1.0 if idle_trick else 0.0, delta*5.0)
+	if idle_trick:
+		rider_trick_clock += delta
+	elif grounded or rider_trick_mix <= 0.0:
+		rider_trick_clock = 0.0
 	# Sample the actual deck footprint, not only the rider's contact
 	# point. Lift the complete visual rig enough to clear crests/banks.
 	rider_clearance = 0.0
@@ -138,6 +154,11 @@ func reset_run(course: Node3D) -> void:
 	fall_grace = 0.0
 	rider_clearance = 0.0
 	rider_dive = 0.0
+	rider_flourish = 0.0
+	rider_bank = 0.0
+	rider_brace = 0.0
+	rider_trick_mix = 0.0
+	rider_trick_clock = 0.0
 	rider_model.position = Vector3.ZERO
 	distance = 8.0
 	speed = START_SPEED
