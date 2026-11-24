@@ -113,6 +113,14 @@ func _run() -> void:
 		_fail("Branch selection failed.")
 		return
 	campaign.finish_world(2200.0, 30.0, 2)
+	if not campaign.advance(3) or not campaign.encounter(1) or campaign.encounter(1):
+		_fail("Rest encounter must resolve only once.")
+		return
+	campaign.finish_world(2200.0, 30.0, 2)
+	if not campaign.advance(4) or campaign.guardian():
+		_fail("Trial route not reached.")
+		return
+	campaign.finish_world(2200.0, 30.0, 2)
 	if not campaign.advance(2) or not campaign.guardian():
 		_fail("Guardian stage not reached.")
 		return
@@ -145,6 +153,39 @@ func _run() -> void:
 			break
 	if not found:
 		_fail("No collectible sparks generated.")
+		return
+	var expedition_rules = preload("res://scripts/expedition.gd")
+	if expedition_rules.ITEMS.size() < 40 or expedition_rules.ABILITIES.size() != 4:
+		_fail("Expanded item and ability catalog missing.")
+		return
+	for kind in range(4):
+		runner.call("reset", course)
+		runner.call("apply_upgrades", {}, kind)
+		runner.set("energy", 100.0)
+		runner.set("grounded", false)
+		runner.set("vy", -5.0)
+		if not bool(runner.call("_activate_boost")) or float(runner.get("energy")) >= 100.0:
+			_fail("Ability did not spend energy.")
+			return
+		if kind == 1 and float(runner.call("flight_gravity", false, 1.0)) >= 10.0:
+			_fail("Glide does not reduce gravity.")
+			return
+		if kind == 2 and float(runner.get("vy")) > -22.0:
+			_fail("Surge did not dive.")
+			return
+		if kind == 3 and float(runner.get("protected_time")) <= 0.0:
+			_fail("Phase protection missing.")
+			return
+	if not guard_rules.pattern_hits(1, 60.0, 1.0, 0.0) or guard_rules.pattern_hits(1, 0.0, 1.0, 0.0) or not guard_rules.pattern_hits(3, 0.0, 10.0, 0.0):
+		_fail("Guardian patterns have invalid safe zones.")
+		return
+	var economy = expedition_rules.new()
+	economy.begin(1, 777)
+	economy.collect(100)
+	economy.finish_world(1000.0, 20.0, 1)
+	var old_money: int = economy.currency
+	if not economy.reroll() or economy.currency != old_money - 6:
+		_fail("Shop reroll economy invalid.")
 		return
 	print("PASS: flow movement, slopes, landings and streaming")
 	quit(0)

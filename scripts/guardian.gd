@@ -1,27 +1,28 @@
 extends Node3D
-const SPACING := 190.0
 var active := false
-var next_s := 320.0
+var next_s := 300.0
 var lane := 0.0
-var lane_width := 42.0
 var cleared := 0
 var hit_count := 0
 var seed_value := 0
+var shard := 1
+var phase := 0
+var pattern := 0
+var safe_center := 0.0
 var warning: MeshInstance3D
+var second_warning: MeshInstance3D
 var guardian: MeshInstance3D
 var warning_mat: StandardMaterial3D
+var cleared_clean := 0
+const NAMES := ["Rift Warden", "Sky Weaver", "Pulse Engine", "Crown of Wind"]
 
 func _ready() -> void:
-	warning = MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(lane_width, 0.5, 9.0)
-	warning.mesh = box
 	warning_mat = StandardMaterial3D.new()
 	warning_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	warning_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	warning_mat.albedo_color = Color(1.0, 0.43, 0.2, 0.8)
-	warning.material_override = warning_mat
-	add_child(warning)
+	warning = _warning()
+	second_warning = _warning()
 	guardian = MeshInstance3D.new()
 	var shape := TorusMesh.new()
 	shape.inner_radius = 7.0
@@ -34,20 +35,62 @@ func _ready() -> void:
 	add_child(guardian)
 	hide()
 
-func reset(enabled: bool, seed_input: int) -> void:
+func _warning() -> MeshInstance3D:
+	var mesh := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(1.0, 0.5, 9.0)
+	mesh.mesh = box
+	mesh.material_override = warning_mat
+	add_child(mesh)
+	return mesh
+
+func reset(enabled: bool, seed_input: int, shard_value: int = 1) -> void:
 	active = enabled
 	seed_value = seed_input
-	next_s = 320.0
+	shard = shard_value
+	next_s = 300.0
 	cleared = 0
+	cleared_clean = 0
 	hit_count = 0
+	phase = 0
+	pattern = 0
 	lane = lane_for(0)
 	visible = active
+	second_warning.hide()
 
 func lane_for(index: int) -> float:
 	return float(posmod(seed_value + index * 7, 3) - 1) * 47.0
 
 static func wave_hits(x: float, height: float, center: float) -> bool:
 	return absf(x - center) < 21.0 and height < 5.0
+
+static func pattern_hits(kind: int, x: float, height: float, center: float) -> bool:
+	match kind:
+		0:
+			return wave_hits(x, height, center)
+		1:
+			return absf(x - center) > 24.0 and height < 6.0
+		2:
+			return (absf(x - 52.0) < 26.0 or absf(x + 52.0) < 26.0) and height < 8.0
+		_:
+			return absf(x - center) < 34.0 and height > 7.0
+
+func boss_name() -> String:
+	return NAMES[posmod(shard - 1, NAMES.size())]
+
+func _plan(limit: float) -> void:
+	phase = clampi(int(next_s / maxf(1.0, limit) * 3.0), 0, 2)
+	pattern = posmod(cleared + shard - 1, mini(4, phase + 2))
+	lane = lane_for(cleared)
+	safe_center = lane
+
+func _place(mesh: MeshInstance3D, course: Node3D, center: float, width: float, height: float) -> void:
+	mesh.visible = width > 0.1
+	mesh.scale = Vector3(maxf(0.1, width), 1.0, 1.0)
+	mesh.position = Vector3(center, float(course.call("elevation", center, next_s)) + height, -next_s)
+	var slope: Vector2 = course.call("grade", center, next_s)
+	mesh.rotation.x = atan(slope.y)
+	mesh.rotation.z = atan(slope.x)
 
 func tick(course: Node3D, runner: Node3D, old: Vector3) -> void:
 	if not active:
@@ -57,22 +100,41 @@ func tick(course: Node3D, runner: Node3D, old: Vector3) -> void:
 	if next_s > limit - 60.0:
 		hide()
 		return
-	var distance := next_s - s
-	guardian.position = Vector3(lane * 0.65, float(course.call("elevation", lane * 0.65, s + 125.0)) + 34.0, -(s + 125.0))
-	guardian.rotation.z += 0.025
-	warning.visible = distance < 260.0
-	warning.position = Vector3(lane, float(course.call("elevation", lane, next_s)) + 0.9, -next_s)
-	var slope: Vector2 = course.call("grade", lane, next_s)
-	warning.rotation.x = atan(slope.y)
-	warning.rotation.z = atan(slope.x)
-	warning_mat.albedo_color = Color(1.0, 0.34, 0.2, 0.85 if distance < 70.0 else 0.50)
+	_plan(limit)
 	while s >= next_s and next_s <= limit - 60.0:
 		var ratio := clampf((next_s + old.z) / maxf(0.001, s + old.z), 0.0, 1.0)
 		var crossing := old.lerp(runner.position, ratio)
 		var height := crossing.y - float(course.call("elevation", crossing.x, next_s))
-		if wave_hits(crossing.x, height, lane):
+		if pattern_hits(pattern, crossing.x, height, lane) and float(runner.get("protected_time")) <= 0.0:
 			runner.call("apply_guardian_hit")
 			hit_count += 1
+		else:
+			cleared_clean += 1
+			runner.set("energy", minf(100.0, float(runner.get("energy")) + 8.0))
 		cleared += 1
-		next_s += SPACING
-		lane = lane_for(cleared)
+		next_s += maxf(105.0, 205.0 - float(phase) * 35.0 - float(shard - 1) * 3.0)
+		_plan(limit)
+	if next_s > limit - 60.0:
+		hide()
+		return
+	var distance := next_s - s
+	guardian.position = Vector3(lane * 0.65, float(course.call("elevation", lane * 0.65, s + 125.0)) + 34.0, -(s + 125.0))
+	guardian.rotation.z += 0.025
+	warning_mat.albedo_color = Color(0.70, 0.38, 1.0, 0.85) if pattern == 3 else Color(1.0, 0.34, 0.2, 0.85 if distance < 70.0 else 0.50)
+	second_warning.hide()
+	match pattern:
+		0:
+			_place(warning, course, lane, 42.0, 0.9)
+		1:
+			var left := lane - 24.0
+			var right := lane + 24.0
+			_place(warning, course, (-110.0 + left) * 0.5, left + 110.0, 0.9)
+			_place(second_warning, course, (right + 110.0) * 0.5, 110.0 - right, 0.9)
+		2:
+			_place(warning, course, -52.0, 52.0, 0.9)
+			_place(second_warning, course, 52.0, 52.0, 0.9)
+		3:
+			_place(warning, course, lane, 68.0, 8.0)
+	if distance > 320.0:
+		warning.hide()
+		second_warning.hide()

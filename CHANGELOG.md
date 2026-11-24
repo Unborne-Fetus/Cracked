@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Expedition depth update
+- Five worlds, five routes, four active abilities, 40 items, shop rerolls and rest choices.
+- Three guardian phases with lane, safe corridor, split and aerial hazard patterns.
+- Upgrades affect actual movement, pickup range, energy, protection and economy. Landing prediction accounts for steering and ability effects.
+
 ## Shard expedition
 - Ten unlockable shards, three-world routes, deterministic shops and collectible sparks.
 - Seven upgrade types affecting movement, energy, boost and attempts; guardian escape encounters.

@@ -55,10 +55,14 @@ func reset(seed_value: int, stage_value: int, route_value: int = 0, guardian_val
 		node.queue_free()
 	chunks.clear()
 	stage = stage_value
-	route_style = clampi(route_value, 0, 2)
+	route_style = clampi(route_value, 0, 4)
 	guardian_world = guardian_value
 	seed_value_saved = seed_value
 	length = 2240.0 + float(mini(stage - 1, 6)) * 160.0 + (320.0 if guardian_world else 0.0)
+	if route_style == 3 and not guardian_world:
+		length = 1760.0
+	elif route_style == 4:
+		length += 320.0
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	phase = rng.randf_range(0.0, TAU)
@@ -75,18 +79,18 @@ func elevation(x: float, s: float) -> float:
 	var d := 4.5 * cos(x * 0.065 - s * 0.011)
 	var rolling := 3.2 * sin(s * wavelength + x * 0.012)
 	var hill_scale := 1.0 + minf(float(stage - 1) * 0.042, 0.28)
-	var route_scale := 1.18 if route_style == 2 else (0.92 if route_style == 0 else 1.0)
+	var route_scale := float([0.92, 1.0, 1.18, 0.78, 1.24][route_style])
 	return -s * 0.115 + (a + b + c + d + rolling) * hill_scale * lerpf(1.0, route_scale, blend)
 
 # Each ravine is a real rectangular hole. An alternate corridor always exists.
 func gap_rect(index: int) -> Rect2:
-	if index < 3 or posmod(index - 3, 3 if route_style == 1 else 4) != 0 or float(index) * CHUNK > length - 250.0:
+	if route_style == 3 or index < 3 or posmod(index - 3, 3 if route_style in [1, 4] else 4) != 0 or float(index) * CHUNK > length - 250.0:
 		return Rect2()
 	var direction := posmod(seed_value_saved + index, 2)
-	var width := 128.0 if route_style != 1 else 152.0
+	var width := 152.0 if route_style in [1, 4] else 128.0
 	var start_x := -HALF_WIDTH if direction == 0 else HALF_WIDTH - width
 	var start_s := float(index) * CHUNK + 64.0
-	return Rect2(start_x, start_s, width, 28.0 + 4.0 * float(mini(stage - 1, 3)))
+	return Rect2(start_x, start_s, width, 28.0 + 4.0 * float(mini(stage - 1, 3)) + (8.0 if route_style == 4 else 0.0))
 
 func has_ground(x: float, s: float) -> bool:
 	if absf(x) > HALF_WIDTH:
@@ -174,8 +178,8 @@ func _build(index: int) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(phase * 100000.0) + index * 9137
 	if index >= 1 and start < length - 100.0:
-		for i in range(3 + mini(stage - 1, 2)):
-			var at := start + 24.0 + float(i) * 27.0 + rng.randf_range(-5.0, 5.0)
+		for i in range(1 if route_style == 3 else (6 if route_style == 4 else 3 + mini(stage - 1, 2))):
+			var at := start + 20.0 + float(i) * 23.0 + rng.randf_range(-4.0, 4.0)
 			var across := rng.randf_range(-65.0, 65.0)
 			if not has_ground(across, at) or absf(across) < 9.0:
 				continue
@@ -270,7 +274,7 @@ func collapse_behind(s: float) -> void:
 			var node: Node3D = chunks[key]["node"]
 			node.hide()
 
-func collect_sparks(a: Vector3, b: Vector3) -> int:
+func collect_sparks(a: Vector3, b: Vector3, reach: float = 3.6) -> int:
 	var gained := 0
 	var first := int(floor(minf(-a.z, -b.z) / CHUNK))
 	var last := int(floor(maxf(-a.z, -b.z) / CHUNK))
@@ -283,7 +287,7 @@ func collect_sparks(a: Vector3, b: Vector3) -> int:
 				continue
 			var point: Vector3 = spark["point"]
 			var t := clampf((point - a).dot(segment) / maxf(0.001, segment.length_squared()), 0.0, 1.0)
-			if (a + segment * t).distance_to(point) <= 3.6:
+			if (a + segment * t).distance_to(point) <= reach:
 				spark["used"] = true
 				var instance: Node3D = spark["node"]
 				instance.hide()

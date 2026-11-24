@@ -21,3 +21,6 @@ Flow expansion: true procedural ravines with alternate corridors, support-aware 
 
 ## Shard expedition
 Ten unlockable shards, each with three worlds and a final guardian escape challenge. Choose one of three route profiles; collect sparks, buy from a seeded three-item shop, and build upgrades that persist through the shard (but not into a new expedition). Failed attempts discard unbanked sparks. Guardian waves are telegraphed terrain hazards, avoidable by steering or staying airborne. Shard unlocks persist locally. All values and content are original, and this is still a prototype, not full parity with Haste.
+
+## Expanded gameplay
+Five worlds per shard, five route profiles, four selectable active abilities (Burst, Glide, Surge, Phase), 40 stackable items and one-time recovery choices, paid shop rerolls, and three-phase guardian challenges with four patterns. Items affect real physics, collection, economy, energy or hazard response; some stack with one another. The guardians share a pattern framework rather than ten bespoke bosses. No story or graphics expansion is required.
