@@ -404,6 +404,9 @@ func _begin_flight(frame: Transform3D, impulse: float) -> void:
 	# into flight rather than snapping the avatar through the road.
 	position += air_basis * avatar.position
 	avatar.position = Vector3.ZERO
+	if impulse > 0.0:
+		# Start just outside the actual riding face, not inside its slab.
+		position += frame.basis.y * 0.04
 	air_velocity = -frame.basis.z * speed + frame.basis.x * lateral_speed * float(surface_side) + frame.basis.y * impulse
 	vertical_speed = impulse
 	queued_jump = false
@@ -444,6 +447,17 @@ func _body_sweep(course: Node3D, from_pos: Vector3, to_pos: Vector3, from_s: flo
 	return best
 
 func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
+	# A twisting ribbon may move across a straight flight trajectory
+	# even when both endpoint normals suggest outward velocity.
+	# Limit each collision sweep to short spatial and temporal intervals.
+	var steps := clampi(ceili(maxf(delta * 60.0, (air_velocity.length() + GRAVITY * delta) * delta / 1.25)), 1, 96)
+	var step := delta / float(steps)
+	for i in range(steps):
+		if grounded or fallen:
+			break
+		_flight_step(step, course, steer)
+
+func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	air_time += delta
 	var previous_pos := position
 	var old_s := distance
@@ -505,6 +519,8 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		if incoming < 0.0:
 			air_velocity -= normal * incoming * 1.2
 			speed = landing_speed(speed, -incoming)
+		else:
+			air_velocity += normal * 0.5
 	var projected: Vector3 = course.call("project_position", next_pos, predicted_s)
 	distance = projected.x
 	lane = projected.y
@@ -518,21 +534,38 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		var old_gap: float = course.call("surface_clearance", old_projection.x, old_projection.y, old_height, side)
 		var new_gap: float = course.call("surface_clearance", distance, lane, height, side)
 		var face: Transform3D = course.call("surface_frame", distance, lane, side)
-		var toward := air_velocity.dot(face.basis.y)
 		# A crossing at the beginning of the step is not a landing if the
 		# player has already moved past the edge by the end of that step.
 		# Keep both face checks, but require support under the new position.
-		if not body_contact.is_empty() or not bool(course.call("support_at", distance, lane)) or old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
+		if not body_contact.is_empty() or not bool(course.call("support_at", distance, lane)) or old_gap < -0.025 or new_gap > 0.0 or new_gap >= old_gap:
 			continue
+		# The signed gap is relative to the rotating surface; a positive
+		# world-space normal velocity does not rule out a collision.
 		var fraction := clampf(old_gap / maxf(old_gap - new_gap, 0.0001), 0.0, 1.0)
 		var hit_pos := previous_pos.lerp(next_pos, fraction)
 		var hit: Vector3 = course.call("project_position", hit_pos, lerpf(old_s, distance, fraction))
 		if not bool(course.call("support_at", hit.x, hit.y)):
 			continue
+		var landing_frame: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
+		if air_basis.y.dot(landing_frame.basis.y) < 0.25:
+			# The bank swept into the runner sideways or head-first. Keep
+			# the whole body outside the contacted face rather than snapping
+			# to the other side of the road.
+			var normal := landing_frame.basis.y
+			var push := 0.08
+			for probe in range(2):
+				push = maxf(push, _body_support(normal, air_basis, probe) - _body_offset(air_basis, probe).dot(normal) + 0.08)
+			next_pos = landing_frame.origin + normal * push
+			var incoming := air_velocity.dot(normal)
+			air_velocity += normal * maxf(0.5, -incoming * 1.2)
+			projected = course.call("project_position", next_pos, hit.x)
+			distance = projected.x
+			lane = projected.y
+			height = projected.z
+			break
 		distance = hit.x
 		lane = hit.y
 		surface_side = side
-		var landing_frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		_apply_landing_result(landing_frame)
 		lateral_speed = air_velocity.dot(landing_frame.basis.x) * float(surface_side)
 		_finish_landing(course)

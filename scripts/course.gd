@@ -37,6 +37,11 @@ var demanding_sections := 0
 var recovery_sections := 0
 var rejected_layouts := 0
 var fixed_daily_layout := false
+# Archive the exact generated geometry, not merely the seed: endless
+# generation is adaptive to the player's speed and storm gap.
+const REPLAY_CHUNK_LIMIT := 768
+var replay_recipes: Array[Dictionary] = []
+var replay_layout := false
 
 func _ready() -> void:
 	surface_mat = _material(Color.WHITE)
@@ -58,6 +63,8 @@ func reset_course(seed_value: int) -> void:
 		remove_child(node)
 		node.queue_free()
 	chunks.clear()
+	replay_recipes.clear()
+	replay_layout = false
 	next_index = 0
 	chunk_starts.assign([0.0])
 	tail = Vector3.ZERO
@@ -295,12 +302,18 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		demanding_sections += 1
 	else:
 		demanding_sections = maxi(0, demanding_sections - 1)
-	var node := Node3D.new()
-	node.name = "Track_%d" % index
-	node.position = tail
-	add_child(node)
+	var absolute_origin := tail + origin_shift
+	if replay_recipes.size() < REPLAY_CHUNK_LIMIT:
+		replay_recipes.append({"index": index, "start": start_s, "length": length, "kind": kind, "origin": absolute_origin, "points": points, "layout": layout.duplicate(true)})
+	_instantiate_chunk(index, kind, points, start_s, step_length, tail, layout, forecast)
 	tail += points[-1].origin
 	yaw = target_yaw
+
+func _instantiate_chunk(index: int, kind: String, points: Array[Transform3D], start_s: float, step_length: float, local_origin: Vector3, layout: Array[Dictionary], forecast: Dictionary = {}) -> void:
+	var node := Node3D.new()
+	node.name = "Track_%d" % index
+	node.position = local_origin
+	add_child(node)
 	var hazards: Array[Dictionary] = []
 	_build_mesh(node, points, start_s, kind, index, step_length)
 	for item in layout:
@@ -857,6 +870,8 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 	node.add_child(body)
 
 func stream(distance: float, planned_speed: float = 22.0) -> void:
+	if replay_layout:
+		return
 	if next_index > 0 and (distance >= chunk_starts[-1] or next_index <= chunk_index_at(distance) + AHEAD):
 		_refresh_forecast()
 	while next_index == 0 or distance >= chunk_starts[-1]:
@@ -1009,3 +1024,44 @@ func collect_clean_gates(from_s: float, to_s: float, from_lane: float, to_lane: 
 			if not bool(group["used"]) and feet >= -0.1 and feet < 40.0 and absf(across - float(group["opening"])) < float(group["gap_width"]) * 0.5 - 0.8:
 				count += 1
 	return count
+
+func begin_replay_layout(recipes: Array) -> void:
+	for data in chunks.values():
+		var node: Node3D = data["node"]
+		remove_child(node)
+		node.queue_free()
+	chunks.clear()
+	replay_layout = true
+	replay_recipes.assign(recipes)
+	chunk_starts.assign([0.0])
+	for recipe in replay_recipes:
+		chunk_starts.append(float(recipe["start"]) + float(recipe["length"]))
+	next_index = replay_recipes.size()
+	origin_shift = Vector3.ZERO
+
+func replay_stream(distance: float, shift: Vector3) -> void:
+	if not replay_layout or replay_recipes.is_empty():
+		return
+	var current := chunk_index_at(distance)
+	var first := maxi(0, current - BEHIND)
+	var last := mini(next_index - 1, current + AHEAD)
+	var adjustment := shift - origin_shift
+	for key in chunks.keys():
+		var node: Node3D = chunks[key]["node"]
+		if int(key) < first or int(key) > last:
+			remove_child(node)
+			node.queue_free()
+			chunks.erase(key)
+		else:
+			node.position -= adjustment
+	origin_shift = shift
+	for index in range(first, last + 1):
+		if chunks.has(index):
+			continue
+		var recipe: Dictionary = replay_recipes[index]
+		var points: Array[Transform3D] = []
+		points.assign(recipe["points"])
+		var layout: Array[Dictionary] = []
+		layout.assign(recipe["layout"])
+		var absolute_origin: Vector3 = recipe["origin"]
+		_instantiate_chunk(index, str(recipe["kind"]), points, float(recipe["start"]), float(recipe["length"]) / float(STEPS), absolute_origin - origin_shift, layout)

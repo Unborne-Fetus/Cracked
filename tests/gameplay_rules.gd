@@ -209,6 +209,28 @@ func _run_tests() -> void:
 	if bool(runner.call("is_grounded")) or head_gap < 0.34:
 		_fail("Head-first collision passed through the ceiling.")
 		return
+	# Jump on both sides of a fast twisting bank. No foot may cross
+	# through the slab even when the local normal rotates during flight.
+	for bank_side: int in [1, -1]:
+		game.call("_restart")
+		runner.set("distance", 1010.0)
+		runner.set("lane", 0.0)
+		runner.set("speed", 90.0)
+		runner.set("surface_side", bank_side)
+		runner.call("sync_pose", course)
+		runner.call("request_jump")
+		for jump_tick in range(36):
+			runner.call("tick", 1.0 / 60.0, course)
+			if bool(runner.get("fallen")):
+				break
+			if not bool(runner.call("is_grounded")):
+				var p: Vector3 = course.call("project_position", runner.position, float(runner.get("distance")))
+				if bool(course.call("support_at", p.x, p.y)):
+					var top_gap: float = course.call("surface_clearance", p.x, p.y, p.z, 1)
+					var bottom_gap: float = course.call("surface_clearance", p.x, p.y, p.z, -1)
+					if top_gap < -0.04 and bottom_gap < -0.04:
+						_fail("Jump through twisting bank penetrated track slab.")
+						return
 	# A 180-bank underside is a real rideable face, not a visual duplicate.
 	game.call("_restart")
 	var underside: Transform3D = course.call("surface_frame", 864.0, 0.0, -1)
@@ -651,6 +673,35 @@ func _run_tests() -> void:
 		return
 	game.set("mode", 0)
 	game.call("_restart")
+	# Replay captures actual adaptive geometry and interpolated recorded
+	# motion. Playback and seeking must never run gameplay simulation.
+	var recorder = game.get("replay")
+	var recorded_seed: int = game.get("run_seed")
+	var start_pose: Transform3D = runner.transform
+	for i in range(12):
+		game.call("_physics_process", 1.0 / 60.0)
+	var final_pose: Transform3D = runner.transform
+	game.call("_lose", "REPLAY TEST")
+	if not bool(recorder.available()) or int(recorder.archived["seed"]) != recorded_seed:
+		_fail("Completed run was not recorded.")
+		return
+	game.call("_start_replay")
+	if not bool(game.get("replay_active")) or runner.position.distance_to(start_pose.origin) > 0.15:
+		_fail("Replay did not begin at the recorded pose.")
+		return
+	game.call("_seek_replay", float(recorder.duration()))
+	if runner.position.distance_to(final_pose.origin) > 0.15 or not bool(course.get("replay_layout")):
+		_fail("Replay seeking did not reproduce recorded motion and layout.")
+		return
+	var frozen: Vector3 = runner.position
+	game.call("_physics_process", 1.0)
+	if runner.position.distance_to(frozen) > 0.001:
+		_fail("Replay unexpectedly runs live gameplay physics.")
+		return
+	game.call("_restart")
+	if bool(game.get("replay_active")) or bool(course.get("replay_layout")):
+		_fail("Replay exit did not restore normal generation.")
+		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")
 	game.queue_free()

@@ -1,0 +1,86 @@
+extends Node
+## Local, state-recorded replay. No simulation, scoring or network calls.
+const FILE_PATH := "user://velocity_last_replay.dat"
+const FORMAT := 1
+const INTERVAL := 0.05
+const MAX_FRAMES := 36001
+var frames: Array[Dictionary] = []
+var archived: Dictionary = {}
+var elapsed_since_sample := 0.0
+var truncated := false
+
+func load_last() -> void:
+	if not FileAccess.file_exists(FILE_PATH):
+		return
+	var file := FileAccess.open(FILE_PATH, FileAccess.READ)
+	if file == null or file.get_length() > 48 * 1024 * 1024:
+		return
+	var data = file.get_var(false)
+	if data is Dictionary and int(data.get("format", 0)) == FORMAT and data.get("frames", []) is Array and data.get("recipes", []) is Array:
+		if not data["frames"].is_empty() and not data["recipes"].is_empty():
+			archived = data
+
+func reset_recording() -> void:
+	frames.clear()
+	elapsed_since_sample = 0.0
+	truncated = false
+
+func record(t: float, delta: float, runner: Node3D, course: Node3D, storm: Node3D, force: bool = false) -> void:
+	if truncated:
+		return
+	var recipes: Array = course.get("replay_recipes")
+	var index: int = course.call("chunk_index_at", float(runner.get("distance")))
+	if frames.size() >= MAX_FRAMES or index >= recipes.size():
+		truncated = true
+		return
+	elapsed_since_sample += delta
+	if not force and elapsed_since_sample < INTERVAL:
+		return
+	elapsed_since_sample = fmod(elapsed_since_sample, INTERVAL)
+	var shift: Vector3 = course.get("origin_shift")
+	var pose := runner.transform
+	pose.origin += shift
+	var frame := {"t": t, "pose": pose, "shift": shift, "s": runner.get("distance"), "lane": runner.get("lane"), "side": runner.get("surface_side"), "speed": runner.get("speed"), "grounded": runner.get("grounded"), "sliding": runner.get("is_sliding"), "diving": runner.get("diving"), "height": runner.get("height"), "air_time": runner.get("air_time"), "reserve": runner.get("momentum_reserve"), "double_jump": runner.get("double_jump_available"), "storm_s": storm.get("front_s"), "storm_speed": storm.get("speed"), "storm_time": storm.get("elapsed"), "storm_visible": storm.visible}
+	if not frames.is_empty() and t <= float(frames[-1]["t"]):
+		frames[-1] = frame
+	else:
+		frames.append(frame)
+
+func finish(course: Node3D, seed_value: int, mode_value: int, cosmetic_value: int) -> void:
+	if frames.size() < 2:
+		return
+	archived = {"format": FORMAT, "seed": seed_value, "mode": mode_value, "cosmetic": cosmetic_value, "truncated": truncated, "frames": frames.duplicate(true), "recipes": course.get("replay_recipes").duplicate(true)}
+	var file := FileAccess.open(FILE_PATH, FileAccess.WRITE)
+	if file != null:
+		file.store_var(archived, false)
+
+func available() -> bool:
+	return not archived.is_empty() and archived.get("frames", []).size() >= 2
+
+func duration() -> float:
+	if not available():
+		return 0.0
+	return float(archived["frames"][-1]["t"])
+
+func sample(t: float) -> Dictionary:
+	var samples: Array = archived["frames"]
+	var time := clampf(t, 0.0, duration())
+	var lo := 0
+	var hi := samples.size() - 1
+	while lo + 1 < hi:
+		var mid := (lo + hi) / 2
+		if float(samples[mid]["t"]) <= time:
+			lo = mid
+		else:
+			hi = mid
+	var a: Dictionary = samples[lo]
+	var b: Dictionary = samples[hi]
+	var blend := clampf((time - float(a["t"])) / maxf(0.00001, float(b["t"]) - float(a["t"])), 0.0, 1.0)
+	var result: Dictionary = (a if blend < 0.5 else b).duplicate()
+	var pose_a: Transform3D = a["pose"]
+	var pose_b: Transform3D = b["pose"]
+	result["pose"] = pose_a.interpolate_with(pose_b, blend)
+	for key in ["s", "lane", "speed", "height", "air_time", "reserve", "storm_s", "storm_speed", "storm_time"]:
+		result[key] = lerpf(float(a[key]), float(b[key]), blend)
+	result["t"] = time
+	return result

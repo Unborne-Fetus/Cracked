@@ -5,6 +5,19 @@ const RunnerScript = preload("res://scripts/runner.gd")
 const StormScript = preload("res://scripts/storm.gd")
 const ExtrasScript = preload("res://scripts/run_extras.gd")
 const EffectsScript = preload("res://scripts/run_effects.gd")
+const ReplayScript = preload("res://scripts/replay.gd")
+var replay
+var replay_active := false
+var replay_playing := false
+var replay_time := 0.0
+var replay_rate := 1.0
+var replay_panel: PanelContainer
+var replay_slider: HSlider
+var replay_clock: Label
+var replay_play_button: Button
+var replay_speed_button: Button
+var watch_replay_button: Button
+var profile_replay_button: Button
 const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice"]
 var extras
 var effects
@@ -108,7 +121,11 @@ func _ready() -> void:
 	add_child(extras)
 	effects = EffectsScript.new()
 	add_child(effects)
+	replay = ReplayScript.new()
+	add_child(replay)
+	replay.load_last()
 	_create_hud()
+	_create_replay_panel()
 	_create_pause_menu()
 	_load_extras()
 	board_request = HTTPRequest.new()
@@ -121,6 +138,11 @@ func _ready() -> void:
 	_restart()
 
 func _restart() -> void:
+	replay_active = false
+	replay_playing = false
+	replay_panel.visible = false
+	watch_replay_button.visible = false
+	replay.reset_recording()
 	_set_paused(false)
 	run_finished = false
 	run_time = 0.0
@@ -145,13 +167,14 @@ func _restart() -> void:
 	storm.reset(runner.distance)
 	storm.sync_pose(course)
 	storm.visible = mode != 5 and storm.visible
+	replay.record(0.0, 0.0, runner, course, storm, true)
 	message_label.visible = false
 	restart_button.visible = false
 	_update_camera(1.0)
 	_update_hud()
 
 func _physics_process(delta: float) -> void:
-	if paused or run_finished:
+	if replay_active or paused or run_finished:
 		return
 	run_time += delta
 	course.set_pursuit_context(runner.distance, runner.lane, runner.speed, storm.gap_to(runner.distance), storm.speed, storm.elapsed)
@@ -162,15 +185,27 @@ func _physics_process(delta: float) -> void:
 	extras.track(delta, runner, previous_speed)
 	effects.update_run(runner.speed, runner.hits > previous_hits, not was_grounded and runner.is_grounded())
 	if runner.fallen:
+		replay.record(run_time, delta, runner, course, storm, true)
 		_lose("FELL OFF THE TRACK")
 		return
 	if mode != 5:
 		storm.advance(delta * (1.28 if mode == 4 else 1.0))
 		storm.sync_pose(course)
 		if storm.gap_to(runner.distance) <= 1.0:
+			replay.record(run_time, delta, runner, course, storm, true)
 			_lose("THE STORM CAUGHT YOU")
+			return
+	replay.record(run_time, delta, runner, course, storm)
 
 func _process(delta: float) -> void:
+	if replay_active:
+		if replay_playing:
+			_seek_replay(minf(replay.duration(), replay_time + delta * replay_rate), false)
+			if replay_time >= replay.duration():
+				_set_replay_playing(false)
+		_update_camera(delta)
+		_update_hud()
+		return
 	if paused:
 		return
 	_update_camera(delta)
@@ -338,7 +373,9 @@ func _update_hud() -> void:
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
 	storm_label.text = "PRACTICE  //  NO STORM" if mode == 5 else "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
-	if not run_finished:
+	if replay_active:
+		message_label.visible = false
+	elif not run_finished:
 		message_label.visible = runner.hit_timer > 0.0 or runner.gate_timer > 0.0 or runner.landing_reward_timer > 0.0
 		if runner.hit_timer > 0.0:
 			message_label.text = "IMPACT  //  MOMENTUM LOST"
@@ -351,6 +388,9 @@ func _lose(reason: String) -> void:
 	if run_finished:
 		return
 	run_finished = true
+	replay.record(run_time, 0.0, runner, course, storm, true)
+	replay.finish(course, run_seed, mode, extras.cosmetic)
+	watch_replay_button.visible = replay.available()
 	var meters: float = maxf(0.0, runner.distance - 8.0)
 	extras.finish(mode, run_day, run_seed, meters, run_time, runner)
 	stats_label.text = extras.summary(_distance_display(meters), _speed_display(extras.top_speed), _speed_units())
@@ -367,7 +407,7 @@ func _lose(reason: String) -> void:
 	restart_button.visible = true
 
 func _toggle_camera() -> void:
-	if mode == 3:
+	if mode == 3 and not replay_active:
 		return
 	first_person = not first_person
 	camera_rotation_ready = false
@@ -406,6 +446,24 @@ func _pad_direction(x: int, y: int) -> void:
 		_set_units(1 if x > 0 else 0)
 
 func _pad_button(button: int) -> bool:
+	if replay_active:
+		match button:
+			JOY_BUTTON_START, JOY_BUTTON_A:
+				_set_replay_playing(not replay_playing)
+			JOY_BUTTON_B, JOY_BUTTON_BACK:
+				_restart()
+			JOY_BUTTON_Y:
+				_toggle_camera()
+			JOY_BUTTON_DPAD_LEFT:
+				_seek_replay(replay_time - 5.0)
+			JOY_BUTTON_DPAD_RIGHT:
+				_seek_replay(replay_time + 5.0)
+			JOY_BUTTON_DPAD_UP:
+				_cycle_replay_speed()
+		return true
+	if run_finished and button == JOY_BUTTON_BACK and replay.available():
+		_start_replay()
+		return true
 	if button == JOY_BUTTON_START:
 		if paused and (options_page.visible or extras_page.visible):
 			_show_options(false)
@@ -434,7 +492,7 @@ func _pad_button(button: int) -> bool:
 						_pad_direction(1, 0)
 					elif control is CheckButton:
 						control.button_pressed = not control.button_pressed
-					elif control is Button:
+					elif control is Button and not control.disabled:
 						control.pressed.emit()
 				elif options_page.visible:
 					if pad_menu_index == 0:
@@ -489,6 +547,26 @@ func _input(event: InputEvent) -> void:
 		return
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
+		return
+	if replay_active:
+		match key.keycode:
+			KEY_ESCAPE:
+				_restart()
+			KEY_SPACE:
+				_set_replay_playing(not replay_playing)
+			KEY_LEFT:
+				_seek_replay(replay_time - 5.0)
+			KEY_RIGHT:
+				_seek_replay(replay_time + 5.0)
+			KEY_TAB:
+				_toggle_camera()
+			KEY_UP:
+				_cycle_replay_speed()
+		get_viewport().set_input_as_handled()
+		return
+	if run_finished and key.keycode == KEY_V and replay.available():
+		_start_replay()
+		get_viewport().set_input_as_handled()
 		return
 	if not binding_action.is_empty() and binding_kind == "keyboard":
 		if key.keycode == KEY_ESCAPE:
@@ -661,12 +739,23 @@ func _create_hud() -> void:
 	restart_button.focus_mode = Control.FOCUS_NONE
 	root.add_child(restart_button)
 	restart_button.set_anchors_preset(Control.PRESET_CENTER)
-	restart_button.offset_left = -90
-	restart_button.offset_right = 90
+	restart_button.offset_left = -180
+	restart_button.offset_right = -6
 	restart_button.offset_top = 8
 	restart_button.offset_bottom = 65
 	restart_button.visible = false
 	restart_button.pressed.connect(_restart)
+	watch_replay_button = Button.new()
+	watch_replay_button.text = "WATCH REPLAY"
+	watch_replay_button.focus_mode = Control.FOCUS_NONE
+	root.add_child(watch_replay_button)
+	watch_replay_button.set_anchors_preset(Control.PRESET_CENTER)
+	watch_replay_button.offset_left = 6
+	watch_replay_button.offset_right = 180
+	watch_replay_button.offset_top = 8
+	watch_replay_button.offset_bottom = 65
+	watch_replay_button.visible = false
+	watch_replay_button.pressed.connect(_start_replay)
 	stats_label = _label("", 17, Color(0.81, 0.96, 1.0))
 	root.add_child(stats_label)
 	stats_label.set_anchors_preset(Control.PRESET_CENTER)
@@ -819,6 +908,10 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	start.custom_minimum_size.y = 36
 	start.pressed.connect(func() -> void: mode = mode_picker.selected; _restart())
 	_add_extra(start)
+	profile_replay_button = _menu_button("WATCH LAST REPLAY (NEW RUN ON EXIT)")
+	profile_replay_button.custom_minimum_size.y = 36
+	profile_replay_button.pressed.connect(_start_replay)
+	_add_extra(profile_replay_button)
 	cosmetic_picker = OptionButton.new()
 	for name_value in ["Cyan", "Amber", "Violet", "Emerald"]:
 		cosmetic_picker.add_item(name_value)
@@ -883,6 +976,7 @@ func _show_extras() -> void:
 	options_page.visible = false
 	extras_page.visible = true
 	mode_picker.select(mode)
+	profile_replay_button.disabled = not replay.available()
 	pad_menu_index = 0
 	_refresh_profile()
 	_pad_focus()
@@ -944,3 +1038,141 @@ func _board_completed(_result: int, response: int, _headers: PackedStringArray, 
 	else:
 		board_status = "Leaderboard unavailable"
 	_refresh_profile()
+
+func _create_replay_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 10
+	add_child(layer)
+	var root := Control.new()
+	layer.add_child(root)
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	replay_panel = PanelContainer.new()
+	root.add_child(replay_panel)
+	replay_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	replay_panel.offset_left = -300
+	replay_panel.offset_right = 300
+	replay_panel.offset_top = -176
+	replay_panel.offset_bottom = -50
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.01, 0.03, 0.08, 0.96)
+	style.border_color = Color(0.12, 0.8, 1.0)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(8)
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	replay_panel.add_theme_stylebox_override("panel", style)
+	var stack := VBoxContainer.new()
+	replay_panel.add_child(stack)
+	replay_clock = _label("REPLAY", 18, Color(0.24, 0.95, 1.0))
+	stack.add_child(replay_clock)
+	replay_slider = HSlider.new()
+	replay_slider.step = 0.05
+	replay_slider.custom_minimum_size.y = 24
+	stack.add_child(replay_slider)
+	replay_slider.value_changed.connect(func(value: float) -> void: _seek_replay(value))
+	var row := HBoxContainer.new()
+	stack.add_child(row)
+	for caption_text in ["-5 SEC", "PAUSE", "+5 SEC", "1x", "CAMERA", "EXIT"]:
+		var button := Button.new()
+		button.text = caption_text
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(button)
+		match caption_text:
+			"-5 SEC":
+				button.pressed.connect(func() -> void: _seek_replay(replay_time - 5.0))
+			"PAUSE":
+				replay_play_button = button
+				button.pressed.connect(func() -> void: _set_replay_playing(not replay_playing))
+			"+5 SEC":
+				button.pressed.connect(func() -> void: _seek_replay(replay_time + 5.0))
+			"1x":
+				replay_speed_button = button
+				button.pressed.connect(_cycle_replay_speed)
+			"CAMERA":
+				button.pressed.connect(_toggle_camera)
+			"EXIT":
+				button.pressed.connect(_restart)
+	stack.add_child(_label("SPACE play/pause   ·   ← / → seek   ·   TAB camera   ·   ESC exit", 13, Color(0.75, 0.86, 1.0)))
+	replay_panel.visible = false
+
+func _start_replay() -> void:
+	if not replay.available():
+		return
+	_set_paused(false)
+	replay_active = true
+	run_finished = true
+	replay_time = 0.0
+	replay_rate = 1.0
+	replay_speed_button.text = "1x"
+	camera_rotation_ready = false
+	camera_was_grounded = true
+	camera_offset = Vector3.ZERO
+	camera_height = 0.0
+	first_person = false
+	runner.set_first_person(false)
+	runner.apply_cosmetic(int(replay.archived.get("cosmetic", 0)))
+	course.begin_replay_layout(replay.archived["recipes"])
+	stats_label.visible = false
+	watch_replay_button.visible = false
+	restart_button.visible = false
+	message_label.visible = false
+	replay_panel.visible = true
+	replay_slider.max_value = replay.duration()
+	_set_replay_playing(true)
+	_seek_replay(0.0)
+
+func _set_replay_playing(value: bool) -> void:
+	if value and replay_time >= replay.duration():
+		_seek_replay(0.0)
+	replay_playing = value
+	replay_play_button.text = "PAUSE" if value else "PLAY"
+	effects.set_paused(not value)
+
+func _cycle_replay_speed() -> void:
+	replay_rate = 1.0 if replay_rate >= 2.0 else (2.0 if replay_rate >= 1.0 else 1.0)
+	# Cycle 0.5x, 1x, 2x.
+	if replay_speed_button.text == "2x":
+		replay_rate = 0.5
+	replay_speed_button.text = "%gx" % replay_rate
+
+func _seek_replay(value: float, snap_camera: bool = true) -> void:
+	if not replay_active:
+		return
+	replay_time = clampf(value, 0.0, replay.duration())
+	var state: Dictionary = replay.sample(replay_time)
+	var shift: Vector3 = state["shift"]
+	course.replay_stream(float(state["s"]), shift)
+	var pose: Transform3D = state["pose"]
+	pose.origin -= shift
+	runner.transform = pose
+	runner.distance = float(state["s"])
+	runner.lane = float(state["lane"])
+	runner.surface_side = int(state["side"])
+	runner.speed = float(state["speed"])
+	runner.grounded = bool(state["grounded"])
+	runner.is_sliding = bool(state["sliding"])
+	runner.diving = bool(state["diving"])
+	runner.height = float(state["height"])
+	runner.air_time = float(state["air_time"])
+	runner.momentum_reserve = float(state["reserve"])
+	runner.double_jump_available = bool(state["double_jump"])
+	runner.landing_blend = 0.0
+	runner.avatar.position = Vector3.ZERO
+	runner.avatar.scale.y = 0.55 if runner.is_sliding else 1.0
+	storm.front_s = float(state["storm_s"])
+	storm.speed = float(state["storm_speed"])
+	storm.elapsed = float(state["storm_time"])
+	storm.sync_pose(course)
+	storm.visible = bool(state["storm_visible"]) and storm.visible
+	run_time = replay_time
+	effects.speed = runner.speed
+	replay_slider.set_value_no_signal(replay_time)
+	replay_clock.text = "REPLAY   %.1f / %.1f s   %s" % [replay_time, replay.duration(), "(recording limit)" if bool(replay.archived.get("truncated", false)) else ""]
+	if snap_camera:
+		camera_rotation_ready = false
+		camera_was_grounded = runner.is_grounded()
+		camera_offset = Vector3.ZERO
+		_update_camera(1.0)

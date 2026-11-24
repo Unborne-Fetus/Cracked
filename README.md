@@ -33,6 +33,12 @@ Pause > Run / Profile / Controls opens daily seeded runs (UTC date, deterministi
 
 Online daily score submission is supported through a configured `velocity/leaderboard_url` project setting. The server implementation is provided separately and must be deployed before public ranking works. Client scores are unverified; never treat them as cheat-proof.
 
+## Replays
+
+Completed runs automatically save a local replay of their actual motion and generated track, including adaptive geometry, obstacles, storm position and origin rebases. Choose Watch Replay after defeat or Watch Last Replay from Run / Profile / Controls. Playback offers pause, a timeline, five-second skips, 0.5x/1x/2x speeds and either camera perspective. Space/A plays or pauses; left/right seeks, Tab/Y switches view, Up changes speed, and Escape/B exits to a new run. Playback does not simulate or submit scores. The recording is bounded to roughly 30 minutes or 768 generated chunks, whichever is reached first, and displays a recording-limit notice if truncated. Only the most recent completed replay is retained locally.
+
+Bank flight collision uses short swept substeps and relative signed surface crossings so a twisting road cannot be ignored merely because the player's world-space velocity points away from its final normal.
+
 ## Momentum tools
 
 Clean sliding earns a reserve (up to 30 m/s of stored speed) that automatically absorbs uphill braking, without protecting against obstacle impacts. A clean gate gives 4 m/s while sliding or adds 4 m/s to the reserve otherwise; each gate rewards once. One extra jump is available per airborne period. Hold F or R3 in flight to dive downward, with no forward-speed injection. Blue side channels bypass major hills and ridges with gentler grades; green recovery lanes remain separate. The top-right hypsometric minimap shows the actual forward course, with blue for lower terrain, green for near-level, yellow/red for higher terrain, white shortcut markers, and green recovery markers.
