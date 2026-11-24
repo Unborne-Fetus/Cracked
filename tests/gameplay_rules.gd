@@ -583,6 +583,46 @@ func _run_tests() -> void:
 	if not found_recovery:
 		_fail("Momentum-aware generation did not schedule a recovery run.")
 		return
+	# Validate the actual special track surfaces and skill-based rewards.
+	game.call("_restart")
+	course.call("stream", 25.0 * 192.0)
+	var split_s := 23.0 * 192.0 + 96.0
+	var gap_s := 24.0 * 192.0 + 84.0
+	if bool(course.call("support_at", split_s, 0.0)) or not bool(course.call("support_at", split_s, -28.0)) or bool(course.call("support_at", gap_s, 32.0)) or not bool(course.call("support_at", gap_s, -32.0)):
+		_fail("Split and gap routes lack an open, supported bypass.")
+		return
+	var tunnel_s := 25.0 * 192.0 + 96.0
+	var tunnel_mid: Transform3D = course.call("surface_frame", tunnel_s, 0.0, 1)
+	var tunnel_wall: Transform3D = course.call("surface_frame", tunnel_s, 54.0, 1)
+	if tunnel_wall.basis.y.dot(tunnel_mid.basis.y) > -0.7:
+		_fail("Corkscrew tunnel does not wrap around the runner.")
+		return
+	var pipe_s := 26.0 * 192.0 + 96.0
+	var pipe_center: Transform3D = course.call("surface_frame", pipe_s, 0.0, 1)
+	var pipe_edge: Transform3D = course.call("surface_frame", pipe_s, 50.0, 1)
+	if pipe_edge.origin.y - pipe_center.origin.y < 15.0:
+		_fail("Halfpipe has no curved elevated wall.")
+		return
+	var stacked_s := 27.0 * 192.0 + 96.0
+	var upper: Transform3D = course.call("surface_frame", stacked_s, -30.0, 1)
+	var lower: Transform3D = course.call("surface_frame", stacked_s, 30.0, 1)
+	if upper.origin.y - lower.origin.y < 20.0 or Vector2(upper.origin.x - lower.origin.x, upper.origin.z - lower.origin.z).length() > 1.0:
+		_fail("Stacked routes do not physically overlap.")
+		return
+	var stream_s := 28.0 * 192.0 + 96.0
+	var stream_lane: float = course.call("slipstream_center", 28, 96.0)
+	if float(course.call("slipstream_accel", stream_s, stream_lane)) < 13.0:
+		_fail("Slipstream does not accelerate the runner.")
+		return
+	runner.set("speed", 40.0)
+	var slope := Transform3D(Basis(Vector3.RIGHT, -0.40), Vector3.ZERO)
+	var result: Dictionary = runner.call("landing_result", slope, Vector3(0.0, -24.0, -40.0), true, 0.3)
+	if float(result["transfer"]) <= 0.0 or float(result["dive_bonus"]) <= 0.0:
+		_fail("Downhill dive does not transfer momentum.")
+		return
+	if str(course.call("biome_name", 0.0)) == str(course.call("biome_name", 2500.0)):
+		_fail("Terrain biomes do not change.")
+		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")
 	game.queue_free()

@@ -35,6 +35,9 @@ const RESERVE_EARN_FRACTION := 0.20
 const GATE_REWARD := 4.0
 const DIVE_ACCEL := 36.0
 const DIVE_MAX_DOWN := 38.0
+const PERFECT_IMPACT := 9.0
+const DIVE_REWARD_MAX := 8.0
+const TRANSFER_MAX := 24.0
 
 var speed := START_SPEED
 var distance := 8.0
@@ -65,6 +68,9 @@ var double_jump_available := true
 var diving := false
 var touch_dive := false
 var gate_timer := 0.0
+var landing_reward_timer := 0.0
+var landing_reward_text := ""
+var dive_seconds := 0.0
 var avatar: Node3D
 
 func _ready() -> void:
@@ -122,6 +128,9 @@ func reset_run(course: Node3D) -> void:
 	diving = false
 	touch_dive = false
 	gate_timer = 0.0
+	landing_reward_timer = 0.0
+	landing_reward_text = ""
+	dive_seconds = 0.0
 	avatar.scale = Vector3.ONE
 	avatar.position = Vector3.ZERO
 	sync_pose(course)
@@ -254,6 +263,36 @@ func landing_speed(current: float, impact_speed: float) -> float:
 	var loss := clampf((impact_speed - SOFT_LANDING_SPEED) * HARD_LANDING_SCALE, 0.0, 0.52)
 	return current * (1.0 - loss)
 
+func landing_result(frame: Transform3D, velocity: Vector3, was_diving: bool, duration: float) -> Dictionary:
+	var forward := -frame.basis.z
+	var projected := maxf(0.0, velocity.dot(forward))
+	var impact := maxf(0.0, -velocity.dot(frame.basis.y))
+	var perfect := impact <= PERFECT_IMPACT and projected > 7.0 and velocity.normalized().dot(forward) >= 0.94
+	# A downhill tangent already converts falling velocity into along-road
+	# speed. Reward only real downward momentum and a reasonably aligned hit.
+	var transfer := 0.0
+	if forward.y < -0.06 and velocity.y < 0.0 and impact <= 24.0:
+		transfer = minf(TRANSFER_MAX, maxf(0.0, projected - speed))
+	var result := landing_speed(minf(speed, projected), impact) + transfer
+	var dive_bonus := 0.0
+	if was_diving and duration >= 0.10 and forward.y < -0.06 and impact <= 18.0 and projected > 7.0:
+		dive_bonus = minf(DIVE_REWARD_MAX, -forward.y * 20.0)
+	return {"speed": result + dive_bonus, "perfect": perfect, "transfer": transfer, "dive_bonus": dive_bonus}
+
+func _apply_landing_result(frame: Transform3D) -> void:
+	var result := landing_result(frame, air_velocity, diving, dive_seconds)
+	speed = float(result["speed"])
+	if bool(result["perfect"]):
+		landing_reward_text = "PERFECT LANDING"
+		landing_reward_timer = 1.2
+		momentum_reserve = minf(RESERVE_MAX, momentum_reserve + 2.0)
+	if float(result["transfer"]) > 0.1:
+		landing_reward_text = "MOMENTUM TRANSFER"
+		landing_reward_timer = 1.2
+	if float(result["dive_bonus"]) > 0.1:
+		landing_reward_text = "DIVE LANDING  //  SPEED BONUS"
+		landing_reward_timer = 1.2
+
 func jump_impulse_for_speed(current: float) -> float:
 	# Square-root scaling rewards speed without making jumps unboundedly tall.
 	# The vertical impulse limit does NOT cap forward velocity.
@@ -324,6 +363,7 @@ func _begin_flight(frame: Transform3D, impulse: float) -> void:
 	grounded = false
 	double_jump_available = true
 	diving = false
+	dive_seconds = 0.0
 	air_time = 0.0
 	landing_blend = 0.0
 	air_basis = transform.basis
@@ -362,7 +402,7 @@ func _body_sweep(course: Node3D, from_pos: Vector3, to_pos: Vector3, from_s: flo
 			if fraction >= best_fraction:
 				continue
 			var hit: Vector3 = course.call("project_position", from_pos.lerp(to_pos, fraction) + offset, lerpf(from_s, to_s, fraction))
-			if absf(hit.y) > float(course.call("half_width_at", hit.x)):
+			if not bool(course.call("support_at", hit.x, hit.y)):
 				continue
 			# Do not reattach at the edge; head/torso contacts only deflect.
 			var face: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
@@ -389,9 +429,14 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 	var drag := minf(AIR_DRAG * delta, horizontal.length())
 	if horizontal.length_squared() > 0.0001:
 		air_velocity -= horizontal.normalized() * drag
+	var stream_accel: float = course.call("slipstream_accel", distance, lane, height, surface_side)
+	if stream_accel > 0.0:
+		air_velocity += -old_frame.basis.z * stream_accel * delta
+		speed += stream_accel * delta
 	var prev_velocity := air_velocity
 	air_velocity.y -= GRAVITY * delta
 	if diving:
+		dive_seconds += delta
 		# A controlled downward plunge, with no forward speed injection.
 		air_velocity.y -= minf(DIVE_ACCEL * delta, maxf(0.0, air_velocity.y + DIVE_MAX_DOWN))
 	var next_pos := previous_pos + (prev_velocity + air_velocity) * (0.5 * delta)
@@ -415,12 +460,12 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		# slope. In that case settle the feet onto the same face instead
 		# of repeatedly bouncing. Head-first impacts still deflect.
 		var contact: Vector3 = course.call("project_position", next_pos, predicted_s)
-		if air_basis.y.dot(normal) > 0.55 and absf(contact.y) <= float(course.call("half_width_at", contact.x)) and incoming < 0.0:
+		if air_basis.y.dot(normal) > 0.55 and bool(course.call("support_at", contact.x, contact.y)) and incoming < 0.0:
 			distance = contact.x
 			lane = contact.y
 			surface_side = int(body_contact["side"])
 			var landing_frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
-			speed = landing_speed(minf(speed, maxf(0.0, air_velocity.dot(-landing_frame.basis.z))), -incoming)
+			_apply_landing_result(landing_frame)
 			lateral_speed = air_velocity.dot(landing_frame.basis.x) * float(surface_side)
 			_finish_landing(course)
 			return
@@ -444,19 +489,18 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 		# A crossing at the beginning of the step is not a landing if the
 		# player has already moved past the edge by the end of that step.
 		# Keep both face checks, but require support under the new position.
-		if not body_contact.is_empty() or absf(lane) > limit or old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
+		if not body_contact.is_empty() or not bool(course.call("support_at", distance, lane)) or old_gap < -0.025 or new_gap > 0.0 or toward >= 0.0:
 			continue
 		var fraction := clampf(old_gap / maxf(old_gap - new_gap, 0.0001), 0.0, 1.0)
 		var hit_pos := previous_pos.lerp(next_pos, fraction)
 		var hit: Vector3 = course.call("project_position", hit_pos, lerpf(old_s, distance, fraction))
-		if absf(hit.y) > float(course.call("half_width_at", hit.x)):
+		if not bool(course.call("support_at", hit.x, hit.y)):
 			continue
 		distance = hit.x
 		lane = hit.y
 		surface_side = side
 		var landing_frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
-		var forward_velocity := maxf(0.0, air_velocity.dot(-landing_frame.basis.z))
-		speed = landing_speed(minf(speed, forward_velocity), maxf(0.0, -air_velocity.dot(landing_frame.basis.y)))
+		_apply_landing_result(landing_frame)
 		lateral_speed = air_velocity.dot(landing_frame.basis.x) * float(surface_side)
 		_finish_landing(course)
 		break
@@ -494,6 +538,7 @@ func tick(delta: float, course: Node3D) -> void:
 		landing_blend = maxf(0.0, landing_blend - delta)
 	hit_timer = maxf(0.0, hit_timer - delta)
 	gate_timer = maxf(0.0, gate_timer - delta)
+	landing_reward_timer = maxf(0.0, landing_reward_timer - delta)
 	if grounded:
 		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
@@ -510,26 +555,27 @@ func tick(delta: float, course: Node3D) -> void:
 				speed += float(course.call("recovery_accel", distance, lane, surface_side)) * delta
 			else:
 				speed = step_speed(speed, grade, true, false, delta)
+			speed += float(course.call("slipstream_accel", distance, lane, 0.0, surface_side)) * delta
 			var old_s := distance
 			var old_lane := lane
 			var steer_speed := 23.0 + minf(speed * 0.10, 12.0)
 			var steering_factor := 0.62 if slide else 1.0
 			var base_frame: Transform3D = course.call("sample", distance)
 			var screen_right := (-base_frame.basis.z).cross(Vector3.UP).normalized()
-			var screen_alignment := base_frame.basis.x.dot(screen_right)
+			var screen_alignment := (frame.basis.x * float(surface_side)).dot(screen_right)
 			# A/D moves in the visible horizontal direction where possible.
 			# On a vertical wall retain the last mapping to avoid jitter.
 			if absf(screen_alignment) > 0.18:
 				screen_steer_sign = signf(screen_alignment)
 			# A small gravity-driven drift makes vertical walls meaningfully
 			# different from flat ground, while steering can counter it.
-			var wall_drift := -base_frame.basis.x.y * 5.0
+			var wall_drift := -frame.basis.x.y * float(surface_side) * 5.0
 			lateral_speed = move_toward(lateral_speed, steer * screen_steer_sign * steer_speed * steering_factor + wall_drift, 82.0 * delta * steering_factor)
 			var next_s := distance + speed * delta
 			var next_lane := lane + lateral_speed * delta
 			course.call("stream", next_s, speed)
 			var edge: float = course.call("half_width_at", next_s)
-			if absf(next_lane) > edge:
+			if absf(next_lane) > edge or not bool(course.call("support_at", next_s, next_lane)):
 				# No invisible walls. Start flight from the last supported
 				# point, then allow the player to steer back if possible.
 				sync_pose(course)

@@ -132,11 +132,10 @@ func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> b
 	# This also works during origin rebases and before physics colliders sync.
 	for i in range(1, 16):
 		var t := float(i) / 16.0
-		var frame: Transform3D = course.sample(lerpf(from_s, to_s, t))
-		var point := a.lerp(b, t) - frame.origin
-		var across := point.dot(frame.basis.x)
-		var clearance: float = course.surface_clearance(lerpf(from_s, to_s, t), across, point.dot(frame.basis.y), int(runner.surface_side))
-		if absf(across) <= float(course.lane_limit(lerpf(from_s, to_s, t))) + 1.0 and clearance < 0.55:
+		var s := lerpf(from_s, to_s, t)
+		var projection: Vector3 = course.project_position(a.lerp(b, t), s)
+		var clearance: float = course.surface_clearance(projection.x, projection.y, projection.z, int(runner.surface_side))
+		if bool(course.support_at(projection.x, projection.y)) and clearance < 0.55:
 			return false
 	return true
 
@@ -277,7 +276,7 @@ func _update_hud() -> void:
 	clock_label.text = "TIME  %02d:%05.2f" % [int(run_time / 60.0), fmod(run_time, 60.0)]
 	record_label.text = "BEST  " + _distance_display(maxf(best_distance, runner.distance - 8.0))
 	camera_label.text = "CAMERA  " + ("FIRST PERSON" if first_person else "THIRD PERSON")
-	section_label.text = "TRACK  //  " + str(course.section_name(runner.distance))
+	section_label.text = str(course.biome_name(runner.distance)) + "  //  " + str(course.section_name(runner.distance))
 	if not runner.is_grounded():
 		slide_label.text = "DIVING  //  CONTROLLED DESCENT" if runner.diving else ("AIRBORNE  //  DOUBLE JUMP READY" if runner.double_jump_available else "AIRBORNE  //  DOUBLE JUMP USED")
 	elif runner.is_sliding:
@@ -291,8 +290,13 @@ func _update_hud() -> void:
 	storm_label.text = "STORM  %s  //  %d %s" % [_distance_display(gap), _speed_display(storm.speed), _speed_units()]
 	storm_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.35) if gap < 40.0 else Color(0.96, 0.53, 0.72))
 	if not run_finished:
-		message_label.visible = runner.hit_timer > 0.0 or runner.gate_timer > 0.0
-		message_label.text = "IMPACT  //  MOMENTUM LOST" if runner.hit_timer > 0.0 else "CLEAN GATE  //  MOMENTUM REWARD"
+		message_label.visible = runner.hit_timer > 0.0 or runner.gate_timer > 0.0 or runner.landing_reward_timer > 0.0
+		if runner.hit_timer > 0.0:
+			message_label.text = "IMPACT  //  MOMENTUM LOST"
+		elif runner.landing_reward_timer > 0.0:
+			message_label.text = runner.landing_reward_text
+		else:
+			message_label.text = "CLEAN GATE  //  MOMENTUM REWARD"
 
 func _lose(reason: String) -> void:
 	if run_finished:

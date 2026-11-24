@@ -68,6 +68,8 @@ func _draw() -> void:
 		for j in range(6):
 			var a := lerpf(-1.0, 1.0, float(j) / 6.0)
 			var b := lerpf(-1.0, 1.0, float(j + 1) / 6.0)
+			if not bool(course.call("support_at", (s0 + s1) * 0.5, (a + b) * 0.25 * (width0 + width1))):
+				continue
 			var p0: Transform3D = course.call("surface_frame", s0, a * width0, 1)
 			var p1: Transform3D = course.call("surface_frame", s0, b * width0, 1)
 			var p2: Transform3D = course.call("surface_frame", s1, b * width1, 1)
@@ -77,7 +79,8 @@ func _draw() -> void:
 			# still makes their direction visible.
 			if absf((polygon[1] - polygon[0]).cross(polygon[3] - polygon[0])) > 0.05:
 				draw_colored_polygon(polygon, elevation_color((p0.origin.y + p1.origin.y + p2.origin.y + p3.origin.y) * 0.25 - player_pos.y))
-		draw_line(_map_point(f0.origin, player_pos, right, forward, scale_value, anchor), _map_point(f1.origin, player_pos, right, forward, scale_value, anchor), elevation_color((f0.origin.y + f1.origin.y) * 0.5 - player_pos.y), 1.2, true)
+		if bool(course.call("support_at", (s0 + s1) * 0.5, 0.0)):
+			draw_line(_map_point(f0.origin, player_pos, right, forward, scale_value, anchor), _map_point(f1.origin, player_pos, right, forward, scale_value, anchor), elevation_color((f0.origin.y + f1.origin.y) * 0.5 - player_pos.y), 1.2, true)
 		var index: int = course.call("chunk_index_at", s0)
 		var kind: String = course.call("section_name", s0)
 		if bool(course.call("has_shortcut", kind)):
