@@ -68,8 +68,11 @@ var clean_gates := 0
 var perfect_landings := 0
 var dive_landings := 0
 var double_jumps := 0
-var body_material: StandardMaterial3D
-var visor_material: StandardMaterial3D
+const RiderSprites = preload("res://scripts/rider_sprites.gd")
+var rider_sprite: Sprite3D
+var rider_textures: Array[Texture2D] = []
+var rider_pose := RiderSprites.CRUISE
+var rider_facing_left := false
 var key_bindings: Dictionary = {}
 var pad_bindings: Dictionary = {}
 var momentum_reserve := 0.0
@@ -85,29 +88,45 @@ var avatar: Node3D
 func _ready() -> void:
 	avatar = Node3D.new()
 	add_child(avatar)
-	var cyan := StandardMaterial3D.new()
-	cyan.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	cyan.albedo_color = Color(0.04, 0.85, 1.0)
-	var pink := StandardMaterial3D.new()
-	pink.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	pink.albedo_color = Color(1.0, 0.14, 0.56)
-	var body := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.8, 1.25, 0.8)
-	body.mesh = mesh
-	body.position.y = 0.64
-	body_material = cyan
-	body.material_override = cyan
-	avatar.add_child(body)
-	var visor := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.37
-	sphere.height = 0.74
-	visor.mesh = sphere
-	visor.position = Vector3(0, 1.5, -0.15)
-	visor_material = pink
-	visor.material_override = pink
-	avatar.add_child(visor)
+	rider_textures = RiderSprites.make_textures()
+	rider_sprite = Sprite3D.new()
+	rider_sprite.name = "PixelHoverboardRider"
+	rider_sprite.texture = rider_textures[RiderSprites.CRUISE]
+	rider_sprite.pixel_size = RiderSprites.PIXEL_SIZE
+	rider_sprite.position.y = RiderSprites.HEIGHT * RiderSprites.PIXEL_SIZE * 0.5
+	rider_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	rider_sprite.shaded = false
+	rider_sprite.double_sided = true
+	rider_sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	avatar.add_child(rider_sprite)
+
+func update_rider_sprite(camera: Camera3D) -> void:
+	if not is_instance_valid(rider_sprite):
+		return
+	# Preserve the physical bank-relative up axis. Face the camera only
+	# around that axis, so the sprite never disappears edge-on or turns
+	# upright during a wall/ceiling ride.
+	var relative := avatar.to_local(camera.global_position)
+	if Vector2(relative.x, relative.z).length_squared() > 0.0001:
+		rider_sprite.rotation.y = atan2(relative.x, relative.z)
+	var next_pose := RiderSprites.CRUISE
+	if not grounded:
+		next_pose = RiderSprites.BOOST if diving else RiderSprites.CARVE
+	elif is_sliding:
+		next_pose = RiderSprites.BOOST if speed >= 90.0 and absf(lateral_speed) < 5.0 else RiderSprites.CARVE
+	if next_pose != rider_pose:
+		rider_pose = next_pose
+		rider_sprite.texture = rider_textures[rider_pose]
+	# Hysteresis avoids rapid mirroring when the steering input is neutral.
+	if grounded and absf(lateral_speed) > 2.5:
+		rider_facing_left = lateral_speed * screen_steer_sign < 0.0
+	rider_sprite.flip_h = rider_facing_left
+	# The original collision envelope is unchanged; sprite-only pitch
+	# expresses the jump/dive and never changes contact or momentum.
+	var tilt := 0.0
+	if not grounded:
+		tilt = -0.18 if diving else 0.12
+	rider_sprite.rotation.z = -tilt if rider_facing_left else tilt
 
 func reset_run(course: Node3D) -> void:
 	distance = 8.0
@@ -148,16 +167,20 @@ func reset_run(course: Node3D) -> void:
 	dive_seconds = 0.0
 	avatar.scale = Vector3.ONE
 	avatar.position = Vector3.ZERO
+	rider_pose = RiderSprites.CRUISE
+	rider_facing_left = false
+	rider_sprite.texture = rider_textures[rider_pose]
+	rider_sprite.flip_h = false
+	rider_sprite.rotation = Vector3.ZERO
 	sync_pose(course)
 
 func request_jump() -> void:
 	if not jumps_disabled:
 		queued_jump = true
 
-func apply_cosmetic(index: int) -> void:
-	var colors: Array[Color] = [Color(0.04, 0.85, 1.0), Color(1.0, 0.66, 0.15), Color(0.58, 0.28, 1.0), Color(0.15, 1.0, 0.52)]
-	body_material.albedo_color = colors[clampi(index, 0, 3)]
-	visor_material.albedo_color = colors[(clampi(index, 0, 3) + 1) % colors.size()]
+func apply_cosmetic(_index: int) -> void:
+	# Preserve saved unlocks, but the approved first set is monochrome.
+	rider_sprite.modulate = Color.WHITE
 
 func key_down(action: String, defaults: Array) -> bool:
 	for code in key_bindings.get(action, defaults):

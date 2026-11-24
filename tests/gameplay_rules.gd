@@ -19,6 +19,46 @@ func _run_tests() -> void:
 	course.set("showcase_layout", true)
 	game.call("_restart")
 	await process_frame
+	# The new rider is real pixel art, not a block-and-sphere model.
+	var rider_visual: Sprite3D = runner.get("rider_sprite")
+	var rider_frames: Array = runner.get("rider_textures")
+	if rider_frames.size() != 3 or rider_visual.texture_filter != BaseMaterial3D.TEXTURE_FILTER_NEAREST:
+		_fail("Pixel rider is missing its three nearest-filtered pose textures.")
+		return
+	for texture_value in rider_frames:
+		var pixels: Image = texture_value.get_image()
+		if pixels.get_size() != Vector2i(36, 32):
+			_fail("Rider texture is not at the intended sprite resolution.")
+			return
+		var occupied := 0
+		for y in range(pixels.get_height()):
+			for x in range(pixels.get_width()):
+				var pixel := pixels.get_pixel(x, y)
+				if pixel.a > 0.0:
+					occupied += 1
+					if not pixel.is_equal_approx(Color.WHITE):
+						_fail("Pixel rider contains unwanted colored or shaded pixels.")
+						return
+		if occupied < 50:
+			_fail("Pixel rider pose is empty.")
+			return
+	var sprite_camera: Camera3D = game.get("view_camera")
+	runner.set("is_sliding", true)
+	runner.call("update_rider_sprite", sprite_camera)
+	if int(runner.get("rider_pose")) != 1:
+		_fail("Sliding did not select the carving sprite.")
+		return
+	runner.set("is_sliding", false)
+	runner.call("update_rider_sprite", sprite_camera)
+	if int(runner.get("rider_pose")) != 0:
+		_fail("Standing did not restore the cruising sprite.")
+		return
+	runner.call("set_first_person", true)
+	var sprite_avatar: Node3D = runner.get("avatar")
+	if sprite_avatar.visible:
+		_fail("Rider blocks the first-person view.")
+		return
+	runner.call("set_first_person", bool(game.get("first_person")))
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
 		_fail("Uphill sliding must be available.")
 		return

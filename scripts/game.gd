@@ -27,7 +27,6 @@ var extras_page: VBoxContainer
 var extras_button: Button
 var extra_items: Array[Control] = []
 var mode_picker: OptionButton
-var cosmetic_picker: OptionButton
 var profile_label: Label
 var stats_label: Label
 var binding_action := ""
@@ -336,6 +335,7 @@ func _update_camera(delta: float) -> void:
 		var heading := (-view_camera.basis.z).slerp(-camera_goal.z, 1.0 - exp(-delta * 11.0))
 		view_camera.basis = _level_camera_basis(heading)
 	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.10, 78.0, 98.0), 1.0 - exp(-delta * 4.0))
+	runner.update_rider_sprite(view_camera)
 
 func _speed_display(meters_per_second: float) -> int:
 	return int(meters_per_second * (2.2369362921 if imperial else 3.6))
@@ -940,11 +940,9 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	profile_replay_button.custom_minimum_size.y = 36
 	profile_replay_button.pressed.connect(_start_replay)
 	_add_extra(profile_replay_button)
-	cosmetic_picker = OptionButton.new()
-	for name_value in ["Cyan", "Amber", "Violet", "Emerald"]:
-		cosmetic_picker.add_item(name_value)
-	cosmetic_picker.item_selected.connect(func(i: int) -> void: extras.cosmetic = i; runner.apply_cosmetic(i); extras.save_profile())
-	_add_extra(cosmetic_picker)
+	# Cosmetic unlock data stays in the profile. The first approved rider
+	# is a single white sprite set, so defer palette selection for now.
+	extras_page.add_child(_label("RIDER  //  WHITE SILHOUETTE", 14, Color(0.76, 0.94, 1.0)))
 	binding_picker = OptionButton.new()
 	for name_value in ["left", "right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
 		binding_picker.add_item(name_value)
@@ -1012,9 +1010,6 @@ func _show_extras() -> void:
 func _refresh_profile() -> void:
 	if not is_instance_valid(profile_label):
 		return
-	for i in range(cosmetic_picker.item_count):
-		cosmetic_picker.set_item_disabled(i, not extras.cosmetic_unlocked(i))
-	cosmetic_picker.select(extras.cosmetic)
 	var action := binding_picker.get_item_text(binding_picker.selected)
 	var key_text := str(extras.keys.get(action, []))
 	var pad_text := str(extras.pads.get(action, []))
