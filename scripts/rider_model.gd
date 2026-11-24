@@ -93,6 +93,14 @@ func _ready() -> void:
 		boots.append(_block(self, Vector3(0.27, 0.15, 0.39), white))
 	pose(0.0, 0.0, false, 1.0)
 
+func set_first_person(enabled: bool) -> void:
+	head.visible = not enabled
+	torso.visible = not enabled
+	for part in upper_arms:
+		part.visible = not enabled
+	for part in lower_arms:
+		part.visible = not enabled
+
 func _quad(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	for vertex: Vector3 in [a,c,b,b,c,d]:
 		tool.add_vertex(vertex)
@@ -130,7 +138,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	# Each 1.15-second airborne idle is a different board trick.
 	# The endpoints ease back to neutral so they can blend/cancel cleanly.
 	var idle := clampf(trick_mix,0.0,1.0) * (1.0-dive_amount) if airborne and not flipping else 0.0
-	var cycle := posmod(int(floor(trick_clock/1.15)),9)
+	var cycle := posmod(int(floor(trick_clock/1.15)),24)
 	var progress := fposmod(trick_clock,1.15)/1.15
 	var trick := sin(PI*progress)*idle
 	var shifty := trick if cycle == 0 else 0.0
@@ -142,6 +150,24 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var back_flip := trick if cycle == 6 else 0.0
 	var scissor := trick if cycle == 7 else 0.0
 	var barrel := trick if cycle == 8 else 0.0
+	var nose_grab := trick if cycle == 9 else 0.0
+	var tail_grab := trick if cycle == 10 else 0.0
+	var indy := trick if cycle == 11 else 0.0
+	var method_grab := trick if cycle == 12 else 0.0
+	var double_kick := trick if cycle == 13 else 0.0
+	var varial := trick if cycle == 14 else 0.0
+	var body_spin := trick if cycle == 15 else 0.0
+	var rocket := trick if cycle == 16 else 0.0
+	var split_kick := trick if cycle == 17 else 0.0
+	var tuck_spin := trick if cycle == 18 else 0.0
+	var nose_manual := trick if cycle == 19 else 0.0
+	var tail_manual := trick if cycle == 20 else 0.0
+	var cross_grab := trick if cycle == 21 else 0.0
+	var cork := trick if cycle == 22 else 0.0
+	var superman := trick if cycle == 23 else 0.0
+	var grab_total := clampf(grab+nose_grab+tail_grab+indy+method_grab+cross_grab,0.0,1.0)
+	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
+	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
 	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
 	var ground_idle := clampf(float(extra.get("ground_idle",0.0)),0.0,1.0) if not airborne else 0.0
 	var ground_hop := sin(PI*ground_idle)
@@ -151,31 +177,48 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	rotation = Vector3.ZERO
 	visual_pivot = 0.0
 	visual_lift = 0.0
-	if can_flip and cycle in [5,6,8]:
+	if can_flip and cycle in [5,6,8,15,18,22]:
 		visual_pivot = 0.95
 		if cycle==8:
 			rotation.z = spin_angle
+		elif cycle==15 or cycle==18:
+			rotation.y = spin_angle if cycle==15 else -spin_angle
+		elif cycle==22:
+			rotation = Vector3(spin_angle,0.0,sin(PI*progress)*0.75)
 		else:
 			rotation.x = spin_angle if cycle==5 else -spin_angle
 	elif ground_idle>0.0:
-		rotation.y = TAU*smoothstep(0.12,0.88,ground_idle)
-		visual_lift = ground_hop*0.42
+		match ground_variant:
+			0:
+				rotation.y = TAU*smoothstep(0.12,0.88,ground_idle)
+				visual_lift = ground_hop*0.42
+			1:
+				visual_lift = ground_hop*0.58
+			2,3:
+				visual_lift = ground_hop*0.12
+			4:
+				rotation.y = sin(TAU*ground_idle)*0.48
+				visual_lift = ground_hop*0.30
+			5:
+				visual_lift = 0.0
 	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
 	var compression := clampf(landing, 0.0, 1.0)
 	var recoil := clampf(impact, 0.0, 1.0)
-	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18 + grab*0.35 + brace*0.30 + inverted*0.35 + (front_flip+back_flip+barrel)*0.20 + ground_hop*0.20, 0.0, 1.0)
-	var lean := clampf(steer, -1.0, 1.0) * 0.19 - bank*0.09 + shifty*0.08
+	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18 + grab*0.35 + brace*0.30 + inverted*0.35 + (front_flip+back_flip+barrel)*0.20 + ground_hop*0.20+grab_total*0.23+tuck_spin*0.40+absf(drift)*0.25, 0.0, 1.0)
+	var lean := clampf(steer,-1.0,1.0)*0.19-bank*0.09+shifty*0.08+drift*0.17+method_grab*0.12
 	var balance := sin(phase * 4.2) * 0.035 * (1.0 - bend) if not airborne else 0.0
 	# Taller neutral stance (about 2.2m including the deck). Longer legs
 	# stay visibly bent during the low speed tuck rather than scaling down.
-	var hip := Vector3(lean + balance, lerpf(1.29, 0.80, bend) + tuck * 0.10 + dive_amount * 0.10, lerpf(0.02, 0.23, bend) + recoil * 0.08)
+	var hip := Vector3(lean + balance, lerpf(1.29, 0.80, bend) + tuck*0.10+dive_amount*0.10+rocket*0.16-superman*0.14, lerpf(0.02, 0.23, bend) + recoil * 0.08)
 	var chest := hip + Vector3(lean * 0.38, lerpf(0.55, 0.42, bend)*(1.0-0.64*dive_amount), -0.31*bend-0.40*dive_amount)
 	var shoulder := chest + Vector3(0, 0.22*(1.0-0.75*dive_amount), -0.05*bend-0.24*dive_amount)
 	torso.position = chest
 	torso.rotation.x = -0.52*bend-0.85*dive_amount+recoil*0.23
 	torso.rotation.z = -lean * 1.25
 	torso.rotation.y = -steer*0.12-shifty*0.55+grab*0.25+scissor*0.30
-	torso.rotation.x += inverted*0.16
+	torso.rotation.x += inverted*0.16-superman*0.85+nose_grab*0.35-tail_grab*0.28
+	torso.rotation.z += -drift*0.28+method_grab*0.35
+	torso.rotation.y += indy*0.36-cross_grab*0.45+body_spin*0.1
 	hips.position = hip
 	hips.rotation.z = -lean * 0.5
 	head.position = shoulder + Vector3(0,0.32*(1.0-0.62*dive_amount),-0.11*bend-0.23*dive_amount)
@@ -187,10 +230,21 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	board.position.y = 0.13 - tuck * 0.24
 	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
 	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount+grab*0.29-one_foot*0.12
-	board.rotation.y = shifty*0.75-grab*0.20 + (spin_angle if cycle==4 and idle>0.85 else shove*0.40)
+	board.rotation.y = shifty*0.75-grab*0.20+(spin_angle if cycle==4 and idle>0.85 else shove*0.40)+indy*0.32+method_grab*0.48+cross_grab*0.28-drift*0.16
+	if cycle==14 and idle>0.85:
+		board.rotation.y += spin_angle
+	board.rotation.x += nose_grab*0.38-tail_grab*0.42+rocket*0.64+nose_manual*0.48-tail_manual*0.48-superman*0.20
+	if ground_idle>0.0:
+		if ground_variant==1:
+			board.rotation.x += sin(TAU*ground_idle)*0.27
+		elif ground_variant==2:
+			board.rotation.x += ground_hop*0.23
+		elif ground_variant==3:
+			board.rotation.x -= ground_hop*0.23
 	if not flipping:
 		board.rotation.z = shifty*0.18+grab*0.15-(spin_angle if cycle==3 and idle>0.85 else heel*0.25)
-		board.position.y -= heel*0.24+shove*0.16
+		board.position.y -= heel*0.24+shove*0.16+double_kick*0.25+varial*0.25+superman*0.32
+		board.rotation.z += (spin_angle*2.0 if cycle==13 and idle>0.85 else double_kick*0.2)+(spin_angle if cycle==14 and idle>0.85 else varial*0.18)+method_grab*0.34-indy*0.22
 	for i in range(2):
 		var sign_value := -1.0 if i == 0 else 1.0
 		# Front (left) foot flicks diagonally over the nose. The back
@@ -220,7 +274,17 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 				foot = Vector3(sign_value*(0.30+heel*0.32),0.205+maxf(heel,shove)*0.46,-0.34 if front else 0.34)
 			if scissor>0.0:
 				foot += Vector3(sign_value*scissor*0.38,scissor*0.27,-sign_value*scissor*0.48)
-			foot.y += (front_flip+back_flip+barrel)*0.10
+			foot.y += (front_flip+back_flip+barrel+tuck_spin+cork)*0.10
+			if double_kick>0.0 or varial>0.0:
+				foot = Vector3(sign_value*(0.30+double_kick*0.28),0.205+maxf(double_kick,varial)*0.52,-0.34 if front else 0.34)
+			if split_kick>0.0:
+				foot += Vector3(sign_value*split_kick*0.57,split_kick*0.34,sign_value*split_kick*0.34)
+			if superman>0.0:
+				foot += Vector3(sign_value*0.14,superman*0.35,superman*0.54)
+			if rocket>0.0 and front:
+				foot += Vector3(0.0,rocket*0.14,-rocket*0.25)
+		if ground_idle>0.0 and ground_variant in [1,2,3]:
+			foot = board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
@@ -245,6 +309,18 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		hand = hand.lerp(arm_start+Vector3(sign_value*0.20,-0.42,0.28),inverted*0.80)
 		hand.x += sign_value*(scissor*0.20+barrel*0.12)
 		hand.z += (front_flip-back_flip)*0.18
+		if i==0:
+			hand = hand.lerp(board.position+board.basis*Vector3(-0.25,0.15,-0.95),nose_grab*0.85)
+			hand = hand.lerp(board.position+board.basis*Vector3(0.40,0.12,0.24),cross_grab*0.85)
+		else:
+			hand = hand.lerp(board.position+board.basis*Vector3(0.26,0.15,0.94),tail_grab*0.85)
+			hand = hand.lerp(board.position+board.basis*Vector3(0.58,0.13,0.0),indy*0.85)
+			hand = hand.lerp(board.position+board.basis*Vector3(-0.45,0.13,0.32),method_grab*0.85)
+			if ground_variant==5:
+				hand.y += ground_hop*0.60
+		hand.x += sign_value*(split_kick*0.22+drift*0.10)
+		hand.y += rocket*0.22+tuck_spin*0.16
+		hand.z -= superman*0.48
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)

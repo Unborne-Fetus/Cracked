@@ -79,6 +79,13 @@ var orbit_yaw := 0.0
 var orbit_pitch := 0.0
 var orbit_zoom := 1.0
 var orbit_drag := false
+var orbit_visual_yaw := 0.0
+var orbit_visual_pitch := 0.0
+var orbit_visual_zoom := 1.0
+var last_camera_fp := false
+var camera_arm_ready := false
+const CAMERA_RESPONSE := 5.8
+const CAMERA_ARM_RESPONSE := 6.5
 var camera_goal := Basis.IDENTITY
 var camera_height := 0.0
 var slide_eye_height := 1.55
@@ -98,12 +105,10 @@ func _ready() -> void:
 	# A world-fixed sky makes vertical orientation visible even on an empty ribbon.
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.012, 0.022, 0.065)
-	sky_mat.sky_horizon_color = Color(0.036, 0.072, 0.115)
-	sky_mat.ground_horizon_color = Color(0.036, 0.072, 0.115)
-	sky_mat.ground_bottom_color = Color(0.003, 0.004, 0.012)
-	sky_mat.sun_angle_max = 0.0
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = preload("res://shaders/neon_sky.gdshader")
+	sky.process_mode = Sky.PROCESS_MODE_QUALITY
+	sky.radiance_size = Sky.RADIANCE_SIZE_128
 	sky.sky_material = sky_mat
 	env.sky = sky
 	world.environment = env
@@ -153,6 +158,10 @@ func _restart() -> void:
 	orbit_yaw = 0.0
 	orbit_pitch = 0.0
 	orbit_zoom = 1.0
+	orbit_visual_yaw = 0.0
+	orbit_visual_pitch = 0.0
+	orbit_visual_zoom = 1.0
+	camera_arm_ready = false
 	orbit_drag = false
 	camera_height = 0.0
 	slide_eye_height = 1.55
@@ -258,10 +267,17 @@ func _update_camera(delta: float) -> void:
 	var forward: Vector3 = -runner.transform.basis.z if runner.is_grounded() else -frame.basis.z
 	var pos: Vector3 = runner.position
 	var actively_sliding: bool = runner.is_grounded() and runner.is_sliding
+	runner.set_first_person(first_person)
+	var mode_changed := last_camera_fp != first_person
+	last_camera_fp = first_person
+	var orbit_alpha := 1.0-exp(-delta*8.0)
+	orbit_visual_yaw = lerp_angle(orbit_visual_yaw,orbit_yaw,orbit_alpha)
+	orbit_visual_pitch = lerpf(orbit_visual_pitch,orbit_pitch,orbit_alpha)
+	orbit_visual_zoom = lerpf(orbit_visual_zoom,orbit_zoom,orbit_alpha)
 	slide_eye_height = lerpf(slide_eye_height, 0.85 if actively_sliding else 1.55, 1.0 - exp(-delta * 10.0))
 	# Camera stays on the correct side of the road; only orientation and
 	# the additional chase height are damped, never the bank-relative base.
-	camera_height = lerpf(camera_height, maxf(0.0, float(runner.height) * float(runner.surface_side)), 1.0 - exp(-delta * 8.0))
+	camera_height = lerpf(camera_height,0.0 if runner.is_grounded() else clampf(float(runner.height)*float(runner.surface_side),0.0,2.0),1.0-exp(-delta*4.0))
 	if not runner.is_grounded():
 		if camera_was_grounded:
 			takeoff_camera_offset = camera_offset if camera_offset.length_squared() > 0.01 else (up * 1.55 if first_person else -forward * 11.0 + up * 5.4)
@@ -272,7 +288,7 @@ func _update_camera(delta: float) -> void:
 		camera_track_s = player_s
 		if first_person:
 			view_camera.position = pos + air_up * 1.55
-			_aim_camera(view_camera.position + air_forward * 25.0, air_up)
+			_aim_camera(view_camera.position + (air_forward-air_up*0.22)*25.0, air_up)
 		else:
 			view_camera.position = pos - air_forward * 9.0 + air_up * 4.0
 			_aim_camera(pos + air_up * 1.4 + air_forward * 4.0, air_up)
@@ -282,7 +298,7 @@ func _update_camera(delta: float) -> void:
 	elif first_person:
 		camera_track_s = player_s
 		view_camera.position = pos + up * slide_eye_height
-		_aim_camera(view_camera.position + forward * 25.0, up)
+		_aim_camera(view_camera.position + (forward-up*0.22)*25.0, up)
 	else:
 		var focus := pos + up * 1.35
 		# Sample the track AT the camera's trailing distance. Using the
@@ -330,6 +346,17 @@ func _update_camera(delta: float) -> void:
 		var air_goal := _level_camera_basis(air_look)
 		camera_goal = air_goal.slerp(camera_goal, blend).orthonormalized()
 	_apply_camera_orbit(pos, up, forward, player_s)
+	# Damp the relative arm, not world coordinates (safe during rebases).
+	var desired_arm := view_camera.position-pos
+	if camera_arm_ready and not mode_changed and not first_person:
+		var softened_arm := camera_offset.lerp(desired_arm,1.0-exp(-delta*CAMERA_ARM_RESPONSE))
+		var softened_position: Vector3 = pos+softened_arm
+		var soft_projection: Vector3 = course.project_position(softened_position,camera_track_s)
+		var soft_clearance: float = course.surface_clearance(soft_projection.x,soft_projection.y,soft_projection.z,int(runner.surface_side))
+		if not runner.is_grounded() or (soft_clearance>=1.05 and _camera_line_clear(softened_position,pos+up*1.35,soft_projection.x,player_s)):
+			view_camera.position = softened_position
+			camera_track_s = soft_projection.x
+	camera_arm_ready = true
 	var camera_projection: Vector3 = course.project_position(view_camera.position, camera_track_s)
 	camera_track_clearance = float(course.surface_clearance(camera_projection.x, camera_projection.y, camera_projection.z, int(runner.surface_side)))
 	camera_offset = view_camera.position - pos
@@ -343,7 +370,7 @@ func _update_camera(delta: float) -> void:
 	else:
 		# Interpolate forward directions, then reconstruct a level basis.
 		# Quaternion blending whole tilted frames can introduce unwanted roll.
-		var heading := (-view_camera.basis.z).slerp(-camera_goal.z, 1.0 - exp(-delta * 11.0))
+		var heading := (-view_camera.basis.z).slerp(-camera_goal.z, 1.0-exp(-delta*CAMERA_RESPONSE))
 		view_camera.basis = _level_camera_basis(heading)
 	view_camera.fov = lerpf(view_camera.fov, clampf(78.0 + runner.speed * 0.10, 78.0, 98.0), 1.0 - exp(-delta * 4.0))
 	runner.update_rider_sprite(view_camera)
@@ -430,25 +457,25 @@ func _poll_camera_stick(delta: float) -> void:
 	_orbit_input(motion * delta * 2.4)
 
 func _apply_camera_orbit(pos: Vector3, track_up: Vector3, track_forward: Vector3, player_s: float) -> void:
-	if absf(orbit_yaw) < 0.0001 and absf(orbit_pitch) < 0.0001 and absf(orbit_zoom - 1.0) < 0.0001:
+	if absf(orbit_visual_yaw) < 0.0001 and absf(orbit_visual_pitch) < 0.0001 and absf(orbit_visual_zoom - 1.0) < 0.0001:
 		return
 	var up: Vector3 = track_up if runner.is_grounded() else runner.transform.basis.y
 	var forward: Vector3 = track_forward if runner.is_grounded() else -runner.transform.basis.z
 	if first_person:
-		var look: Vector3 = forward.rotated(up, orbit_yaw)
+		var look: Vector3 = forward.rotated(up, orbit_visual_yaw)
 		var axis: Vector3 = look.cross(up).normalized()
 		if axis.length_squared() > 0.001:
-			look = look.rotated(axis, orbit_pitch)
+			look = look.rotated(axis, orbit_visual_pitch)
 		camera_goal = _level_camera_basis(look)
 		return
 	var focus: Vector3 = pos + up * 1.35
 	# Orbit a track-relative hemisphere, allowing a full 360-degree yaw.
 	# Limit downward pitch only when the actual track blocks the view.
 	var base_arm: Vector3 = view_camera.position - focus
-	var arm_length := clampf(base_arm.length() * orbit_zoom, 2.5, 30.0)
-	var azimuth: Vector3 = (-forward).rotated(up, orbit_yaw)
+	var arm_length := clampf(base_arm.length() * orbit_visual_zoom, 2.5, 30.0)
+	var azimuth: Vector3 = (-forward).rotated(up, orbit_visual_yaw)
 	var base_pitch := atan2(base_arm.dot(up), maxf(0.01, (base_arm - up * base_arm.dot(up)).length()))
-	var elevation := clampf(base_pitch + orbit_pitch, deg_to_rad(-70.0), deg_to_rad(85.0))
+	var elevation := clampf(base_pitch + orbit_visual_pitch, deg_to_rad(-70.0), deg_to_rad(85.0))
 	var direction: Vector3 = azimuth * cos(elevation) + up * sin(elevation)
 	for scale_value: float in [1.0, 0.75, 0.50, 0.30]:
 		var candidate: Vector3 = focus + direction * arm_length * scale_value
@@ -467,27 +494,14 @@ func _recenter_camera() -> void:
 	orbit_pitch = 0.0
 	orbit_zoom = 1.0
 	orbit_drag = false
-	# Rebuild the chase arm and heading without changing camera mode,
-	# player orientation, momentum or position. In flight use the actual
-	# flight basis instead of the bank underneath the player.
-	var pose: Basis = runner.transform.basis
-	var up := pose.y
-	var forward := -pose.z
-	camera_rotation_ready = false
-	camera_height = 0.0
-	slide_eye_height = 0.85 if runner.is_grounded() and runner.is_sliding else 1.55
-	camera_offset = up * 1.55 if first_person else -forward * 9.0 + up * 4.0
-	takeoff_camera_offset = camera_offset
-	camera_was_grounded = runner.is_grounded()
-	_update_camera(1.0)
+	_update_camera(1.0/60.0)
 
 func _toggle_camera() -> void:
 	if mode == 3 and not replay_active:
 		return
 	first_person = not first_person
-	camera_rotation_ready = false
 	runner.set_first_person(first_person)
-	_update_camera(1.0)
+	_update_camera(1.0/60.0)
 
 func _pad_focus() -> void:
 	if not paused:
@@ -682,7 +696,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	effects.activate_audio()
-	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry"
+	controls_hint.text = "A/D turn  ·  Q/E drift  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if paused and options_page.visible:
@@ -809,7 +823,7 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
+	var hint := _label("A/D turn  ·  Q/E drift  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  RMB look / wheel zoom  ·  G center  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
 	controls_hint = hint
 	hint.anchor_top = 1.0
@@ -1033,7 +1047,7 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	# is a single white sprite set, so defer palette selection for now.
 	extras_page.add_child(_label("RIDER  //  WHITE SILHOUETTE", 14, Color(0.76, 0.94, 1.0)))
 	binding_picker = OptionButton.new()
-	for name_value in ["left", "right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
+	for name_value in ["left", "right", "drift_left", "drift_right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
 		binding_picker.add_item(name_value)
 	binding_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
 	_add_extra(binding_picker)
@@ -1292,6 +1306,8 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.steering_heading = float(state.get("steering_heading",0.0))
 	runner.rider_ground_idle = float(state.get("rider_ground_idle",0.0))
 	runner.rider_inverted = float(state.get("rider_inverted",0.0))
+	runner.drift_amount = float(state.get("drift_amount",0.0))
+	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0
@@ -1312,6 +1328,7 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	replay_clock.text = "REPLAY   %.1f / %.1f s   %s" % [replay_time, replay.duration(), "(recording limit)" if bool(replay.archived.get("truncated", false)) else ""]
 	if snap_camera:
 		camera_rotation_ready = false
+		camera_arm_ready = false
 		camera_was_grounded = runner.is_grounded()
 		camera_offset = Vector3.ZERO
 		_update_camera(1.0)

@@ -1,5 +1,12 @@
 # Vector Velocity changelog
 
+## 2026-11-23 — First-person body, sky, drift and camera
+- Visible animated legs, boots and hoverboard in first person.
+- Procedural neon twilight skybox with stars, aurora and distant silhouettes.
+- Eased orbit, recenter, chase-arm and orientation changes.
+- Remappable Q/E left/right drifting independent of A/D carving.
+- 24 airborne idle tricks and six ground idles, plus contextual riding animations.
+
 ## 2026-11-23 — Steering, branch safety and animation expansion
 - Heading-based carving on ground and directional air steering, with stronger response at speed.
 - Gold inner-edge fork guidance keeps a rider on the selected supported branch; outer edges and deliberate transfers remain open.

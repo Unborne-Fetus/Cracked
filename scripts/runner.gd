@@ -44,6 +44,10 @@ var distance := 8.0
 var lane := 0.0
 var lateral_speed := 0.0
 var steering_heading := 0.0
+var drift_amount := 0.0
+var rider_ground_variant := 0
+const AIR_IDLE_COUNT := 24
+const GROUND_IDLE_COUNT := 6
 var rider_ground_clock := 0.0
 var rider_ground_idle := 0.0
 var rider_inverted := 0.0
@@ -118,7 +122,7 @@ func update_rider_sprite(_camera: Camera3D) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount})
 	var pivot: float = rider_model.get("visual_pivot")
 	var lift: float = rider_model.get("visual_lift")
 	var correction := Vector3.UP*pivot - Basis.from_euler(rider_model.rotation)*Vector3.UP*pivot
@@ -130,7 +134,7 @@ func _update_rider_animation(delta: float) -> void:
 	if diving:
 		target = 1.0
 	rider_crouch = lerpf(rider_crouch, target, 1.0 - exp(-delta * 13.0))
-	rider_steer = lerpf(rider_steer,clampf(steering_heading/0.70,-1.0,1.0) if grounded else clampf(lateral_speed/25.0,-1.0,1.0),1.0-exp(-delta*10.0))
+	rider_steer = lerpf(rider_steer,clampf(steering_heading/0.70+drift_amount*0.65,-1.0,1.0) if grounded else clampf(lateral_speed/25.0,-1.0,1.0),1.0-exp(-delta*10.0))
 	rider_landing = move_toward(rider_landing, 0.0, delta * 3.4)
 	rider_impact = move_toward(rider_impact, 0.0, delta * 3.8)
 	rider_dive = move_toward(rider_dive, 1.0 if diving and not grounded else 0.0, delta * 7.0)
@@ -154,6 +158,7 @@ func _update_rider_animation(delta: float) -> void:
 			if rider_ground_idle >= 1.0:
 				rider_ground_clock = 0.0
 				rider_ground_idle = 0.0
+				rider_ground_variant = posmod(rider_ground_variant+1,GROUND_IDLE_COUNT)
 	else:
 		rider_ground_clock = 0.0
 		rider_ground_idle = 0.0
@@ -183,6 +188,8 @@ func reset_run(course: Node3D) -> void:
 	rider_ground_idle = 0.0
 	rider_inverted = 0.0
 	rider_trick_serial = 0
+	rider_ground_variant = 0
+	drift_amount = 0.0
 	steering_heading = 0.0
 	rider_model.rotation = Vector3.ZERO
 	rider_model.position = Vector3.ZERO
@@ -295,7 +302,8 @@ func _reward_gates(course: Node3D, old_s: float, old_lane: float, old_height: fl
 			momentum_reserve = minf(RESERVE_MAX, momentum_reserve + GATE_REWARD * float(count))
 
 func set_first_person(enabled: bool) -> void:
-	avatar.visible = not enabled
+	avatar.visible = true
+	rider_model.call("set_first_person",enabled)
 
 func can_slide_on_grade(_grade: float) -> bool:
 	return true
@@ -489,13 +497,13 @@ func _begin_flight(frame: Transform3D, impulse: float, curved_launch: bool = fal
 	landing_blend = 0.0
 	air_basis = frame.basis.rotated(frame.basis.y,-steering_heading*float(surface_side)).orthonormalized()
 	rider_trick_serial += 1
-	rider_trick_clock = float(posmod(rider_trick_serial-1,9))*1.15
+	rider_trick_clock = float(posmod(rider_trick_serial-1,AIR_IDLE_COUNT))*1.15
 	rider_trick_mix = 0.0
 	avatar.position = Vector3.ZERO
 	if impulse > 0.0:
 		# Start just outside the actual riding face, not inside its slab.
 		position += frame.basis.y * 0.04
-	air_velocity = -frame.basis.z * speed*cos(steering_heading) + frame.basis.x * lateral_speed * float(surface_side) + frame.basis.y * impulse
+	air_velocity = -frame.basis.z*sqrt(maxf(0.0,speed*speed-minf(speed*speed,lateral_speed*lateral_speed))) + frame.basis.x*lateral_speed*float(surface_side) + frame.basis.y*impulse
 	vertical_speed = impulse
 	queued_jump = false
 	is_sliding = false
@@ -797,6 +805,8 @@ func tick(delta: float, course: Node3D) -> void:
 	if key_down("right", [KEY_D, KEY_RIGHT]):
 		steer += 1.0
 	steer = clampf(steer + _pad_steer(), -1.0, 1.0)
+	var drift_input := float(key_down("drift_right",[KEY_E]))-float(key_down("drift_left",[KEY_Q]))
+	drift_amount = move_toward(drift_amount,drift_input if grounded else 0.0,delta*6.5)
 	var slide := _slide_input()
 	var jump := not jumps_disabled and (key_down("jump", [KEY_SPACE]) or _pad_jump())
 	if jumps_disabled:
@@ -852,10 +862,12 @@ func tick(delta: float, course: Node3D) -> void:
 				var guide_angle := clampf(atan2(guided_ahead-lane,maxf(6.0,speed*0.35)),-max_angle,max_angle)
 				if absf(guide_angle) > absf(desired) or guide_angle*desired < 0.0:
 					desired = guide_angle
-			var initial_heading := asin(clampf(lateral_speed/maxf(speed,MIN_SPEED),-0.95,0.95))
+			var initial_heading := steering_heading if absf(drift_amount)>0.01 else asin(clampf(lateral_speed/maxf(speed,MIN_SPEED),-0.95,0.95))
 			steering_heading = move_toward(initial_heading,desired,delta*5.8)
-			lateral_speed = speed*sin(steering_heading)+wall_drift
-			var next_s := distance + speed*cos(steering_heading)*delta
+			var drift_velocity := drift_amount*screen_steer_sign*minf(38.0,speed*0.70)
+			lateral_speed = clampf(speed*sin(steering_heading)+drift_velocity,-speed*0.90,speed*0.90)+wall_drift
+			var forward_speed := sqrt(maxf(0.0,speed*speed-pow(lateral_speed-wall_drift,2.0)))
+			var next_s := distance + forward_speed*delta
 			var next_lane := lane + lateral_speed*delta
 			course.call("stream", next_s, speed)
 			# The gold-marked inside rail gently catches missed fork entries

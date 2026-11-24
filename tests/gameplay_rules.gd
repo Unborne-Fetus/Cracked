@@ -47,6 +47,17 @@ func _run_tests() -> void:
 	if model_head.position.y >= neutral_head - 0.12:
 		_fail("Landing animation does not compress the knees.")
 		return
+	# All 24 air tricks must have independent signatures at mid-pose.
+	var air_signatures: Dictionary = {}
+	for trick_index in range(24):
+		model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,false,0.0,float(trick_index)*1.15+0.575,1.0,0.0,0.0,0.0,{"flip_clear":true})
+		var boot_a: Vector3 = model_boots[0].position
+		var boot_b: Vector3 = model_boots[1].position
+		var trick_signature := str(model.rotation.snapped(Vector3.ONE*0.01))+str(flip_board.rotation.snapped(Vector3.ONE*0.01))+str(boot_a.snapped(Vector3.ONE*0.01))+str(boot_b.snapped(Vector3.ONE*0.01))+str(model_head.position.snapped(Vector3.ONE*0.01))
+		air_signatures[trick_signature] = true
+	if air_signatures.size() < 20:
+		_fail("Air idle library lacks at least twenty distinct poses.")
+		return
 	# Three autonomous air poses: shifty, grab, and one-foot.
 	model.call("pose",0.5,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.575,1.0)
 	if absf(flip_board.rotation.y) < 0.45:
@@ -91,8 +102,8 @@ func _run_tests() -> void:
 		return
 	runner.call("set_first_person", true)
 	var sprite_avatar: Node3D = runner.get("avatar")
-	if sprite_avatar.visible:
-		_fail("Rider blocks the first-person view.")
+	if not sprite_avatar.visible or model_head.visible or not flip_board.visible or not bool(model_boots[0].visible):
+		_fail("First-person body must retain board and legs but hide the head.")
 		return
 	runner.call("set_first_person", bool(game.get("first_person")))
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
@@ -187,6 +198,8 @@ func _run_tests() -> void:
 	center_key.pressed = true
 	center_key.keycode = KEY_G
 	game.call("_input", center_key)
+	for camera_tick in range(120):
+		game.call("_update_camera",1.0/60.0)
 	var centered_goal: Basis = game.get("camera_goal")
 	if recenter_camera.basis.z.dot(centered_goal.z) < 0.999 or runner.transform != before_recenter or float(runner.get("speed")) != before_recenter_speed or bool(game.get("first_person")) != before_recenter_mode:
 		_fail("Camera recenter did not restore view independently of movement.")
