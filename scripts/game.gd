@@ -31,6 +31,7 @@ var replay_play_button: Button
 var replay_speed_button: Button
 var watch_replay_button: Button
 var profile_replay_button: Button
+var cosmetic_picker: OptionButton
 const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice", "Combat"]
 var extras
 var effects
@@ -439,7 +440,7 @@ func _update_camera(delta: float) -> void:
 		var heading := (-view_camera.basis.z).slerp(-camera_goal.z, 1.0-exp(-delta*CAMERA_RESPONSE))
 		view_camera.basis = _level_camera_basis(heading)
 	view_camera.fov = lerpf(view_camera.fov,clampf((86.0 if first_person else 78.0)+runner.speed*0.045,78.0,98.0),1.0-exp(-delta*3.0))
-	runner.update_rider_sprite(view_camera,delta)
+	runner.update_rider_sprite(view_camera,1.0 if replay_active else delta)
 
 func _speed_display(meters_per_second: float) -> int:
 	return int(meters_per_second * (2.2369362921 if imperial else 3.6))
@@ -618,8 +619,12 @@ func _pad_direction(x: int, y: int) -> void:
 		var selected := extra_items[pad_menu_index]
 		if selected is OptionButton:
 			var picker := selected as OptionButton
-			picker.select(posmod(picker.selected + x, picker.item_count))
-			picker.item_selected.emit(picker.selected)
+			for offset in range(1,picker.item_count+1):
+				var candidate:=posmod(picker.selected+x*offset,picker.item_count)
+				if not picker.is_item_disabled(candidate):
+					picker.select(candidate)
+					picker.item_selected.emit(candidate)
+					break
 	elif x != 0 and options_page.visible and pad_menu_index == 0:
 		_set_units(1 if x > 0 else 0)
 
@@ -1188,9 +1193,11 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	changelog_button.custom_minimum_size.y = 34
 	changelog_button.pressed.connect(func() -> void: OS.shell_open("https://unborne-fetus.github.io/Cracked/changelog.html"))
 	_add_extra(changelog_button)
-	# Cosmetic unlock data stays in the profile. The first approved rider
-	# is a single white sprite set, so defer palette selection for now.
-	extras_page.add_child(_label("RIDER  //  WHITE SILHOUETTE", 14, Color(0.76, 0.94, 1.0)))
+	cosmetic_picker=OptionButton.new()
+	for palette_name in ["Original // White & Cyan","Amber // 1 km","Violet // 100 m/s","Emerald // 5 km"]:
+		cosmetic_picker.add_item(palette_name)
+	cosmetic_picker.item_selected.connect(_select_cosmetic)
+	_add_extra(cosmetic_picker)
 	binding_picker = OptionButton.new()
 	for name_value in ["left", "right", "drift_left", "drift_right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
 		binding_picker.add_item(name_value)
@@ -1251,10 +1258,21 @@ func _show_extras() -> void:
 	options_page.visible = false
 	extras_page.visible = true
 	mode_picker.select(mode)
+	for index in range(cosmetic_picker.item_count):
+		cosmetic_picker.set_item_disabled(index,not extras.cosmetic_unlocked(index))
+	cosmetic_picker.select(extras.cosmetic)
 	profile_replay_button.disabled = not replay.available()
 	pad_menu_index = 0
 	_refresh_profile()
 	_pad_focus()
+
+func _select_cosmetic(index: int) -> void:
+	if not extras.cosmetic_unlocked(index):
+		cosmetic_picker.select(extras.cosmetic)
+		return
+	extras.cosmetic=index
+	runner.apply_cosmetic(index)
+	extras.save_profile()
 
 func _refresh_profile() -> void:
 	if not is_instance_valid(profile_label):
@@ -1313,7 +1331,7 @@ func _board_completed(_result: int, response: int, _headers: PackedStringArray, 
 
 func _create_replay_panel() -> void:
 	var layer := CanvasLayer.new()
-	layer.layer = 10
+	layer.layer = 19
 	add_child(layer)
 	var root := Control.new()
 	layer.add_child(root)
@@ -1412,11 +1430,16 @@ func _set_replay_playing(value: bool) -> void:
 	effects.set_paused(not value)
 
 func _cycle_replay_speed() -> void:
-	replay_rate = 1.0 if replay_rate >= 2.0 else (2.0 if replay_rate >= 1.0 else 1.0)
-	# Cycle 0.5x, 1x, 2x.
-	if replay_speed_button.text == "2x":
-		replay_rate = 0.5
-	replay_speed_button.text = "%gx" % replay_rate
+	# Use the actual playback rate, not a formatted label.
+	if replay_rate>=2.0:
+		replay_rate=0.5
+		replay_speed_button.text="0.5x"
+	elif replay_rate>=1.0:
+		replay_rate=2.0
+		replay_speed_button.text="2x"
+	else:
+		replay_rate=1.0
+		replay_speed_button.text="1x"
 
 func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	if not replay_active:

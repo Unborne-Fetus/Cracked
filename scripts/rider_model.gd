@@ -13,6 +13,8 @@ var white: StandardMaterial3D
 var shadow: StandardMaterial3D
 var deck_mat: StandardMaterial3D
 var edge_mat: StandardMaterial3D
+var jet_mat: StandardMaterial3D
+var cosmetic_index := 0
 var visual_lift := 0.0
 var visual_pivot := 0.0
 var handles: Node3D
@@ -58,6 +60,7 @@ func _ready() -> void:
 	shadow = _mat(Color(0.70, 0.79, 0.86))
 	deck_mat = _mat(Color(0.12, 0.24, 0.36))
 	edge_mat = _mat(Color(0.12, 0.95, 1.0))
+	jet_mat = _mat(Color(0.35,0.92,1.0))
 	board = Node3D.new()
 	board.name = "HoverboardFlip"
 	add_child(board)
@@ -149,7 +152,7 @@ func _ready() -> void:
 		nacelle.add_child(casing)
 		var nozzle:=_block(nacelle,Vector3(0.37,0.37,0.17),edge_mat)
 		nozzle.position.z=0.50
-		var exhaust:=_block(nacelle,Vector3(0.17,0.17,0.85),_mat(Color(0.35,0.92,1.0)))
+		var exhaust:=_block(nacelle,Vector3(0.17,0.17,0.85),jet_mat)
 		exhaust.position.z=0.98
 		exhausts.append(exhaust)
 	wings.visible=false
@@ -157,9 +160,9 @@ func _ready() -> void:
 	treads.name="CeilingSpiderLegs"
 	board.add_child(treads)
 	for leg_index in range(8):
-		spider_upper.append(_block(treads,Vector3(0.18,1.0,0.23),deck_mat))
-		spider_lower.append(_block(treads,Vector3(0.14,1.0,0.19),shadow))
-		spider_feet.append(_block(treads,Vector3(0.28,0.11,0.34),edge_mat))
+		spider_upper.append(_block(treads,Vector3(0.25,1.0,0.30),deck_mat))
+		spider_lower.append(_block(treads,Vector3(0.20,1.0,0.25),shadow))
+		spider_feet.append(_block(treads,Vector3(0.42,0.13,0.52),edge_mat))
 	treads.visible=false
 	gyro=Node3D.new()
 	gyro.name="SidewallGyro"
@@ -219,6 +222,16 @@ func _ready() -> void:
 		shins.append(_block(self, Vector3(0.21, 1.0, 0.22), shadow))
 		boots.append(_block(self, Vector3(0.27, 0.15, 0.39), white))
 	pose(0.0, 0.0, false, 1.0)
+
+func apply_cosmetic(index: int) -> void:
+	cosmetic_index=clampi(index,0,3)
+	var accents: Array[Color]=[Color(0.12,0.95,1.0),Color(1.0,0.64,0.12),Color(0.77,0.32,1.0),Color(0.17,1.0,0.49)]
+	var accent:=accents[cosmetic_index]
+	edge_mat.albedo_color=accent
+	deck_mat.albedo_color=Color(0.12,0.24,0.36) if cosmetic_index==0 else Color(0.045,0.055,0.085).lerp(accent,0.26)
+	white.albedo_color=Color(0.98,0.99,1.0).lerp(accent,0.19 if cosmetic_index!=0 else 0.0)
+	shadow.albedo_color=Color(0.70,0.79,0.86).lerp(accent,0.42 if cosmetic_index!=0 else 0.0)
+	jet_mat.albedo_color=Color(0.35,0.92,1.0) if cosmetic_index==0 else accent.lerp(Color.WHITE,0.32)
 
 func set_first_person(enabled: bool) -> void:
 	first_person_view=enabled
@@ -305,9 +318,11 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
 	var return_progress:=float(extra.get("glider_return",-1.0))
 	var returning:=return_progress>=0.0
-	var return_arc:=smoothstep(0.18,0.68,return_progress) if returning else 0.0
-	var release:=smoothstep(0.02,0.25,return_progress) if returning else 0.0
-	var wing_fold:=smoothstep(0.74,1.0,return_progress) if returning else 0.0
+	var return_arc:=smoothstep(0.02,0.20,return_progress) if returning else 0.0
+	var release:=smoothstep(0.015,0.16,return_progress) if returning else 0.0
+	var wing_fold:=smoothstep(0.76,1.0,return_progress) if returning else 0.0
+	var catch_blend:=smoothstep(0.60,0.72,return_progress) if returning else 0.0
+	var freefall:=release*(1.0-catch_blend) if returning else 0.0
 	var gliding:=glide>0.01 or returning
 	var glide_clock:=float(extra.get("glider_clock",0.0))
 	var glide_cycle:=posmod(int(floor(glide_clock/2.2)),8)
@@ -371,13 +386,14 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	treads.scale=Vector3.ONE
 	for leg_index in range(spider_upper.size()):
 		var sign_value:float=-1.0 if leg_index<4 else 1.0
-		var z:float=-0.83+float(leg_index%4)*0.55
+		var z:float=-0.98+float(leg_index%4)*0.65
 		var gait:=phase*7.5+float((leg_index+leg_index/4)%2)*PI
-		var stride:=sin(gait)*0.40
-		var lift_foot:=maxf(0.0,cos(gait))*0.26
+		var stride:=sin(gait)*0.82
+		var lift_foot:=maxf(0.0,cos(gait))*0.48
 		var anchor:=Vector3(sign_value*0.48,-0.09,z)
-		var knee:=Vector3(sign_value*1.35,0.55,z+0.28*sign_value)
-		var toe:=Vector3(sign_value*2.05,-0.25+lift_foot,z+stride)
+		var fan:=float(leg_index%4)-1.5
+		var knee:=Vector3(sign_value*2.65,1.10,z+fan*0.45)
+		var toe:=Vector3(sign_value*4.25,-0.25+lift_foot,z+fan*0.65+stride)
 		knee=anchor.lerp(knee,tread_deploy)
 		toe=anchor.lerp(toe,tread_deploy)
 		_segment(spider_upper[leg_index],anchor,knee)
@@ -500,6 +516,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	hip=hip.lerp(Vector3(0.0,1.65,0.10),hang)
 	chest=chest.lerp(Vector3(0.0,1.13,0.04),hang)
 	shoulder=shoulder.lerp(Vector3(0.0,0.89,0.0),hang)
+	# Detached rider spreads limbs and tucks just before the catch.
+	hip=hip.lerp(Vector3(0,1.10,0.10),freefall)
+	chest=chest.lerp(Vector3(0,1.52,-0.28),freefall)
+	shoulder=shoulder.lerp(Vector3(0,1.68,-0.38),freefall)
 	torso.position = chest
 	torso.rotation.x = -0.52*bend-0.85*dive_amount+recoil*0.23
 	torso.rotation.z = -lean * 1.25
@@ -546,10 +566,20 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			# the rider -> feet. Convert back to the animated root basis.
 			var root_basis:=Basis.from_euler(rotation)
 			var correction:=Vector3.UP*visual_pivot-root_basis*Vector3.UP*visual_pivot+Vector3.UP*visual_lift
-			var arc_position:=Vector3(sin(PI*return_arc)*1.30,lerpf(2.32,0.13,return_arc),-sin(PI*return_arc)*0.32)
+			# First fly AWAY, leaving a clear interval of unsupported
+			# free fall. Then swoop below the rider and rise to the feet.
+			var fly_away:=smoothstep(0.06,0.29,return_progress)
+			var swoop:=smoothstep(0.36,0.60,return_progress)
+			var catch_up:=smoothstep(0.60,0.72,return_progress)
+			var overhead:=Vector3(0,2.32,0)
+			var away:=Vector3(3.6,2.7,-2.6)
+			var below:=Vector3(0,-1.15,0.9)
+			var caught:=Vector3(0,0.13,0)
+			var arc_position:=overhead.lerp(away,fly_away).lerp(below,swoop).lerp(caught,catch_up)
 			board.position=root_basis.inverse()*(arc_position-correction)
-			board.rotation.z=PI*(1.0-return_arc)-rotation.z
-			if return_progress>=0.68:
+			board.rotation.z=PI*(1.0-swoop)-rotation.z+sin(PI*swoop)*0.65
+			board.rotation.x=-0.38*sin(PI*swoop)+0.28*sin(PI*catch_up)
+			if return_progress>=0.72:
 				board.position=Vector3(0,0.13,0)
 				board.rotation=Vector3.ZERO
 	for i in range(2):
@@ -596,8 +626,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		foot=foot.lerp(Vector3(sign_value*0.23,board.position.y+0.075,sign_value*0.24),gyro_deploy)
 		if returning:
 			# Feet are free during the transfer, then settle on the deck.
-			var catch_blend:=smoothstep(0.53,0.72,return_progress)
-			foot=foot.lerp(Vector3(sign_value*0.30,0.42,sign_value*0.34),release*(1.0-catch_blend))
+			foot=foot.lerp(Vector3(sign_value*0.51,0.36,0.45+sign_value*0.25),freefall)
 			foot=foot.lerp(board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34),catch_blend)
 		foot=foot.lerp(Vector3(sign_value*0.22,2.27,0.20+sign_value*0.09),hang)
 		if gliding and not returning:
@@ -649,7 +678,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		hand += Vector3(side_ride*0.20,side_ride*sign_value*0.26,sideways*0.10)
 		hand=hand.lerp(Vector3(sign_value*0.35,1.17,-0.34),gyro_deploy)
 		if returning:
-			hand=hand.lerp(Vector3(sign_value*0.56,1.03,-0.05),release*(1.0-smoothstep(0.68,0.90,return_progress)))
+			hand=hand.lerp(Vector3(sign_value*0.87,1.44,-0.05),freefall)
 		hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.37,0.36,0.0),hang)
 		if gyro_cycle==4 and i==1:
 			hand.y+=gyro_deploy*gyro_trick*0.24

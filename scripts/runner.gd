@@ -63,7 +63,7 @@ var rider_glider_spin := 1.0
 var glider_idle_clock := 0.0
 var glider_trick_clock := 0.0
 var gyro_trick_clock := 0.0
-const GLIDER_RETURN_TIME := 1.35
+const GLIDER_RETURN_TIME := 1.80
 const GLIDER_SPIN_TIME := 0.85
 var glide_height := 0.0
 var clearance_clock := 0.0
@@ -147,7 +147,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 	# Never feed the correction back into the model's pose crossfade.
 	var upright_blend:=smoothstep(0.05,0.90,rider_glider) if not grounded else 0.0
 	if rider_glider_return>=0.0:
-		upright_blend*=1.0-smoothstep(0.25,0.74,rider_glider_return)
+		upright_blend*=1.0-smoothstep(0.72,1.0,rider_glider_return)
 	var flight_forward:Vector3=Vector3(air_velocity.x,0.0,air_velocity.z)
 	if flight_forward.length_squared()<0.01:
 		flight_forward=-transform.basis.z
@@ -193,7 +193,7 @@ func _update_rider_animation(delta: float) -> void:
 			rider_glider_return=-1.0
 			rider_glider_spin=1.0
 			glider_idle_clock=0.0
-	elif rider_glider>0.01 and (grounded or diving or glide_height<32.0):
+	elif rider_glider>0.01 and (grounded or diving or glide_height<32.0 or (air_velocity.y< -1.0 and glide_height/maxf(1.0,-air_velocity.y)<1.65)):
 		rider_glider_return=0.74 if grounded else 0.0
 		rider_glider_spin=1.0
 		glider_idle_clock=0.0
@@ -334,9 +334,9 @@ func request_jump() -> void:
 	if not jumps_disabled:
 		queued_jump = true
 
-func apply_cosmetic(_index: int) -> void:
-	# Preserve saved unlocks, but the approved first set is monochrome.
-	pass
+func apply_cosmetic(index: int) -> void:
+	if is_instance_valid(rider_model):
+		rider_model.call("apply_cosmetic",index)
 
 func key_down(action: String, defaults: Array) -> bool:
 	for code in key_bindings.get(action, defaults):

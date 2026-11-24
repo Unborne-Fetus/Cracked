@@ -90,6 +90,10 @@ func _run_tests() -> void:
 		return
 	var ceiling_treads:Node3D=model.get("treads")
 	var spider_segments:Array=model.get("spider_upper")
+	var long_feet:Array=model.get("spider_feet")
+	if absf((long_feet[0] as Node3D).position.x)<4.0:
+		_fail("Spider legs lack the extended contact span.")
+		return
 	if not (spider_segments[0] as Node3D).transform.is_finite():
 		_fail("Spider leg deployment generated an invalid transform.")
 		return
@@ -131,6 +135,14 @@ func _run_tests() -> void:
 		return
 	if absf(flip_board.rotation.z)>0.05:
 		_fail("Glider flip still rotates only the board.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.30})
+	if flip_board.position.x<3.0 or handle_rig.visible:
+		_fail("Glider did not release and separate from free-falling rider.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.60})
+	if flip_board.position.y> -0.8:
+		_fail("Glider did not swoop below the rider before the catch.")
 		return
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.72})
 	if flip_board.position.distance_to(Vector3(0,0.13,0))>0.02 or glider_rig.scale.x<0.95:
@@ -1134,6 +1146,23 @@ func _run_tests() -> void:
 	if not bool(game.get("replay_active")) or runner.position.distance_to(start_pose.origin) > 0.15:
 		_fail("Replay did not begin at the recorded pose.")
 		return
+	# The button must update the real playback clock and label.
+	var rate_button:Button=game.get("replay_speed_button")
+	for expected_rate:float in [2.0,0.5,1.0]:
+		rate_button.pressed.emit()
+		game.call("_seek_replay",0.0)
+		game.call("_process",0.025)
+		if absf(float(game.get("replay_rate"))-expected_rate)>0.001 or absf(float(game.get("replay_time"))-0.025*expected_rate)>0.002:
+			_fail("Replay speed button did not change playback time.")
+			return
+	# Cosmetic materials are shared by all mechanical forms.
+	var cosmetic_edge:StandardMaterial3D=model.get("edge_mat")
+	var default_color:=cosmetic_edge.albedo_color
+	runner.call("apply_cosmetic",1)
+	if cosmetic_edge.albedo_color.is_equal_approx(default_color):
+		_fail("Cosmetics do not recolor the mechanical rider.")
+		return
+	runner.call("apply_cosmetic",0)
 	game.call("_seek_replay", float(recorder.duration()))
 	if runner.position.distance_to(final_pose.origin) > 0.15 or not bool(course.get("replay_layout")):
 		_fail("Replay seeking did not reproduce recorded motion and layout.")

@@ -1,5 +1,11 @@
 # Vector Velocity changelog
 
+## 2026-11-24 — Replay rates, cosmetics and glider recovery
+- Fixed replay speed cycling (0.5x, 1x, 2x); recorded poses follow replay time.
+- Restored original, amber, violet and emerald cosmetic palettes, saved unlocks and replay selection.
+- Enlarged spider leg contact span to 8.5 metres, with longer articulated limbs and wider stride.
+- Glider release separates the rider, flies away, swoops underneath and catches the feet before folding wings.
+
 ## 2026-11-24 — Mechanical gyro deployment and build repair
 - Twenty-four rigid curved rim segments slide from the board rails, unfold, and lock into two rotating rings; the deck remains the pilot platform.
 - Reverse deployment folds the wheel away before glider wings extend.
