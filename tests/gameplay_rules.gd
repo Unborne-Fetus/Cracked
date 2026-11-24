@@ -237,34 +237,28 @@ func _run_tests() -> void:
 		if bool(runner.call("is_grounded")) or runner.transform.basis.y.dot(takeoff_basis.y) < 0.999:
 			_fail("Airborne body was rotated by a changing bank.")
 			return
-	# Ground contact is immediate while the landing orientation eases in.
+	# Ground contact must clear a sideways flight pose immediately.
 	game.call("_restart")
 	await process_frame
 	runner.set("distance", 864.0)
 	runner.set("lane", 0.0)
 	runner.set("grounded", false)
-	var landing_frame: Transform3D = course.call("sample", 864.0)
-	# A deliberately mismatched flight pose makes a snap easy to detect.
+	var landing_frame: Transform3D = course.call("surface_frame", 864.0, 0.0, 1)
 	var pre_contact := landing_frame.basis.rotated(-landing_frame.basis.z, PI * 0.5)
 	runner.set("air_basis", pre_contact)
+	runner.set("recover_air_roll", true)
+	runner.set("air_time", 1.0)
 	runner.transform = Transform3D(pre_contact, landing_frame.origin + landing_frame.basis.y * 0.01)
 	game.call("_update_camera", 1.0 / 60.0)
 	runner.call("_finish_landing", course)
-	if not bool(runner.call("is_grounded")) or runner.position.distance_to(landing_frame.origin) > 0.01 or runner.transform.basis.y.dot(pre_contact.y) < 0.999:
-		_fail("Landing snapped the body orientation or delayed physical contact.")
+	var landed_basis: Basis = runner.get("air_basis")
+	if not bool(runner.call("is_grounded")) or runner.position.distance_to(landing_frame.origin) > 0.01 or runner.transform.basis.y.dot(landing_frame.basis.y) < 0.999 or landed_basis.y.dot(landing_frame.basis.y) < 0.999:
+		_fail("Sideways landing did not immediately align to the riding surface.")
 		return
-	runner.set("landing_blend", 0.25)
-	runner.call("sync_pose", course)
-	var midway_up := runner.transform.basis.y
-	if midway_up.dot(pre_contact.y) < 0.65 or midway_up.dot(landing_frame.basis.y) < 0.65:
-		_fail("Landing blend did not interpolate between flight and ground.")
+	if float(runner.get("air_time")) != 0.0 or bool(runner.get("recover_air_roll")) or float(runner.get("landing_blend")) != 0.0:
+		_fail("Sideways landing retained the old flight state.")
 		return
 	game.call("_update_camera", 1.0 / 60.0)
-	runner.set("landing_blend", 0.0)
-	runner.call("sync_pose", course)
-	if runner.transform.basis.y.dot(landing_frame.basis.y) < 0.999:
-		_fail("Landing blend did not finish aligned to the track.")
-		return
 	# Head-first contact with a ceiling is blocked before the feet cross.
 	game.call("_restart")
 	await process_frame
@@ -736,6 +730,23 @@ func _run_tests() -> void:
 	var pipe_edge: Transform3D = course.call("surface_frame", pipe_s, 50.0, 1)
 	if pipe_edge.origin.y - pipe_center.origin.y < 15.0:
 		_fail("Halfpipe has no curved elevated wall.")
+		return
+	# A curved-wall departure rights the rider in free flight without
+	# forcing it to follow the changing track orientation underneath.
+	runner.set("distance", pipe_s)
+	runner.set("lane", 50.0)
+	runner.set("surface_side", 1)
+	runner.set("grounded", true)
+	runner.set("speed", 40.0)
+	runner.call("sync_pose", course)
+	runner.call("_begin_flight", pipe_edge, 12.0, true)
+	var pipe_launch_up: Vector3 = runner.transform.basis.y
+	runner.position = pipe_edge.origin + pipe_edge.basis.y * 6.0 + Vector3.UP * 6.0
+	runner.set("air_time", 0.3)
+	runner.call("_advance_flight", 0.1, course, 0.0)
+	var pipe_air_basis: Basis = runner.get("air_basis")
+	if pipe_air_basis.y.dot(Vector3.UP) <= pipe_launch_up.dot(Vector3.UP):
+		_fail("Halfpipe flight did not recover its sideways roll.")
 		return
 	var stacked_s := 27.0 * 192.0 + 96.0
 	var upper: Transform3D = course.call("surface_frame", stacked_s, -30.0, 1)

@@ -1047,7 +1047,7 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	_add_extra(reset_bind)
 	audio_toggle = CheckButton.new()
 	audio_toggle.text = "Adaptive soundtrack"
-	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.music_enabled = v; extras.save_profile(); effects.activate_audio())
+	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.music_enabled = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
 	_add_extra(audio_toggle)
 	trails_toggle = CheckButton.new()
 	trails_toggle.text = "Speed streaks"
@@ -1075,6 +1075,7 @@ func _load_extras() -> void:
 	extras.load_profile()
 	_apply_bindings()
 	effects.music_enabled = extras.music
+	effects.configure_music()
 	effects.trails_enabled = extras.trails
 	effects.vibration_enabled = extras.vibration
 	leaderboard_url = str(ProjectSettings.get_setting("velocity/leaderboard_url", ""))
@@ -1274,6 +1275,10 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0
+	if runner.grounded:
+		runner.sync_pose(course)
+	else:
+		runner.air_basis = pose.basis
 	runner.avatar.position = Vector3.ZERO
 	runner.avatar.scale.y = 0.55 if runner.is_sliding else 1.0
 	storm.front_s = float(state["storm_s"])

@@ -113,6 +113,9 @@ jobs:
           test -s "$RELEASE_DIR/index.js"
           test -s "$RELEASE_DIR/index.wasm"
           test -s "$RELEASE_DIR/index.pck"
+          cp web/music.js "$RELEASE_DIR/music.js"
+          cp audio/generated/soundtrack.ogg "$RELEASE_DIR/soundtrack.ogg"
+          test -s "$RELEASE_DIR/soundtrack.ogg"
           # Keep the public address stable. A full-viewport iframe loads
           # the uniquely versioned engine files without redirecting the tab.
           cat > build/web/index.html <<EOF
@@ -161,6 +164,8 @@ jobs:
                    f'border-radius:4px">V. {version}</aside>')
           if '</body>' not in html:
               raise SystemExit("Cannot find closing body in exported Godot HTML")
+          # Install the native audio controller before Godot starts.
+          html = html.replace('</head>', '<script src="music.js"></script></head>', 1)
           page.write_text(html.replace('</body>', badge + '</body>', 1), encoding="utf-8")
           PY
           printf 'V. %s\n' "$VERSION" > build/web/version.txt

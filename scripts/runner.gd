@@ -51,6 +51,7 @@ var screen_steer_sign := 1.0
 var fallen := false
 var air_velocity := Vector3.ZERO
 var air_basis := Basis.IDENTITY
+var recover_air_roll := false
 var air_time := 0.0
 var touch_axis := 0.0
 var touch_slide := false
@@ -128,6 +129,10 @@ func update_rider_sprite(camera: Camera3D) -> void:
 	rider_sprite.flip_h = relative.x < 0.0 if rider_is_side_view else rider_facing_left
 	# The original collision envelope is unchanged; sprite-only pitch
 	# expresses the jump/dive and never changes contact or momentum.
+	# The crouched textures already contain their full pose. Counter the
+	# legacy collision capsule scale, otherwise the rider is squashed twice.
+	rider_sprite.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
+	rider_sprite.position.y = RiderSprites.HEIGHT * RiderSprites.PIXEL_SIZE * 0.5 / maxf(0.05, avatar.scale.y)
 	var tilt := 0.0
 	if not grounded:
 		tilt = -0.18 if diving else 0.12
@@ -146,6 +151,7 @@ func reset_run(course: Node3D) -> void:
 	fallen = false
 	air_velocity = Vector3.ZERO
 	air_basis = Basis.IDENTITY
+	recover_air_roll = false
 	air_time = 0.0
 	touch_axis = 0.0
 	touch_slide = false
@@ -178,6 +184,8 @@ func reset_run(course: Node3D) -> void:
 	rider_sprite.texture = rider_textures[rider_pose]
 	rider_sprite.flip_h = false
 	rider_sprite.rotation = Vector3.ZERO
+	rider_sprite.scale = Vector3.ONE
+	rider_sprite.position.y = RiderSprites.HEIGHT * RiderSprites.PIXEL_SIZE * 0.5
 	sync_pose(course)
 
 func request_jump() -> void:
@@ -386,28 +394,22 @@ func _body_offset(body_basis: Basis, probe: int) -> Vector3:
 	return body_basis.y * (1.5 * avatar.scale.y) - body_basis.z * 0.15
 
 func sync_pose(course: Node3D) -> void:
-	# Contact position is exact, but the displayed orientation eases in
-	# from the actual flight basis. No change to the collision point.
 	if not grounded:
 		return
+	# The physical rider and board are attached to the contact frame on
+	# the very first grounded tick. Never retain airborne roll on ground.
 	var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
-	var body_basis := frame.basis
-	if landing_blend > 0.0:
-		body_basis = landing_from_basis.slerp(frame.basis, landing_fraction()).orthonormalized()
-	transform = Transform3D(body_basis, frame.origin)
-	# A blended body may still point into the road on an inverted landing.
-	# Lift only the visual avatar enough to keep head and torso above the
-	# face, preserving exact physical foot contact and the eased rotation.
-	var lift := 0.0
-	if landing_blend > 0.0:
-		for probe in range(2):
-			var gap := _body_offset(body_basis, probe).dot(frame.basis.y) - _body_support(frame.basis.y, body_basis, probe)
-			lift = maxf(lift, -gap)
-	avatar.position = body_basis.inverse() * frame.basis.y * lift
+	transform = frame
+	avatar.position = Vector3.ZERO
 
 func _finish_landing(course: Node3D) -> void:
+	var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 	landing_from_basis = air_basis
-	landing_blend = LANDING_BLEND_TIME
+	# Small differences can still ease the camera, but a sideways or
+	# inverted flight must not leave it pointed along the old wall.
+	landing_blend = LANDING_BLEND_TIME if air_basis.y.dot(frame.basis.y) > 0.85 else 0.0
+	air_basis = frame.basis
+	recover_air_roll = false
 	height = 0.0
 	vertical_speed = 0.0
 	air_time = 0.0
@@ -421,17 +423,15 @@ func _finish_landing(course: Node3D) -> void:
 func is_grounded() -> bool:
 	return grounded
 
-func _begin_flight(frame: Transform3D, impulse: float) -> void:
+func _begin_flight(frame: Transform3D, impulse: float, curved_launch: bool = false) -> void:
+	recover_air_roll = curved_launch
 	grounded = false
 	double_jump_available = true
 	diving = false
 	dive_seconds = 0.0
 	air_time = 0.0
 	landing_blend = 0.0
-	air_basis = transform.basis
-	# If a new takeoff interrupts a landing blend, carry its visual position
-	# into flight rather than snapping the avatar through the road.
-	position += air_basis * avatar.position
+	air_basis = frame.basis
 	avatar.position = Vector3.ZERO
 	if impulse > 0.0:
 		# Start just outside the actual riding face, not inside its slab.
@@ -488,6 +488,13 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 
 func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	air_time += delta
+	# Launching off a curved wall can leave the rider ninety degrees
+	# sideways. Recover roll in free space, not by rotating with the road.
+	if recover_air_roll and air_time > 0.12:
+		var forward := -air_basis.z
+		if absf(forward.dot(Vector3.UP)) < 0.95:
+			var upright := Basis.looking_at(forward, Vector3.UP)
+			air_basis = air_basis.slerp(upright, 1.0 - exp(-delta * 5.0)).orthonormalized()
 	var previous_pos := position
 	var old_s := distance
 	var old_lane := lane
@@ -536,7 +543,8 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		# slope. In that case settle the feet onto the same face instead
 		# of repeatedly bouncing. Head-first impacts still deflect.
 		var contact: Vector3 = course.call("project_position", next_pos, predicted_s)
-		if air_basis.y.dot(normal) > 0.55 and bool(course.call("support_at", contact.x, contact.y)) and incoming < 0.0:
+		var recovery_contact := recover_air_roll and normal.y > 0.55 and air_basis.y.dot(normal) > -0.15
+		if (air_basis.y.dot(normal) > 0.55 or recovery_contact) and bool(course.call("support_at", contact.x, contact.y)) and incoming < 0.0:
 			distance = contact.x
 			lane = contact.y
 			surface_side = int(body_contact["side"])
@@ -576,7 +584,8 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		if not bool(course.call("support_at", hit.x, hit.y)):
 			continue
 		var landing_frame: Transform3D = course.call("surface_frame", hit.x, hit.y, side)
-		if air_basis.y.dot(landing_frame.basis.y) < 0.25:
+		var recovery_landing := recover_air_roll and landing_frame.basis.y.y > 0.55 and air_basis.y.dot(landing_frame.basis.y) > -0.15 and air_velocity.dot(landing_frame.basis.y) < 0.0
+		if air_basis.y.dot(landing_frame.basis.y) < 0.25 and not recovery_landing:
 			# The bank swept into the runner sideways or head-first. Keep
 			# the whole body outside the contacted face rather than snapping
 			# to the other side of the road.
@@ -646,12 +655,14 @@ func tick(delta: float, course: Node3D) -> void:
 	if grounded:
 		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
+		var section: String = course.call("section_name", distance)
+		var curved_launch := section in ["HALFPIPE", "CORKSCREW TUNNEL"]
 		uphill = grade > 0.025
 		var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
 		var natural_lift := natural_lift_impulse(normal_accel, speed)
 		if landing_timer <= 0.0 and (queued_jump or natural_lift > 0.0):
 			var impulse := jump_impulse_for_speed(speed) if queued_jump else natural_lift
-			_begin_flight(frame, impulse)
+			_begin_flight(frame, impulse, curved_launch)
 		else:
 			is_sliding = slide
 			if slide:
@@ -683,7 +694,7 @@ func tick(delta: float, course: Node3D) -> void:
 				# No invisible walls. Start flight from the last supported
 				# point, then allow the player to steer back if possible.
 				sync_pose(course)
-				_begin_flight(frame, 0.0)
+				_begin_flight(frame, 0.0, curved_launch)
 			else:
 				distance = next_s
 				lane = next_lane
