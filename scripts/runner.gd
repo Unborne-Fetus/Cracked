@@ -75,6 +75,10 @@ var board_pivot: Node3D
 var kickflip_progress := 1.0
 const KICKFLIP_TIME := 0.42
 var rider_crouch := 0.0
+var rider_phase := 0.0
+var rider_steer := 0.0
+var rider_landing := 0.0
+var rider_impact := 0.0
 var key_bindings: Dictionary = {}
 var pad_bindings: Dictionary = {}
 var momentum_reserve := 0.0
@@ -100,11 +104,17 @@ func update_rider_sprite(_camera: Camera3D) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	var target := 0.85 if is_sliding else (0.72 if not grounded else 0.0)
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, diving)
+
+func _update_rider_animation(delta: float) -> void:
+	rider_phase = fposmod(rider_phase + delta * (0.75 + clampf(speed / 100.0, 0.0, 1.5)), TAU * 50.0)
+	var target := 0.88 if is_sliding else (0.60 if not grounded else 0.12 * smoothstep(30.0, 120.0, speed))
 	if diving:
 		target = 1.0
-	rider_crouch = lerpf(rider_crouch, target, 0.22)
-	rider_model.call("pose", rider_crouch, clampf(lateral_speed/25.0,-1.0,1.0), not grounded, kickflip_progress)
+	rider_crouch = lerpf(rider_crouch, target, 1.0 - exp(-delta * 13.0))
+	rider_steer = lerpf(rider_steer, clampf(lateral_speed / 25.0, -1.0, 1.0), 1.0 - exp(-delta * 10.0))
+	rider_landing = move_toward(rider_landing, 0.0, delta * 3.4)
+	rider_impact = move_toward(rider_impact, 0.0, delta * 3.8)
 
 func reset_run(course: Node3D) -> void:
 	distance = 8.0
@@ -148,6 +158,10 @@ func reset_run(course: Node3D) -> void:
 	avatar.position = Vector3.ZERO
 	kickflip_progress = 1.0
 	rider_crouch = 0.0
+	rider_phase = 0.0
+	rider_steer = 0.0
+	rider_landing = 0.0
+	rider_impact = 0.0
 	rider_model.scale = Vector3.ONE
 	rider_model.call("pose", 0.0, 0.0, false, 1.0)
 	sync_pose(course)
@@ -334,6 +348,7 @@ func jump_impulse_for_speed(current: float) -> float:
 	return minf(MAX_JUMP_IMPULSE, JUMP_IMPULSE + JUMP_SPEED_GAIN * sqrt(maxf(0.0, current - START_SPEED)))
 
 func apply_obstacle_hit() -> void:
+	rider_impact = 1.0
 	speed *= OBSTACLE_RETAIN
 	if not grounded:
 		air_velocity *= OBSTACLE_RETAIN
@@ -368,6 +383,7 @@ func sync_pose(course: Node3D) -> void:
 	avatar.position = Vector3.ZERO
 
 func _finish_landing(course: Node3D) -> void:
+	rider_landing = 1.0
 	kickflip_progress = 1.0
 	var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 	landing_from_basis = air_basis
@@ -721,3 +737,4 @@ func tick(delta: float, course: Node3D) -> void:
 	else:
 		diving = false
 	avatar.scale.y = lerpf(avatar.scale.y, 0.55 if is_sliding else 1.0, minf(delta * 12.0, 1.0))
+	_update_rider_animation(delta)

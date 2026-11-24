@@ -26,6 +26,27 @@ func _run_tests() -> void:
 		_fail("Block rider or curved board geometry is missing.")
 		return
 	var sprite_camera: Camera3D = game.get("view_camera")
+	var model_head: MeshInstance3D = model.get("head")
+	var model_boots: Array = model.get("boots")
+	var neutral_head := model_head.position.y
+	var neutral_foot: Vector3 = model_boots[0].position
+	if neutral_head < 2.0:
+		_fail("Taller rider stance is missing.")
+		return
+	model.call("pose", 0.6, 0.0, true, 0.24)
+	var flick_foot: Vector3 = model_boots[0].position
+	if flick_foot.y < neutral_foot.y + 0.15 or flick_foot.z > neutral_foot.z - 0.20:
+		_fail("Kickflip is missing the leg tuck and front foot flick.")
+		return
+	model.call("pose", 0.6, 0.0, true, 0.98)
+	var catch_foot: Vector3 = model_boots[0].position
+	if catch_foot.distance_to(neutral_foot) > 0.15:
+		_fail("Kickflip catch does not bring the foot back to the board.")
+		return
+	model.call("pose", 0.0, 0.0, false, 1.0, 0.0, 1.0)
+	if model_head.position.y >= neutral_head - 0.12:
+		_fail("Landing animation does not compress the knees.")
+		return
 	runner.set("grounded", false)
 	runner.set("kickflip_progress", 0.5)
 	runner.call("update_rider_sprite", sprite_camera)

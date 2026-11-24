@@ -13,6 +13,9 @@ var white: StandardMaterial3D
 var shadow: StandardMaterial3D
 var deck_mat: StandardMaterial3D
 var edge_mat: StandardMaterial3D
+# Visual dimensions only. The gameplay collision envelope is unchanged.
+const LEG_LENGTH := 0.55
+const ARM_LENGTH := 0.34
 
 func _mat(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
@@ -77,8 +80,8 @@ func _ready() -> void:
 	board.add_child(outline)
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
-	torso = _block(self, Vector3(0.56, 0.62, 0.34), white)
-	head = _block(self, Vector3(0.45, 0.46, 0.43), white)
+	torso = _block(self, Vector3(0.56, 0.73, 0.34), white)
+	head = _block(self, Vector3(0.45, 0.49, 0.43), white)
 	hips = _block(self, Vector3(0.48, 0.24, 0.34), shadow)
 	for i in range(2):
 		upper_arms.append(_block(self, Vector3(0.18, 1.0, 0.20), white))
@@ -99,31 +102,83 @@ func _segment(part: MeshInstance3D, a: Vector3, b: Vector3) -> void:
 	part.transform = Transform3D(rotation_basis.scaled(Vector3.ONE), (a+b)*0.5)
 	part.scale = Vector3(1.0, length, 1.0)
 
-func pose(crouch: float, steer: float, airborne: bool, flip: float) -> void:
-	var lean := clampf(steer, -1.0, 1.0) * 0.12
-	var hip := Vector3(lean, lerpf(0.91, 0.57, crouch), lerpf(0.0, 0.24, crouch))
-	var chest := hip + Vector3(lean * 0.45, lerpf(0.45, 0.32, crouch), -0.27*crouch)
-	var shoulder := chest + Vector3(0, 0.19, -0.06*crouch)
-	torso.position = chest
-	torso.rotation.x = -0.46*crouch
-	torso.rotation.z = -lean
-	hips.position = hip
-	head.position = shoulder + Vector3(0, 0.30, -0.13*crouch)
-	head.rotation.x = -0.15*crouch
-	head.rotation.z = -lean*0.4
+func _joint(a: Vector3, b: Vector3, bend: Vector3, segment_length: float) -> Vector3:
+	# Two-bone IK with constant limb lengths for reachable targets.
+	var delta := b - a
+	var reach := delta.length()
+	if reach < 0.0001:
+		return a + bend.normalized() * segment_length
+	var axis := delta / reach
+	var perpendicular := bend - axis * bend.dot(axis)
+	if perpendicular.length_squared() < 0.0001:
+		perpendicular = axis.cross(Vector3.RIGHT)
+	return (a + b) * 0.5 + perpendicular.normalized() * sqrt(maxf(0.0, segment_length * segment_length - reach * reach * 0.25))
+
+func _pulse(value: float, start: float, peak: float, end: float) -> float:
+	return smoothstep(start, peak, value) * (1.0 - smoothstep(peak, end, value))
+
+func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false) -> void:
+	# All phases are derived from recorded simulation time; camera orbit
+	# and render rate never alter the animation or the player's physics.
 	var flipping := airborne and flip < 1.0
-	board.position.y = 0.13 - (sin(PI*flip)*0.26 if flipping else 0.0)
-	board.rotation.z = TAU*smoothstep(0.0,1.0,flip) if flipping else 0.0
+	var tuck := sin(PI * clampf(flip, 0.0, 1.0)) if flipping else 0.0
+	var flick := _pulse(flip, 0.03, 0.24, 0.50) if flipping else 0.0
+	var catch_pose := _pulse(flip, 0.64, 0.83, 1.0) if flipping else 0.0
+	var compression := clampf(landing, 0.0, 1.0)
+	var recoil := clampf(impact, 0.0, 1.0)
+	var bend := clampf(crouch + compression * 0.45 + recoil * 0.18, 0.0, 1.0)
+	var lean := clampf(steer, -1.0, 1.0) * 0.19
+	var balance := sin(phase * 4.2) * 0.035 * (1.0 - bend) if not airborne else 0.0
+	# Taller neutral stance (about 2.2m including the deck). Longer legs
+	# stay visibly bent during the low speed tuck rather than scaling down.
+	var hip := Vector3(lean + balance, lerpf(1.17, 0.76, bend) + tuck * 0.10, lerpf(0.02, 0.23, bend) + recoil * 0.08)
+	var chest := hip + Vector3(lean * 0.38, lerpf(0.51, 0.39, bend), -0.31 * bend - (0.15 if dive else 0.0))
+	var shoulder := chest + Vector3(0, 0.22, -0.05 * bend)
+	torso.position = chest
+	torso.rotation.x = -0.52 * bend - (0.23 if dive else 0.0) + recoil * 0.23
+	torso.rotation.z = -lean * 1.25
+	torso.rotation.y = -steer * 0.12
+	hips.position = hip
+	hips.rotation.z = -lean * 0.5
+	head.position = shoulder + Vector3(0, 0.32, -0.11 * bend)
+	head.rotation.x = -0.12 * bend + recoil * 0.10
+	head.rotation.z = -lean * 0.40
+	head.rotation.y = -steer * 0.09
+	# The board leaves the feet, rotates around its longitudinal axis,
+	# then returns to level at the catch. No bank is added to the root.
+	board.position.y = 0.13 - tuck * 0.24
+	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
+	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else 0.0
 	for i in range(2):
 		var sign_value := -1.0 if i == 0 else 1.0
-		var foot := Vector3(sign_value*0.33, 0.23 + (0.10 if flipping else 0.0), sign_value*0.24)
-		var knee := Vector3(sign_value*0.32+lean*0.5, lerpf(0.56,0.40,crouch), foot.z-0.24*crouch)
-		var hip_joint := hip + Vector3(sign_value*0.15,0,0)
+		# Front (left) foot flicks diagonally over the nose. The back
+		# foot lifts clear, both knees tuck, then feet return to the deck.
+		var front := i == 0
+		var foot := Vector3(sign_value * 0.30, 0.205, -0.34 if front else 0.34)
+		if airborne:
+			foot.y += 0.34 * tuck + (0.07 if not flipping else 0.0)
+			if front:
+				foot.x -= 0.34 * flick
+				foot.z -= 0.37 * flick
+				foot.y += 0.12 * flick
+			else:
+				foot.z += 0.13 * tuck
+				foot.y += 0.09 * tuck
+			foot.y -= 0.07 * catch_pose
+		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
+		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
 		_segment(shins[i], knee, foot)
 		boots[i].position = foot
-		var arm_start := shoulder+Vector3(sign_value*0.27,0,0)
-		var elbow := arm_start+Vector3(sign_value*lerpf(0.23,0.35,crouch),-0.26,-0.04)
-		var hand := elbow+Vector3(sign_value*0.14,-0.15,-0.10-0.10*crouch)
-		_segment(upper_arms[i],arm_start,elbow)
-		_segment(lower_arms[i],elbow,hand)
+		boots[i].rotation.x = -0.38 * flick if front else 0.20 * tuck
+		boots[i].rotation.z = -0.38 * flick if front else 0.0
+		boots[i].rotation.y = sign_value * 0.13
+		# Independent balancing arms: outward for carving, raised during
+		# a trick, forward during a dive, briefly splayed on impact.
+		var arm_start := shoulder + Vector3(sign_value * 0.27, 0, 0)
+		var spread := 0.32 + absf(steer) * 0.14 + tuck * 0.20 + recoil * 0.14
+		var arm_y := -0.43 + 0.27 * tuck + 0.18 * recoil
+		var hand := arm_start + Vector3(sign_value * spread, arm_y + sign_value * steer * 0.12, -0.16 - 0.29 * bend - (0.12 if dive else 0.0) + sign_value * balance)
+		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
+		_segment(upper_arms[i], arm_start, elbow)
+		_segment(lower_arms[i], elbow, hand)
