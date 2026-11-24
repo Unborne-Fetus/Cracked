@@ -380,9 +380,15 @@ func _run_tests() -> void:
 		if kind == "LONG DESCENT" and -middle.basis.z.y > -0.25:
 			_fail("Descent has no downhill grade.")
 			return
-		if kind == "STEEP CLIMB" and (-middle.basis.z.y < 0.19 or -middle.basis.z.y > 0.33):
-			_fail("Climb has no uphill grade.")
-			return
+		if kind == "STEEP CLIMB":
+			if -middle.basis.z.y < 0.19 or -middle.basis.z.y > 0.33:
+				_fail("Climb has no uphill grade.")
+				return
+			var bypass: float = course.call("bypass_center", index)
+			var alternate: Transform3D = course.call("surface_frame", start_s + 96.0, bypass, 1)
+			if -alternate.basis.z.y > 0.025 or float(course.call("recovery_accel", start_s + 96.0, bypass, 1)) < 17.9 or float(course.call("recovery_accel", start_s + 96.0, 0.0, 1)) > 0.001:
+				_fail("Climb bypass or marked recovery lane is missing.")
+				return
 		var width: float = course.call("lane_limit", start_s + 96.0)
 		if (kind == "NARROW BRIDGE" and (width < 29.0 or width > 30.0)) or (kind == "WIDE BASIN" and width < 77.0):
 			_fail("Variable width terrain was not generated.")
@@ -471,6 +477,23 @@ func _run_tests() -> void:
 	var after_seam: Transform3D = course.call("sample", seam_s + 0.01)
 	if before_seam.origin.distance_to(after_seam.origin) > 0.1 or before_seam.basis.y.dot(after_seam.basis.y) < 0.999:
 		_fail("Stretched bank seam is discontinuous.")
+		return
+	# After the showcase, a demanding sequence is followed by recovery.
+	game.call("_restart")
+	course.call("stream", 21.0 * 192.0)
+	var all_chunks: Dictionary = course.get("chunks")
+	var found_recovery := false
+	for data in all_chunks.values():
+		if str(data["kind"]) == "RECOVERY RUN":
+			found_recovery = true
+			if not data["hazards"].is_empty():
+				_fail("Recovery section contains forced obstacles.")
+				return
+		if not data.has("forecast") or not data["forecast"].has("min_gap"):
+			_fail("Generated section has no route validation result.")
+			return
+	if not found_recovery:
+		_fail("Momentum-aware generation did not schedule a recovery run.")
 		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")

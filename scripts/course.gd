@@ -12,6 +12,10 @@ const COLOR_CYCLE := 12000.0
 const AHEAD := 5
 const BEHIND := 2
 const REBASE_DISTANCE := 2048.0
+const RECOVERY_ACCEL := 18.0
+const RECOVERY_HALF_WIDTH := 6.0
+const RunnerRules = preload("res://scripts/runner.gd")
+const StormRules = preload("res://scripts/storm.gd")
 
 var chunks: Dictionary = {}
 var next_index := 0
@@ -26,6 +30,11 @@ var terrain_bag: Array[String] = []
 var last_kind := ""
 var sustained_roll_queue: Array[String] = []
 var sustained_roll_sign := 1.0
+var route_forecast: Dictionary = {}
+var pursuit_context: Dictionary = {}
+var demanding_sections := 0
+var recovery_sections := 0
+var rejected_layouts := 0
 
 func _ready() -> void:
 	surface_mat = _material(Color.WHITE)
@@ -57,6 +66,11 @@ func reset_course(seed_value: int) -> void:
 	last_kind = ""
 	sustained_roll_queue.clear()
 	sustained_roll_sign = 1.0
+	route_forecast = {"speed": 22.0, "lane": 0.0, "gap": 92.0, "storm_speed": StormRules.INITIAL_SPEED, "time": 0.0, "min_gap": 92.0, "valid": true}
+	pursuit_context.clear()
+	demanding_sections = 0
+	recovery_sections = 0
+	rejected_layouts = 0
 	stream(0.0)
 
 func _kind(index: int) -> String:
@@ -106,6 +120,10 @@ func _kind(index: int) -> String:
 	if index == 19:
 		sustained_roll_queue.assign(["CEILING RUN", "CEILING EXIT"])
 		return "CEILING ENTRY"
+	# Never interrupt a committed wall/ceiling sequence. Insert a full
+	# recovery section after repeated demanding terrain or a poor forecast.
+	if demanding_sections >= 2 or (last_kind != "RECOVERY RUN" and float(route_forecast.get("gap", 92.0)) < 38.0 and float(route_forecast.get("speed", 22.0)) < float(route_forecast.get("storm_speed", 14.0)) + 12.0):
+		return "RECOVERY RUN"
 	if terrain_bag.is_empty():
 		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY"])
 	var choice := rng.randi_range(0, terrain_bag.size() - 1)
@@ -175,6 +193,8 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 		roll = signf(target_yaw - start_yaw) * 0.18 * sin(PI * u) * sin(PI * u)
 	elif kind == "LONG DESCENT":
 		pitch = -0.44 * sin(PI * u) * strength
+	elif kind == "RECOVERY RUN":
+		pitch = -0.32 * sin(PI * u)
 	elif kind == "STEEP CLIMB":
 		# Shorter, gentler sustained climb with shallow downhill approaches.
 		pitch = (0.28 * pow(sin(PI * u), 4.0) - 0.10 * pow(sin(TAU * u), 2.0)) * strength
@@ -221,13 +241,9 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 
 func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 	var kind := _kind(index)
-	last_kind = kind
 	var start_s := chunk_starts[index]
 	var length := bank_length(kind, planned_speed)
-	# Keep a constant number of cross-sections; long banks have lower
-	# curvature so this retains the same angular tessellation resolution.
 	var step_length := length / float(STEPS)
-	chunk_starts.append(start_s + length)
 	var strength := 1.0 if index < 6 else rng.randf_range(0.78, 1.16)
 	var start_yaw := yaw
 	var target_yaw := yaw
@@ -239,10 +255,56 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 	if kind == "TURN" or kind == "BANKED TURN" or kind == "BANKED DESCENT":
 		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
 		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 0.98), -1.25, 1.25)
+	# Plan terrain and obstacle groups before instantiating the mesh. The
+	# preview uses the same grades, slide acceleration and storm equations
+	# as gameplay, with conservative lateral reach and obstacle bounds.
+	var points := _make_points(kind, start_yaw, target_yaw, bank_sign, strength, step_length)
+	var layout := _plan_obstacles(index, kind, points, step_length, planned_speed)
+	var forecast := _validate_routes(index, kind, points, step_length, layout, route_forecast)
+	if index >= 22 and not is_extreme_bank(kind) and kind != "RECOVERY RUN" and (not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0):
+		rejected_layouts += 1
+		# First remove optional obstacles; if terrain itself remains risky,
+		# replace it with a clear downhill recovery stretch.
+		layout.clear()
+		forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
+		if not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0:
+			kind = "RECOVERY RUN"
+			target_yaw = start_yaw
+			length = bank_length(kind, planned_speed)
+			step_length = length / float(STEPS)
+			points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
+			forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
+	last_kind = kind
+	route_forecast = forecast
+	chunk_starts.append(start_s + length)
+	if kind == "RECOVERY RUN" or kind == "LONG DESCENT" or kind == "BANKED DESCENT":
+		demanding_sections = 0
+		recovery_sections += 1
+	elif kind in ["HILLS", "STEEP CLIMB", "ROLLING RIDGES", "DROP AND RECOVERY", "NARROW BRIDGE"] or is_extreme_bank(kind):
+		demanding_sections += 1
+	else:
+		demanding_sections = maxi(0, demanding_sections - 1)
 	var node := Node3D.new()
 	node.name = "Track_%d" % index
 	node.position = tail
 	add_child(node)
+	tail += points[-1].origin
+	yaw = target_yaw
+	var hazards: Array[Dictionary] = []
+	_build_mesh(node, points, start_s, kind, index, step_length)
+	for item in layout:
+		var at: float = item["at"]
+		var i := mini(int(floor(at)), STEPS - 1)
+		var frame := points[i].interpolate_with(points[i + 1], at - float(i))
+		if bool(item.get("gate", false)):
+			_spawn_route_gate(node, hazards, frame, start_s + at * step_length, float(item["lane"]), float(item["gap"]))
+		else:
+			var lane: float = item["lane"]
+			frame.origin += frame.basis.y * _ramp_lift(index, kind, at, lane)
+			_spawn_obstacle(node, hazards, frame, start_s + at * step_length, lane, int(item["shape"]))
+	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards, "layout": layout, "forecast": forecast}
+
+func _make_points(kind: String, start_yaw: float, target_yaw: float, bank_sign: float, strength: float, step_length: float) -> Array[Transform3D]:
 	var points: Array[Transform3D] = []
 	var p := Vector3.ZERO
 	for i in range(STEPS + 1):
@@ -252,53 +314,145 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		if i < STEPS:
 			var mid := _orientation(kind, (float(i) + 0.5) / float(STEPS), start_yaw, target_yaw, bank_sign, strength)
 			p += -mid.z * step_length
-	tail += p
-	yaw = target_yaw
-	var hazards: Array[Dictionary] = []
-	_build_mesh(node, points, start_s, kind, index, step_length)
-	# Leave room to experience the geometry itself, without filling every
-	# new terrain feature with barriers.
-	var positions: Array[float] = [35.0, 72.0, 108.0, 144.0, 174.0]
+	return points
+
+func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_length: float, planned_speed: float) -> Array[Dictionary]:
+	var layout: Array[Dictionary] = []
+	if kind in ["RECOVERY RUN", "STEEP CLIMB", "LONG DESCENT", "NARROW BRIDGE", "ROLLING RIDGES", "DROP AND RECOVERY", "CHICANE"] or is_sustained_roll(kind):
+		return layout
+	var positions: Array[float] = []
 	if index == 0:
-		positions = [82.0, 137.0]
-	elif is_sustained_roll(kind) or kind == "NARROW BRIDGE" or kind == "ROLLING RIDGES" or kind == "DROP AND RECOVERY" or kind == "CHICANE":
-		positions.clear()
-	elif index >= 2 and kind != "180 BANK" and kind != "360 BANK":
-		# Conditional array literals are untyped Variants in GDScript.
-		# Explicit assignment converts the contents to Array[float].
-		if index < 6:
-			positions.assign([18.0, 40.0, 140.0, 161.0, 180.0])
-		else:
-			positions.assign([32.0, 156.0])
+		positions.assign([82.0, 137.0])
+	elif index == 1:
+		positions.assign([35.0, 72.0, 108.0, 144.0, 174.0])
 	elif kind == "180 BANK" or kind == "360 BANK":
-		positions = [30.0, 160.0]
+		positions.assign([30.0, 160.0])
+	elif index < 6:
+		positions.assign([18.0, 40.0, 140.0, 161.0, 180.0])
+	else:
+		positions.assign([32.0, 100.0, 156.0])
+	var previous := -100000.0
+	var reaction_spacing := maxf(28.0, planned_speed * 1.15)
+	var gate := index >= 2 and index < 6 and not is_extreme_bank(kind)
+	var gate_lane := -14.0 if index % 2 == 0 else 14.0
 	for i in range(positions.size()):
 		var at: float = positions[i]
+		var shape_id := (index * 5 + i) % 10 if index < 6 else rng.randi_range(0, 9)
+		# Intro retains its shape showcase. Later layouts enforce a full
+		# reaction interval, and exclude blind crests, hard slopes and edges.
+		if index >= 6:
+			if (at - previous) * step_length < reaction_spacing:
+				continue
+			var before_i := maxi(0, int(at) - 14)
+			var after_i := mini(STEPS, int(at) + 12)
+			var before_grade := -points[before_i].basis.z.y
+			var after_grade := -points[after_i].basis.z.y
+			if before_grade > 0.075 or before_grade - after_grade > 0.10:
+				continue
+		var safe_lane := recovery_center(index) if _has_recovery(kind) else 0.0
+		# Keep the recovery/bypass and a broad centre corridor obstacle-free.
+		# Gate approach and exit stay clear around the opening.
+		var bound := width_for_kind(kind, at / CHUNK_LENGTH) - 7.0
 		var lane := float(rng.randi_range(-8, 8)) * 4.8
-		if _ramp_lift(index, kind, at, lane) > 0.02:
-			lane = -ramp_center(index)
-		# Keep the approach and immediate exit from route gates navigable.
-		if index >= 2 and kind != "180 BANK" and kind != "360 BANK" and at >= 130.0 and at <= 150.0:
-			lane = 14.0 if index % 2 == 0 else -14.0
-		var lane_bound := width_for_kind(kind, at / CHUNK_LENGTH) - 6.0
-		lane = clampf(lane, -lane_bound, lane_bound)
-		var shape_id := (index * 5 + i) % 10
-		if index > 5:
-			shape_id = rng.randi_range(0, 9)
-		if index == 0 and i == 0:
-			shape_id = 0
-		var frame := points[int(at / STEP)].interpolate_with(points[int(at / STEP) + 1], fmod(at, STEP) / STEP)
-		frame.origin += frame.basis.y * _ramp_lift(index, kind, at, lane)
-		_spawn_obstacle(node, hazards, frame, start_s + at * step_length, lane, shape_id)
-	# Route gates have a guaranteed opening, but it moves across the track.
-	# Wide tall walls discourage jumping over every obstacle instead of steering.
-	if index >= 2 and not is_extreme_bank(kind) and (index < 6 or (kind == "HILLS" or kind == "TURN") and index % 3 == 0):
-		var gate_at := 94.0
-		var gate_frame := points[int(gate_at / STEP)]
-		var opening := -14.0 if index % 2 == 0 else 14.0
-		var gap_width := maxf(18.0, 24.0 - float(index) * 0.12)
-		_spawn_route_gate(node, hazards, gate_frame, start_s + gate_at * step_length, opening, gap_width)
-	chunks[index] = {"node": node, "points": points, "kind": kind, "hazards": hazards}
+		lane = clampf(lane, -bound, bound)
+		if absf(lane) < 15.0 or absf(lane - safe_lane) < 14.0 or absf(_ramp_lift(index, kind, at, lane)) > 0.02 or (gate and absf(lane - gate_lane) < 16.0):
+			lane = -42.0 if safe_lane >= 0.0 else 42.0
+			if gate:
+				lane = -42.0 if gate_lane >= 0.0 else 42.0
+			lane = clampf(lane, -bound, bound)
+		if index >= 6 and (absf(lane - safe_lane) < 14.0 or absf(lane) < 15.0):
+			continue
+		layout.append({"at": at, "lane": lane, "shape": shape_id})
+		previous = at
+	if gate:
+		layout.append({"at": 94.0, "lane": gate_lane, "gap": 24.0, "gate": true})
+	return layout
+
+func _forecast_grade(index: int, kind: String, points: Array[Transform3D], at: float, lane: float, step_length: float) -> float:
+	var i := clampi(int(round(at)), 1, STEPS - 1)
+	var frame := points[i]
+	var slope := (_ramp_lift(index, kind, float(i + 1), lane) - _ramp_lift(index, kind, float(i - 1), lane)) / (2.0 * step_length)
+	return (-frame.basis.z + frame.basis.y * slope).normalized().y
+
+func _validate_routes(index: int, kind: String, points: Array[Transform3D], step_length: float, layout: Array[Dictionary], initial: Dictionary, begin_at: float = 0.0) -> Dictionary:
+	# Evaluate distinct reachable lane choices, not merely a centreline.
+	# A conservative steering rate and padded obstacle envelope account for
+	# player reaction time. Predict pursuit without slowing the live storm.
+	var best: Dictionary = {}
+	var best_score := -INF
+	for target: float in [-44.0, -28.0, -14.0, 0.0, 14.0, 28.0, 44.0]:
+		var v := maxf(7.0, float(initial.get("speed", 22.0)))
+		var lane := float(initial.get("lane", 0.0))
+		var gap := float(initial.get("gap", 92.0))
+		var storm_v := float(initial.get("storm_speed", StormRules.INITIAL_SPEED))
+		var elapsed := float(initial.get("time", 0.0))
+		var min_gap := gap
+		var clear := true
+		var at := clampf(begin_at, 0.0, float(STEPS))
+		while at < float(STEPS):
+			var next_at := minf(float(STEPS), at + 4.0)
+			var ds := (next_at - at) * step_length
+			var dt := ds / maxf(7.0, v)
+			var old_lane := lane
+			var bound := width_for_kind(kind, next_at / CHUNK_LENGTH) - 2.0
+			var desired := clampf(target, -bound, bound)
+			# Steer toward the known gate opening before entering its zone.
+			for item in layout:
+				if bool(item.get("gate", false)) and at < float(item["at"]) + 3.0:
+					desired = float(item["lane"])
+					break
+			lane = move_toward(lane, desired, 12.0 * dt)
+			if absf(lane) > bound:
+				clear = false
+			for item in layout:
+				var obstacle_at: float = item["at"]
+				if obstacle_at + 4.0 / step_length < at or obstacle_at - 4.0 / step_length > next_at:
+					continue
+				var cross_lane := lerpf(old_lane, lane, clampf((obstacle_at - at) / maxf(0.01, next_at - at), 0.0, 1.0))
+				if bool(item.get("gate", false)):
+					if absf(cross_lane - float(item["lane"])) > float(item["gap"]) * 0.5 - 1.5:
+						clear = false
+				elif absf(cross_lane - float(item["lane"])) < 6.0:
+					clear = false
+			var grade := _forecast_grade(index, kind, points, (at + next_at) * 0.5, lane, step_length)
+			v = RunnerRules.slide_speed_step(v, grade, dt)
+			v += _recovery_strength(index, kind, (at + next_at) * 0.5, lane) * RECOVERY_ACCEL * dt
+			var acceleration := StormRules.ACCELERATION + StormRules.ACCELERATION_GROWTH * elapsed
+			gap += ds - storm_v * dt - 0.5 * acceleration * dt * dt - StormRules.ACCELERATION_GROWTH * dt * dt * dt / 6.0
+			storm_v += acceleration * dt + 0.5 * StormRules.ACCELERATION_GROWTH * dt * dt
+			elapsed += dt
+			min_gap = minf(min_gap, gap)
+			at = next_at
+		var valid := clear and min_gap > 1.0
+		var score := min_gap + gap * 0.15 + v * 0.6 + (100000.0 if valid else (10000.0 if clear else 0.0))
+		if score > best_score:
+			best_score = score
+			best = {"speed": v, "lane": lane, "gap": gap, "storm_speed": storm_v, "time": elapsed, "min_gap": min_gap, "valid": valid, "clear": clear, "target_lane": target}
+	return best
+
+func set_pursuit_context(at: float, across: float, speed: float, gap: float, storm_speed: float, elapsed: float) -> void:
+	pursuit_context = {"at": at, "lane": across, "speed": speed, "gap": gap, "storm_speed": storm_speed, "time": elapsed, "min_gap": gap, "valid": true}
+
+func _refresh_forecast() -> void:
+	if pursuit_context.is_empty() or next_index == 0:
+		return
+	var at: float = pursuit_context["at"]
+	var index := chunk_index_at(at)
+	if not chunks.has(index):
+		return
+	var prediction := pursuit_context.duplicate()
+	# Reforecast the committed lookahead from the actual runner and storm.
+	# Existing road stays fixed; only not-yet-generated chunks can change.
+	for i in range(index, next_index):
+		if not chunks.has(i):
+			continue
+		var data: Dictionary = chunks[i]
+		var step_length := (chunk_starts[i + 1] - chunk_starts[i]) / float(STEPS)
+		var begin_at := maxf(0.0, (at - chunk_starts[i]) / step_length)
+		prediction = _validate_routes(i, str(data["kind"]), data["points"], step_length, data["layout"], prediction, begin_at)
+	route_forecast = prediction
+
+
 
 func track_color(distance: float, accent: float = 0.0, saturation: float = 0.84, value: float = 0.95) -> Color:
 	# Absolute arc-length color: stable across chunk seams and origin rebases.
@@ -386,10 +540,38 @@ func _spawn_route_gate(node: Node3D, hazards: Array[Dictionary], frame: Transfor
 func ramp_center(index: int) -> float:
 	return 28.0 if index % 2 == 1 else -28.0
 
+func recovery_center(index: int) -> float:
+	return -28.0 if index % 2 == 0 else 28.0
+
+func bypass_center(index: int) -> float:
+	return recovery_center(index)
+
+func _has_recovery(kind: String) -> bool:
+	return kind in ["RECOVERY RUN", "LONG DESCENT", "STEEP CLIMB"]
+
+func _recovery_strength(index: int, kind: String, local_s: float, across: float) -> float:
+	if not _has_recovery(kind):
+		return 0.0
+	var envelope := smoothstep(12.0, 32.0, local_s) * (1.0 - smoothstep(160.0, 180.0, local_s))
+	return envelope * (1.0 - smoothstep(RECOVERY_HALF_WIDTH - 2.0, RECOVERY_HALF_WIDTH, absf(across - recovery_center(index))))
+
+func recovery_accel(distance: float, across: float, side: int = 1) -> float:
+	if side < 0 or not has_distance(distance):
+		return 0.0
+	var index := chunk_index_at(distance)
+	var local_s := (distance - chunk_starts[index]) * CHUNK_LENGTH / (chunk_starts[index + 1] - chunk_starts[index])
+	return RECOVERY_ACCEL * _recovery_strength(index, section_name(distance), local_s, across)
+
 func _ramp_lift(index: int, kind: String, local_s: float, across: float) -> float:
+	# Alternate grade on major climbs: distribute the elevation change
+	# over the approaches, while flattening the sharp central ascent.
+	if kind == "STEEP CLIMB":
+		var u := clampf(local_s / CHUNK_LENGTH, 0.0, 1.0)
+		var weight := 1.0 - smoothstep(7.0, 19.0, absf(across - bypass_center(index)))
+		return 10.0 * sin(TAU * u) * pow(sin(PI * u), 2.0) * weight
 	# A local rise, crest and runout occupying only a portion of the road.
 	# The other lanes remain unchanged; no ramp on narrow or inverted banks.
-	if index == 0 or (index != 1 and index % 3 != 0) or kind == "NARROW BRIDGE" or is_extreme_bank(kind):
+	if index == 0 or (index != 1 and index % 3 != 0) or kind in ["NARROW BRIDGE", "RECOVERY RUN", "LONG DESCENT"] or is_extreme_bank(kind):
 		return 0.0
 	var lateral := 1.0 - smoothstep(5.0, 12.0, absf(across - ramp_center(index)))
 	var rise := smoothstep(58.0, 99.0, local_s)
@@ -472,7 +654,9 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			var b := _vertex(points[i], z1, h1)
 			var c := _vertex(points[i+1], next_z0, h2)
 			var d := _vertex(points[i+1], next_z1, h3)
-			_quad(fill, a, b, c, d, dark0, dark1)
+			var recovery0 := _recovery_strength(index, kind, float(i), (z0 + z1) * 0.5)
+			var recovery1 := _recovery_strength(index, kind, float(i + 1), (next_z0 + next_z1) * 0.5)
+			_quad(fill, a, b, c, d, dark0.lerp(Color(0.03, 0.58, 0.26), recovery0), dark1.lerp(Color(0.03, 0.58, 0.26), recovery1))
 			for v: Vector3 in [a, c, b, b, c, d]:
 				faces.append(v)
 			var ba := _vertex(points[i], z0, h0 - THICKNESS)
@@ -518,6 +702,8 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 	node.add_child(body)
 
 func stream(distance: float, planned_speed: float = 22.0) -> void:
+	if next_index > 0 and (distance >= chunk_starts[-1] or next_index <= chunk_index_at(distance) + AHEAD):
+		_refresh_forecast()
 	while next_index == 0 or distance >= chunk_starts[-1]:
 		_build_chunk(next_index, planned_speed)
 		next_index += 1

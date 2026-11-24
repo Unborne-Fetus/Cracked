@@ -120,13 +120,17 @@ func set_first_person(enabled: bool) -> void:
 func can_slide_on_grade(_grade: float) -> bool:
 	return true
 
+static func slide_speed_step(current: float, grade: float, delta: float) -> float:
+	var change := SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
+	if grade > 0.025:
+		change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
+	var floor_speed := CLIMB_SPEED_FLOOR if grade > 0.025 else MIN_SPEED
+	return maxf(minf(current, floor_speed), current + change * delta)
+
 func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float) -> float:
 	var change := 0.0
 	if grounded and slide:
-		if grade > 0.025:
-			change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
-		else:
-			change = SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
+		return slide_speed_step(current, grade, delta)
 	elif grounded:
 		change = -RUN_DRAG - maxf(grade, 0.0) * 5.0
 	else:
@@ -415,6 +419,8 @@ func tick(delta: float, course: Node3D) -> void:
 		else:
 			is_sliding = slide
 			speed = step_speed(speed, grade, true, slide, delta)
+			if slide:
+				speed += float(course.call("recovery_accel", distance, lane, surface_side)) * delta
 			var old_s := distance
 			var old_lane := lane
 			var steer_speed := 23.0 + minf(speed * 0.10, 12.0)

@@ -102,6 +102,7 @@ func _physics_process(delta: float) -> void:
 	if paused or run_finished:
 		return
 	run_time += delta
+	course.set_pursuit_context(runner.distance, runner.lane, runner.speed, storm.gap_to(runner.distance), storm.speed, storm.elapsed)
 	runner.tick(delta, course)
 	if runner.fallen:
 		_lose("FELL OFF THE TRACK")
@@ -269,7 +270,10 @@ func _update_hud() -> void:
 	if not runner.is_grounded():
 		slide_label.text = "AIRBORNE  //  CARRY MOMENTUM"
 	elif runner.is_sliding:
-		slide_label.text = "UPHILL SLIDE  //  LOSING SPEED" if runner.uphill else "SLIDING  //  BUILD MOMENTUM"
+		if float(course.recovery_accel(runner.distance, runner.lane, runner.surface_side)) > 0.1:
+			slide_label.text = "RECOVERY LANE  //  EXTRA ACCELERATION"
+		else:
+			slide_label.text = "UPHILL SLIDE  //  LOSING SPEED" if runner.uphill else "SLIDING  //  BUILD MOMENTUM"
 	else:
 		slide_label.text = "HOLD SHIFT / CTRL / C TO SLIDE"
 	var gap: float = maxf(float(storm.gap_to(runner.distance)), 0.0)
