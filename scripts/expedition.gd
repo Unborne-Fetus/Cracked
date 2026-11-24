@@ -42,7 +42,19 @@ const ITEMS := {
 	"rest": {"name": "Camp Kit", "detail": "Gain extra sparks at rest stops", "cost": 16},
 	"challenge": {"name": "Risk Premium", "detail": "Extra reward on challenge routes", "cost": 19},
 	"synergy": {"name": "Conductor", "detail": "Boost effectiveness scales with other items", "cost": 25},
-	"float": {"name": "Featherweight", "detail": "Slow fall near the end of boost", "cost": 20}
+	"float": {"name": "Featherweight", "detail": "Slow fall near the end of boost", "cost": 20},
+	"launchspeed": {"name": "Sky Kick", "detail": "Natural takeoffs grant speed", "cost": 21},
+	"coast": {"name": "Coasting", "detail": "Retain more speed uphill", "cost": 18},
+	"heat": {"name": "Heat Sink", "detail": "Shorter ability cooldown", "cost": 20},
+	"first": {"name": "First Strike", "detail": "First clean landing grants extra energy", "cost": 18},
+	"storm": {"name": "Storm Anchor", "detail": "Slow collapse acceleration", "cost": 24},
+	"purity": {"name": "Clean Run", "detail": "Bonus sparks for avoiding obstacles", "cost": 23},
+	"lastchance": {"name": "Last Light", "detail": "One void recovery per world", "cost": 35},
+	"trialboost": {"name": "Trial Crest", "detail": "Extra energy on trial routes", "cost": 17},
+	"shopgift": {"name": "Gift of Wind", "detail": "Free first reroll at each shop", "cost": 25},
+	"guardianreward": {"name": "Warden's Token", "detail": "Extra sparks for clean guardian waves", "cost": 20},
+	"restspeed": {"name": "Fresh Legs", "detail": "Start faster after a rest", "cost": 15},
+	"threshold": {"name": "Breakthrough", "detail": "More acceleration at high speed", "cost": 23}
 }
 const ROUTES := ["Flow meadow", "Rift crossing", "High ridges", "Rest route", "Trial route"]
 const WORLDS_PER_SHARD := 5
@@ -51,6 +63,12 @@ const ABILITY_DETAILS := ["Instant speed and short sustained acceleration", "Ext
 var ability := 0
 var encounter_resolved := false
 var rerolls := 0
+var world_cleared := false
+var trial_kind := 0
+var trial_success := false
+var best_chain := 0
+const TRIAL_NAMES := ["Precision trial", "Velocity trial", "Spark trial", "Flow trial"]
+const ROUTE_DETAILS := ["Gentler hills and ordinary rewards", "Wide ravines and narrow bypasses", "Steeper hills and longer flights", "Short course + one recovery choice", "Harder course + optional bonus objective"]
 var shard := 1
 var world := 1
 var route := 0
@@ -80,6 +98,10 @@ func begin(shard_value: int, seed_input: int) -> void:
 	ability = 0
 	encounter_resolved = false
 	rerolls = 0
+	world_cleared = false
+	trial_kind = 0
+	trial_success = false
+	best_chain = 0
 
 func terrain_seed() -> int:
 	return seed_value + shard * 7919 + world * 104729 + route * 15485863
@@ -91,14 +113,21 @@ func collect(amount: int) -> void:
 	pending_currency += maxi(0, amount)
 
 func fail_world() -> void:
+	if world_cleared or complete:
+		return
 	currency += int(float(pending_currency) * minf(0.6, float(rank_of("insurance")) * 0.2))
 	pending_currency = 0
 	attempts = maxi(0, attempts - 1)
 
-func finish_world(distance: float, time: float, perfect: int, energy: float = 0.0) -> void:
+func finish_world(distance: float, time: float, perfect: int, energy: float = 0.0, peak_speed: float = 0.0, chain: int = 0) -> void:
+	if world_cleared or complete:
+		return
+	world_cleared = true
+	best_chain = maxi(best_chain, chain)
+	trial_success = route == 4 and trial_met(perfect, peak_speed, pending_currency, chain)
 	currency += pending_currency + 16 + mini(perfect * 2, 16) + rank_of("income") * 5 + int(energy * float(rank_of("bank")) * 0.08)
-	if route == 4:
-		currency += 12 + rank_of("challenge") * 6
+	if trial_success:
+		currency += 30 + rank_of("challenge") * 8
 	pending_currency = 0
 	total_distance += distance
 	total_time += time
@@ -145,11 +174,14 @@ func buy(id: String) -> bool:
 	return true
 
 func advance(choice: int) -> bool:
-	if complete or world >= WORLDS_PER_SHARD:
+	if complete or not world_cleared or world >= WORLDS_PER_SHARD:
 		return false
 	world += 1
 	route = clampi(choice, 0, ROUTES.size() - 1)
 	encounter_resolved = false
+	world_cleared = false
+	trial_success = false
+	trial_kind = posmod(terrain_seed(), TRIAL_NAMES.size())
 	offers.clear()
 	return true
 
@@ -162,8 +194,11 @@ func rank_of(id: String) -> int:
 func item_cost(id: String) -> int:
 	return maxi(8, int(ITEMS[id]["cost"]) - rank_of("thrift") * 3)
 
+func reroll_cost() -> int:
+	return 0 if rerolls == 0 and rank_of("shopgift") > 0 else 6 + rerolls * 3
+
 func reroll() -> bool:
-	var cost := 6 + rerolls * 3
+	var cost := reroll_cost()
 	if offers.is_empty() or currency < cost or rerolls >= 3:
 		return false
 	currency -= cost
@@ -181,3 +216,69 @@ func encounter(choice: int) -> bool:
 	else:
 		currency += 18 + rank_of("rest") * 6
 	return true
+
+func trial_target() -> int:
+	match trial_kind:
+		0: return 3 + mini(3, shard / 3)
+		1: return 100 + mini(50, shard * 5)
+		2: return 12 + mini(8, shard)
+		_: return 3 + mini(2, shard / 4)
+
+func trial_met(perfect: int, peak: float, sparks: int, chain: int) -> bool:
+	var achieved: float = [perfect, peak, sparks, chain][trial_kind]
+	return achieved >= trial_target()
+
+func trial_text() -> String:
+	var unit: String = ["perfect landings", "m/s peak speed", "sparks collected", "consecutive clean landings"][trial_kind]
+	return "%s  /  %d %s" % [TRIAL_NAMES[trial_kind], trial_target(), unit]
+
+func checkpoint() -> Dictionary:
+	return {"version": 1, "shard": shard, "world": world, "route": route, "seed": seed_value, "currency": currency, "items": items.duplicate(), "offers": offers.duplicate(), "attempts": attempts, "complete": complete, "distance": total_distance, "time": total_time, "ability": ability, "encounter": encounter_resolved, "rerolls": rerolls, "cleared": world_cleared, "trial": trial_kind, "trial_success": trial_success, "chain": best_chain}
+
+func restore(data: Dictionary) -> bool:
+	if int(data.get("version", 0)) != 1:
+		return false
+	var sh := int(data.get("shard", 0))
+	var wo := int(data.get("world", 0))
+	if sh < 1 or sh > SHARD_COUNT or wo < 1 or wo > WORLDS_PER_SHARD:
+		return false
+	begin(sh, int(data.get("seed", 0)))
+	world = wo
+	route = clampi(int(data.get("route", 0)), 0, ROUTES.size() - 1)
+	currency = maxi(0, int(data.get("currency", 0)))
+	attempts = clampi(int(data.get("attempts", 3)), 0, 5)
+	ability = clampi(int(data.get("ability", 0)), 0, ABILITIES.size() - 1)
+	var saved_items: Variant = data.get("items", {})
+	if saved_items is Dictionary:
+		for key in saved_items:
+			if ITEMS.has(key) and key != "recovery":
+				items[key] = clampi(int(saved_items[key]), 1, 3)
+	var saved_offers: Variant = data.get("offers", [])
+	if saved_offers is Array:
+		for key in saved_offers:
+			if key is String and ITEMS.has(key) and not offers.has(key) and offers.size() < 3:
+				offers.append(key)
+	total_distance = maxf(0.0, float(data.get("distance", 0.0)))
+	total_time = maxf(0.0, float(data.get("time", 0.0)))
+	encounter_resolved = bool(data.get("encounter", false))
+	rerolls = clampi(int(data.get("rerolls", 0)), 0, 3)
+	world_cleared = bool(data.get("cleared", false))
+	complete = guardian() and world_cleared and bool(data.get("complete", false))
+	trial_kind = clampi(int(data.get("trial", 0)), 0, TRIAL_NAMES.size() - 1)
+	trial_success = bool(data.get("trial_success", false))
+	best_chain = maxi(0, int(data.get("chain", 0)))
+	return true
+
+func set_bonus(values: Array) -> bool:
+	for id in values:
+		if rank_of(str(id)) == 0:
+			return false
+	return true
+
+func active_sets() -> Array[String]:
+	var names: Array[String] = []
+	if set_bonus(["stride", "sprint", "coast"]): names.append("RUNNER")
+	if set_bonus(["glide", "launch", "wind"]): names.append("SKYBOUND")
+	if set_bonus(["charge", "boost", "saver"]): names.append("DYNAMO")
+	if set_bonus(["landing", "impact", "guardian"]): names.append("RESILIENT")
+	return names

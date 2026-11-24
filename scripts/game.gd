@@ -19,6 +19,12 @@ var rest_box: HBoxContainer
 var rest_label: Label
 var boss_label: Label
 var ability_setting := 0
+var resume_button: Button
+var checkpoint_data: Dictionary = {}
+var build_label: Label
+var trial_label: Label
+var last_guardian_clean := 0
+var paused_from := "running"
 var course: Node3D
 var runner: Node3D
 var camera: Camera3D
@@ -113,6 +119,9 @@ func _ready() -> void:
 		best = float(config.get_value("record", "distance", 0.0))
 		music_enabled = bool(config.get_value("options", "music", true))
 		unlocked_shard = clampi(int(config.get_value("campaign", "unlocked", 1)), 1, Expedition.SHARD_COUNT)
+		var stored: Variant = config.get_value("campaign", "checkpoint", {})
+		if stored is Dictionary:
+			checkpoint_data = stored
 	_make_ui()
 	_configure_music()
 	world_seed = randi()
@@ -153,6 +162,7 @@ func _reset_stage() -> void:
 	runner.call("apply_start_bonuses")
 	guardian.call("reset", expedition.guardian(), expedition.terrain_seed(), expedition.shard)
 	last_collected = 0
+	last_guardian_clean = 0
 	var length: float = course.get("length")
 	gate.position = Vector3(0.0, float(course.call("elevation", 0.0, length)), -length)
 	last_landing_serial = 0
@@ -167,9 +177,12 @@ func _reset_stage() -> void:
 	_update_hud()
 
 func _save() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	var config := ConfigFile.new()
 	config.set_value("record", "distance", best)
 	config.set_value("campaign", "unlocked", unlocked_shard)
+	config.set_value("campaign", "checkpoint", checkpoint_data)
 	config.set_value("options", "music", music_enabled)
 	config.save("user://velocity_flow.cfg")
 
@@ -213,13 +226,17 @@ func _physics_process(delta: float) -> void:
 	var old := runner.position
 	runner.call("tick", delta, course)
 	guardian.call("tick", course, runner, old)
+	var clean: int = guardian.get("cleared_clean")
+	if clean > last_guardian_clean:
+		expedition.collect((clean - last_guardian_clean) * expedition.rank_of("guardianreward") * 2)
+		last_guardian_clean = clean
 	var new_collected: int = runner.get("collected")
 	if new_collected > last_collected:
 		expedition.collect(new_collected - last_collected)
 		last_collected = new_collected
 	var s: float = runner.call("progress")
 	course.call("stream", s)
-	storm_speed += delta * (0.52 + 0.008 * elapsed)
+	storm_speed += delta * (0.52 + 0.008 * elapsed) * (1.0 - float(expedition.rank_of("storm")) * 0.10)
 	course.call("collapse_behind", storm_s)
 	storm_s += storm_speed * delta
 	collapse.position = Vector3(0.0, float(course.call("elevation", 0.0, storm_s)) + 25.0, -storm_s)
@@ -228,6 +245,7 @@ func _physics_process(delta: float) -> void:
 		best = maxf(best, s)
 		_save()
 		expedition.fail_world()
+		_store_checkpoint()
 		lives = expedition.attempts
 		var reason := "The collapse caught you." if caught > 0.35 else "You left the world."
 		_show("lost", "WORLD LOST", reason + ("  •  %d attempts left" % lives if lives > 0 else "  •  Expedition ended"), "TRY AGAIN" if lives > 0 else "NEW EXPEDITION")
@@ -236,13 +254,16 @@ func _physics_process(delta: float) -> void:
 		_save()
 		var pace := float(course.get("length")) / maxf(elapsed, 0.01)
 		var rank := "S" if pace >= 90.0 else ("A" if pace >= 65.0 else ("B" if pace >= 46.0 else "C"))
-		expedition.finish_world(float(course.get("length")), elapsed, int(runner.get("perfect_landings")), float(runner.get("energy")))
+		if int(runner.get("impacts")) == 0:
+			expedition.collect(expedition.rank_of("purity") * 8)
+		expedition.finish_world(float(course.get("length")), elapsed, int(runner.get("perfect_landings")), float(runner.get("energy")), float(runner.get("peak_speed")), int(runner.get("peak_chain")))
+		_store_checkpoint()
 		if expedition.complete:
 			unlocked_shard = maxi(unlocked_shard, mini(expedition.shard + 1, Expedition.SHARD_COUNT))
 			_save()
 			_show("shard_complete", "SHARD CLEARED  /  " + rank, "%s  •  %.0f m in %.1f s" % [expedition.title(), expedition.total_distance, expedition.total_time], "NEXT SHARD" if expedition.shard < Expedition.SHARD_COUNT else "NEW EXPEDITION")
 		else:
-			_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d attempts left" % [runner.get("perfect_landings"), lives], "NEXT WORLD")
+			_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d attempts left%s" % [runner.get("perfect_landings"), lives, ("  •  TRIAL " + ("PASSED" if expedition.trial_success else "MISSED")) if expedition.route == 4 else ""], "NEXT WORLD")
 
 func _process(delta: float) -> void:
 	if status == "running":
@@ -325,6 +346,8 @@ func _make_ui() -> void:
 	stats.add_child(expedition_label)
 	boss_label = _label("", 15)
 	stats.add_child(boss_label)
+	trial_label = _label("", 15)
+	stats.add_child(trial_label)
 	cue_label = _label("", 24)
 	root.add_child(cue_label)
 	cue_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -384,12 +407,17 @@ func _make_ui() -> void:
 	action_button = _button("START")
 	stack.add_child(action_button)
 	action_button.pressed.connect(_primary)
+	resume_button = _button("CONTINUE EXPEDITION")
+	resume_button.pressed.connect(_resume_checkpoint)
+	stack.add_child(resume_button)
+	resume_button.hide()
 	world_choice = HBoxContainer.new()
 	stack.add_child(world_choice)
 	for i in range(Expedition.ROUTES.size()):
 		var choice := _button(Expedition.ROUTES[i].to_upper())
 		choice.add_theme_font_size_override("font_size", 15)
 		choice.custom_minimum_size = Vector2(165, 42)
+		choice.tooltip_text = Expedition.ROUTE_DETAILS[i]
 		choice.pressed.connect(_choose_route.bind(i))
 		world_choice.add_child(choice)
 		route_buttons.append(choice)
@@ -398,6 +426,10 @@ func _make_ui() -> void:
 	stack.add_child(shop_box)
 	shop_label = _label("", 17)
 	shop_box.add_child(shop_label)
+	build_label = _label("", 15)
+	build_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	build_label.custom_minimum_size.x = 600.0
+	shop_box.add_child(build_label)
 	for i in range(3):
 		var item := _button("")
 		item.add_theme_font_size_override("font_size", 16)
@@ -449,7 +481,9 @@ func _update_hud() -> void:
 	energy_meter.value = float(runner.get("energy"))
 	energy_label.text = str(Expedition.ABILITIES[expedition.ability]).to_upper() + (" READY" if energy_meter.value >= float(runner.call("boost_cost")) else "")
 	boss_label.visible = expedition.guardian()
-	boss_label.text = "%s  •  PHASE %d / 3  •  %d clean" % [guardian.call("boss_name"), int(guardian.get("phase")) + 1, guardian.get("cleared_clean")]
+	boss_label.text = "%s  •  PHASE %d / 3  •  %s" % [guardian.call("boss_name"), int(guardian.get("phase")) + 1, guardian.call("instruction")]
+	trial_label.visible = expedition.route == 4
+	trial_label.text = expedition.trial_text() if expedition.route == 4 else ""
 	expedition_label.text = "SHARD %02d  •  %d/%d  •  %d sparks  •  %d attempts" % [expedition.shard, expedition.world, Expedition.WORLDS_PER_SHARD, expedition.currency + expedition.pending_currency, expedition.attempts]
 	cue_label.text = str(runner.get("cue"))
 	cue_label.visible = float(runner.get("cue_time")) > 0.0 and status == "running"
@@ -464,6 +498,7 @@ func _show(value: String, title: String, detail: String, action: String) -> void
 	shop_box.visible = value == "complete"
 	shard_picker.visible = value == "ready"
 	ability_picker.visible = value == "ready"
+	resume_button.visible = value == "ready" and not checkpoint_data.is_empty() and int(checkpoint_data.get("attempts", 0)) > 0 and not bool(checkpoint_data.get("complete", false))
 	rest_box.visible = value == "rest"
 	rest_label.visible = value == "rest"
 	if value == "complete":
@@ -485,6 +520,7 @@ func _show(value: String, title: String, detail: String, action: String) -> void
 
 func _start() -> void:
 	status = "running"
+	_store_checkpoint()
 	overlay.hide()
 	touch_controls.visible = touch_mode
 	_configure_music()
@@ -505,6 +541,7 @@ func _primary() -> void:
 			_start()
 		"complete":
 			if expedition.advance(next_route):
+				_store_checkpoint()
 				if expedition.route == 3 and not expedition.guardian():
 					_show("rest", "REST STOP", "Recover an attempt or take sparks.", "")
 				else:
@@ -556,6 +593,12 @@ func _input(event: InputEvent) -> void:
 			KEY_ESCAPE:
 				_toggle_pause()
 				get_viewport().set_input_as_handled()
+			KEY_M:
+				if status != "ready":
+					_store_checkpoint()
+					_refresh_shard_picker()
+					_show("ready", "VECTOR VELOCITY", "Continue your expedition or start a new one.", "START NEW RUN")
+				get_viewport().set_input_as_handled()
 			KEY_R:
 				_new_expedition()
 				_start()
@@ -576,6 +619,10 @@ func _refresh_shard_picker() -> void:
 
 func _refresh_shop() -> void:
 	shop_label.text = "UPGRADES  •  %d sparks  •  %d attempts" % [expedition.currency, expedition.attempts]
+	var inventory: Array[String] = []
+	for id in expedition.items:
+		inventory.append(str(Expedition.ITEMS[id]["name"]) + " ×" + str(expedition.items[id]))
+	build_label.text = "BUILD: " + (", ".join(inventory) if not inventory.is_empty() else "No items") + "\nSETS: " + (", ".join(expedition.active_sets()) if not expedition.active_sets().is_empty() else "None")
 	for i in range(shop_buttons.size()):
 		var b := shop_buttons[i]
 		b.visible = i < expedition.offers.size()
@@ -585,14 +632,15 @@ func _refresh_shop() -> void:
 			var cost: int = expedition.item_cost(id)
 			b.text = "%s  /  %d sparks  —  %s" % [item["name"], cost, item["detail"]]
 			b.disabled = expedition.currency < cost
-	reroll_button.text = "REROLL  /  %d sparks" % (6 + expedition.rerolls * 3)
-	reroll_button.disabled = expedition.currency < 6 + expedition.rerolls * 3 or expedition.rerolls >= 3 or expedition.offers.is_empty()
+	reroll_button.text = "REROLL  /  %d sparks" % expedition.reroll_cost()
+	reroll_button.disabled = expedition.currency < expedition.reroll_cost() or expedition.rerolls >= 3 or expedition.offers.is_empty()
 
 func _buy_offer(index: int) -> void:
 	if status != "complete" or index >= expedition.offers.size():
 		return
 	var id: String = expedition.offers[index]
 	if expedition.buy(id):
+		_store_checkpoint()
 		lives = expedition.attempts
 		_refresh_shop()
 		_update_hud()
@@ -605,4 +653,27 @@ func _rest_choice(index: int) -> void:
 
 func _reroll_shop() -> void:
 	if status == "complete" and expedition.reroll():
+		_store_checkpoint()
 		_refresh_shop()
+
+func _store_checkpoint() -> void:
+	checkpoint_data = expedition.checkpoint()
+	_save()
+
+func _resume_checkpoint() -> void:
+	if not expedition.restore(checkpoint_data):
+		return
+	selected_shard = expedition.shard
+	ability_setting = expedition.ability
+	lives = expedition.attempts
+	_reset_stage()
+	if expedition.complete:
+		_show("shard_complete", "SHARD CLEARED", expedition.title(), "NEXT SHARD")
+	elif expedition.world_cleared:
+		_show("complete", "WORLD CLEARED", "Choose upgrades and the next route.", "NEXT WORLD")
+	elif expedition.route == 3 and not expedition.encounter_resolved:
+		_show("rest", "REST STOP", "Recover an attempt or take sparks.", "")
+	elif expedition.attempts > 0:
+		_start()
+	else:
+		_show("lost", "EXPEDITION ENDED", "No attempts remaining.", "NEW EXPEDITION")

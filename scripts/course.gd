@@ -10,6 +10,7 @@ var ridge_mesh: CylinderMesh
 var stage := 1
 var route_style := 0
 var guardian_world := false
+var biome := 0
 var spark_mesh: SphereMesh
 var spark_material: StandardMaterial3D
 var length := 2400.0
@@ -57,6 +58,7 @@ func reset(seed_value: int, stage_value: int, route_value: int = 0, guardian_val
 	stage = stage_value
 	route_style = clampi(route_value, 0, 4)
 	guardian_world = guardian_value
+	biome = clampi((stage - 1) / 5, 0, 9)
 	seed_value_saved = seed_value
 	length = 2240.0 + float(mini(stage - 1, 6)) * 160.0 + (320.0 if guardian_world else 0.0)
 	if route_style == 3 and not guardian_world:
@@ -80,16 +82,29 @@ func elevation(x: float, s: float) -> float:
 	var rolling := 3.2 * sin(s * wavelength + x * 0.012)
 	var hill_scale := 1.0 + minf(float(stage - 1) * 0.042, 0.28)
 	var route_scale := float([0.92, 1.0, 1.18, 0.78, 1.24][route_style])
-	return -s * 0.115 + (a + b + c + d + rolling) * hill_scale * lerpf(1.0, route_scale, blend)
+	var motif := 0.0
+	match biome:
+		1: motif = 6.5 * sin(s * 0.052 + x * 0.034)
+		2: motif = 8.0 * cos(x * 0.048 + sin(s * 0.014) * 2.0)
+		3: motif = 10.0 * sin(s * 0.025 + x * 0.008)
+		4: motif = 5.5 * sin(s * 0.060 + sin(x * 0.05))
+		5: motif = 7.0 * cos(s * 0.030 - x * 0.050)
+		6: motif = 6.0 * sin(s * 0.047) * cos(x * 0.045)
+		7: motif = 10.0 * cos(s * 0.018 + x * 0.025)
+		8: motif = 7.5 * sin(s * 0.044 + x * 0.050)
+		9: motif = 9.0 * cos(s * 0.027 + sin(x * 0.038))
+	# Long sections shift from flowing valleys to steeper launch ridges.
+	var section := 0.5 + 0.5 * sin(s * 0.007 + phase)
+	return -s * 0.115 + (a + b + c + d + rolling) * hill_scale * lerpf(1.0, route_scale, blend) + motif * blend * (0.55 + 0.45 * section)
 
 # Each ravine is a real rectangular hole. An alternate corridor always exists.
 func gap_rect(index: int) -> Rect2:
 	if route_style == 3 or index < 3 or posmod(index - 3, 3 if route_style in [1, 4] else 4) != 0 or float(index) * CHUNK > length - 250.0:
 		return Rect2()
-	var direction := posmod(seed_value_saved + index, 2)
+	var direction := posmod(seed_value_saved + (index - 3) / (3 if route_style in [1, 4] else 4), 2)
 	var width := 152.0 if route_style in [1, 4] else 128.0
 	var start_x := -HALF_WIDTH if direction == 0 else HALF_WIDTH - width
-	var start_s := float(index) * CHUNK + 64.0
+	var start_s := float(index) * CHUNK + (48.0 if biome % 2 == 1 else 64.0)
 	return Rect2(start_x, start_s, width, 28.0 + 4.0 * float(mini(stage - 1, 3)) + (8.0 if route_style == 4 else 0.0))
 
 func has_ground(x: float, s: float) -> bool:

@@ -187,6 +187,73 @@ func _run() -> void:
 	if not economy.reroll() or economy.currency != old_money - 6:
 		_fail("Shop reroll economy invalid.")
 		return
+	var checkpoint = expedition_rules.new()
+	checkpoint.begin(4, 443)
+	checkpoint.collect(40)
+	checkpoint.finish_world(2200.0, 32.0, 4)
+	var money: int = checkpoint.currency
+	checkpoint.finish_world(2200.0, 32.0, 4)
+	if checkpoint.currency != money:
+		_fail("Repeated world completion awarded currency twice.")
+		return
+	var snapshot: Dictionary = checkpoint.checkpoint()
+	var restored = expedition_rules.new()
+	if not restored.restore(snapshot) or restored.currency != money or not restored.world_cleared or restored.terrain_seed() != checkpoint.terrain_seed():
+		_fail("Expedition checkpoint round trip failed.")
+		return
+	if not restored.advance(4) or restored.advance(0):
+		_fail("World advancement requires a completed world.")
+		return
+	for kind in range(4):
+		restored.trial_kind = kind
+		if restored.trial_met(0, 0.0, 0, 0) or not restored.trial_met(100, 300.0, 100, 100):
+			_fail("Trial objective threshold invalid.")
+			return
+	if guard_rules.NAMES.size() != 10 or guard_rules.PROGRAMS.size() != 10:
+		_fail("Distinct guardian programs missing.")
+		return
+	if not guard_rules.pattern_hits(4, 0.0, 6.0, 0.0) or guard_rules.pattern_hits(4, 60.0, 6.0, 0.0) or not guard_rules.pattern_hits(5, 60.0, 10.0, 0.0):
+		_fail("New guardian pattern boundaries incorrect.")
+		return
+	var profiles: Array = []
+	for i in range(10):
+		if profiles.has(guard_rules.PROGRAMS[i]):
+			_fail("Guardian program duplicated.")
+			return
+		profiles.append(guard_rules.PROGRAMS[i])
+	runner.call("reset", course)
+	runner.call("apply_upgrades", {"lastchance": 1})
+	runner.position = Vector3(126.0, 0.0, -20.0)
+	runner.call("_fail_or_rescue", course)
+	if bool(runner.get("fallen")) or int(runner.get("void_rescues")) != 1:
+		_fail("Last Light did not recover from void.")
+		return
+	runner.call("_fail_or_rescue", course)
+	if not bool(runner.get("fallen")):
+		_fail("Last Light can be used more than once.")
+		return
+	# Test the scene's real state transitions with controlled finish positions,
+	# rather than claiming a full human playthrough.
+	game.call("_new_expedition")
+	game.call("_start")
+	var session = game.get("expedition")
+	for world_index in range(expedition_rules.WORLDS_PER_SHARD):
+		var length: float = course.get("length")
+		runner.position = Vector3(0.0, float(course.call("elevation", 0.0, length)) + 0.08, -length)
+		runner.set("grounded", true)
+		runner.set("fallen", false)
+		game.call("_physics_process", 1.0 / 60.0)
+		if world_index < expedition_rules.WORLDS_PER_SHARD - 1:
+			if str(game.get("status")) != "complete":
+				_fail("Scene did not reach shop after finish.")
+				return
+			game.call("_choose_route", 0)
+			if str(game.get("status")) != "running":
+				_fail("Scene did not start next world.")
+				return
+		elif str(game.get("status")) != "shard_complete" or not session.complete:
+			_fail("Scene did not finish shard.")
+			return
 	print("PASS: flow movement, slopes, landings and streaming")
 	quit(0)
 

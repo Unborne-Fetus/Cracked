@@ -49,6 +49,13 @@ var last_motion := Vector3.ZERO
 var ability := 0
 var protected_time := 0.0
 var air_charge := 0.0
+var peak_speed := 0.0
+var peak_chain := 0
+var impacts := 0
+var void_rescues := 0
+var safe_position := Vector3.ZERO
+var cooldown := 0.0
+var course_route := 0
 
 func _ready() -> void:
 	model = Node3D.new()
@@ -156,6 +163,12 @@ func reset(course: Node3D) -> void:
 	last_motion = Vector3.ZERO
 	protected_time = 0.0
 	air_charge = 0.0
+	peak_speed = START_SPEED
+	peak_chain = 0
+	impacts = 0
+	void_rescues = 0
+	cooldown = 0.0
+	course_route = int(course.get("route_style"))
 	marker_clock = 0.0
 	landing_marker.hide()
 	trail_samples.clear()
@@ -168,6 +181,7 @@ func reset(course: Node3D) -> void:
 	cue_time = 0.0
 	gait = 0.0
 	position = Vector3(0.0, float(course.call("elevation", 0.0, 0.0)) + FOOT, 0.0)
+	safe_position = position
 	model.rotation = Vector3.ZERO
 	model.scale = Vector3.ONE
 
@@ -215,8 +229,8 @@ func apply_upgrades(values: Dictionary, ability_value: int = 0) -> void:
 	ability = clampi(ability_value, 0, 3)
 
 func apply_start_bonuses() -> void:
-	speed = minf(speed_limit(), speed + float(rank_of("start")) * 8.0)
-	energy = minf(100.0, energy + float(rank_of("battery")) * 15.0)
+	speed = minf(speed_limit(), speed + float(rank_of("start")) * 8.0 + (float(rank_of("restspeed")) * 7.0 if course_route == 3 else 0.0))
+	energy = minf(100.0, energy + float(rank_of("battery")) * 15.0 + (float(rank_of("trialboost")) * 12.0 if course_route == 4 else 0.0))
 
 func speed_limit() -> float:
 	return MAX_SPEED + float(rank_of("cap")) * 15.0
@@ -231,7 +245,7 @@ func rank_of(id: String) -> int:
 	return clampi(int(upgrades.get(id, 0)), 0, 3)
 
 func boost_cost() -> float:
-	return maxf(10.0, [28.0, 32.0, 26.0, 35.0][ability] - float(rank_of("boost")) * 4.0 - float(rank_of("saver")) * 3.0)
+	return maxf(10.0, [28.0, 32.0, 26.0, 35.0][ability] - float(rank_of("boost")) * 4.0 - float(rank_of("saver")) * 3.0 - (4.0 if has_set(["charge", "boost", "saver"]) else 0.0))
 
 func flight_gravity(dive: bool, boost: float) -> float:
 	if dive:
@@ -244,10 +258,11 @@ func request_boost() -> void:
 	boost_queued = true
 
 func _activate_boost() -> bool:
-	if energy < boost_cost() or boost_time > 0.0:
+	if energy < boost_cost() or boost_time > 0.0 or cooldown > 0.0:
 		return false
 	energy -= boost_cost()
 	boost_time = float([0.65, 1.35, 0.65, 0.85][ability]) + float(rank_of("boosttime")) * 0.18
+	cooldown = boost_time + maxf(0.10, 0.5 - float(rank_of("heat")) * 0.12)
 	var initial := float([18.0, 6.0, 9.0, 14.0][ability]) + float(rank_of("boost")) * 5.0
 	if not grounded:
 		initial += float(rank_of("apex")) * 6.0
@@ -300,6 +315,7 @@ func tick(dt: float, course: Node3D) -> void:
 func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 	land_lock = maxf(0.0, land_lock - dt)
 	protected_time = maxf(0.0, protected_time - dt)
+	cooldown = maxf(0.0, cooldown - dt)
 	var old := position
 	var s := -position.z
 	var g: Vector2 = course.call("grade", position.x, s)
@@ -314,14 +330,18 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 	if grounded:
 		var next_speed := ground_speed(minf(speed, MAX_SPEED), g.y, dt)
 		var change := next_speed - minf(speed, MAX_SPEED)
-		var extra := float(rank_of("sprint")) * 1.5 * dt * (1.0 - smoothstep(50.0, 120.0, speed))
+		if change < 0.0 and g.y > 0.0:
+			change *= 1.0 - float(rank_of("coast")) * 0.13
+		var extra := float(rank_of("sprint")) * 1.5 * dt * (1.0 - smoothstep(50.0, 120.0, speed)) + float(rank_of("threshold")) * 2.0 * dt * smoothstep(80.0, 150.0, speed)
+		if has_set(["stride", "sprint", "coast"]): extra += 2.0 * dt
 		if speed < 40.0:
 			extra += float(rank_of("recoveryrun")) * 3.0 * dt
 		speed = clampf(speed + change * (1.0 + float(rank_of("stride")) * 0.08 if change > 0.0 else 1.0) + extra, 22.0, speed_limit())
 		var curve: float = course.call("curvature", position.x, s)
 		if land_lock <= 0.0 and should_launch(speed, curve, g.y):
 			grounded = false
-			vy = g.y * speed + g.x * lateral + 1.0 + float(rank_of("launch")) * 2.0
+			vy = g.y * speed + g.x * lateral + 1.0 + float(rank_of("launch")) * 2.0 + (3.0 if has_set(["glide", "launch", "wind"]) else 0.0)
+			speed = minf(speed_limit(), speed + float(rank_of("launchspeed")) * 3.0)
 			energy = minf(100.0, energy + float(rank_of("launchcharge")) * 4.0)
 			air_time = 0.0
 			land_lock = 0.075
@@ -335,6 +355,7 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 		else:
 			position = next_ground
 			position.y = float(course.call("elevation", position.x, -position.z)) + FOOT
+			safe_position = position
 			diving = false
 	if not grounded:
 		air_time += dt
@@ -347,10 +368,10 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 		var next_floor := float(course.call("elevation", next.x, -next.z)) + FOOT
 		var support: bool = course.call("has_ground", next.x, -next.z)
 		if support and not bool(course.call("has_ground", old.x, -old.z)) and next.y < next_floor - 0.5:
-			fallen = true
+			_fail_or_rescue(course)
 			return
 		if next.y < next_floor - 32.0:
-			fallen = true
+			_fail_or_rescue(course)
 			return
 		# Substeps and a bracketed crossing prevent tunneling at high speed.
 		if support and next.y <= next_floor and (land_lock <= 0.0 or vy < 0.0):
@@ -371,7 +392,7 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 			if air_time >= 0.10:
 				var landing_result := landing_speed(velocity, normal, slope.y, diving)
 				if landing_result < speed:
-					landing_result = lerpf(landing_result, speed, float(rank_of("landing")) * 0.13)
+					landing_result = lerpf(landing_result, speed, float(rank_of("landing")) * 0.13 + (0.12 if has_set(["landing", "impact", "guardian"]) else 0.0))
 				speed = landing_result
 				if quality == "PERFECT":
 					speed = minf(speed_limit(), speed + float(rank_of("perfect")) * 5.0)
@@ -380,6 +401,9 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 				last_landing = quality
 				landing_serial += 1
 				flow_chain = flow_chain + 1 if quality == "PERFECT" or quality == "GOOD" else 0
+				peak_chain = maxi(peak_chain, flow_chain)
+				if flow_chain == 1 and perfect_landings + good_landings == 0:
+					energy = minf(100.0, energy + float(rank_of("first")) * 10.0)
 				match quality:
 					"PERFECT":
 						perfect_landings += 1
@@ -400,6 +424,7 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 				cue_time = 0.7
 				landing_compression = 1.0
 			position.y = float(course.call("elevation", position.x, -position.z)) + FOOT
+			safe_position = position
 			vy = 0.0
 			landing_marker.hide()
 			grounded = true
@@ -408,9 +433,9 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 		else:
 			position = next
 	if absf(position.x) > 125.0:
-		fallen = true
-		landing_marker.hide()
+		_fail_or_rescue(course)
 		return
+	peak_speed = maxf(peak_speed, speed)
 	last_motion = position - old
 	var gained: int = course.call("collect_sparks", old, position, 3.6 + float(rank_of("magnet")) * 2.0)
 	if gained > 0:
@@ -419,6 +444,7 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 	if bool(course.call("obstacle_hit", old, position)):
 		if protected_time > 0.0:
 			return
+		impacts += 1
 		speed = maxf(22.0, speed * (0.60 + float(rank_of("impact")) * 0.10))
 		flow_chain = 0
 		cue = "MOMENTUM LOST"
@@ -427,6 +453,7 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 func apply_guardian_hit() -> void:
 	if protected_time > 0.0:
 		return
+	impacts += 1
 	speed = maxf(22.0, speed * (0.68 + float(rank_of("guardian")) * 0.08))
 	flow_chain = 0
 	cue = "GUARDIAN WAVE"
@@ -485,8 +512,8 @@ func predict_landing(course: Node3D, dive: bool) -> Dictionary:
 	var predicted_lateral := lateral
 	var steer := _steer()
 	var remaining_boost := boost_time
-	var step := 1.0 / 60.0
-	for i in range(180):
+	var step := 1.0 / 120.0
+	for i in range(360):
 		var was_boosting := remaining_boost > 0.0
 		if was_boosting:
 			forward = minf(speed_limit(), forward + boost_accel() * step)
@@ -520,3 +547,32 @@ func _update_landing_marker(course: Node3D, dive: bool) -> void:
 	var quality: String = prediction["quality"]
 	landing_mat.albedo_color = Color(0.45, 1.0, 0.70, 0.88) if quality == "PERFECT" else (Color(0.98, 0.83, 0.32, 0.85) if quality == "GOOD" or quality == "OK" else Color(1.0, 0.34, 0.34, 0.85))
 	landing_marker.show()
+
+func has_set(ids: Array) -> bool:
+	for id in ids:
+		if rank_of(str(id)) == 0:
+			return false
+	return true
+
+func _fail_or_rescue(course: Node3D) -> void:
+	if rank_of("lastchance") > 0 and void_rescues == 0:
+		# Recover on the supported side of the current gap, never rewind progress.
+		var s := -position.z
+		for x in [80.0, -80.0, 0.0]:
+			if bool(course.call("has_ground", float(x), s)):
+				position = Vector3(float(x), float(course.call("elevation", float(x), s)) + FOOT, -s)
+				speed = maxf(30.0, speed * 0.55)
+				lateral = 0.0
+				vy = 0.0
+				grounded = true
+				air_time = 0.0
+				land_lock = 0.4
+				void_rescues += 1
+				impacts += 1
+				trail_samples.clear()
+				landing_marker.hide()
+				cue = "LAST LIGHT"
+				cue_time = 0.8
+				return
+	fallen = true
+	landing_marker.hide()

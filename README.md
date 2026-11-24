@@ -24,3 +24,6 @@ Ten unlockable shards, each with three worlds and a final guardian escape challe
 
 ## Expanded gameplay
 Five worlds per shard, five route profiles, four selectable active abilities (Burst, Glide, Surge, Phase), 40 stackable items and one-time recovery choices, paid shop rerolls, and three-phase guardian challenges with four patterns. Items affect real physics, collection, economy, energy or hazard response; some stack with one another. The guardians share a pattern framework rather than ten bespoke bosses. No story or graphics expansion is required.
+
+## Gameplay depth and continuity
+52 items, four set synergies, ten distinct guardian pattern programs and six hazard types. Ten terrain motifs, alternating ravines, four optional trial objectives with performance-based rewards, build inventory, and checkpoint continuation at the start of a world or the shop. Press M to return to the title and resume the saved expedition; unbanked mid-world pickups are intentionally not persisted. The 10 guardians still use a shared procedural hazard engine. Story and art are intentionally excluded. CI exercises actual scene transitions using controlled finish positions, not a full hands-on playthrough.

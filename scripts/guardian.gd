@@ -14,7 +14,9 @@ var second_warning: MeshInstance3D
 var guardian: MeshInstance3D
 var warning_mat: StandardMaterial3D
 var cleared_clean := 0
-const NAMES := ["Rift Warden", "Sky Weaver", "Pulse Engine", "Crown of Wind"]
+const NAMES := ["Rift Warden", "Sky Weaver", "Pulse Engine", "Crown of Wind", "The Divide", "Storm Loom", "Glass Serpent", "Horizon Breaker", "Twin Echo", "Last Sentinel"]
+const PROGRAMS := [[0,1,0,2,1,4], [3,0,3,5,1,3], [2,0,2,4,2,1], [1,3,1,5,3,4], [1,2,1,4,1,5], [0,5,2,5,3,4], [3,2,3,1,5,0], [4,1,4,3,4,2], [2,5,2,0,5,1], [0,1,2,3,4,5]]
+const PATTERN_NAMES := ["LANE WAVE", "SAFE CORRIDOR", "SPLIT WAVE", "AERIAL FIELD", "LOW BARRIER", "CROSSWIND"]
 
 func _ready() -> void:
 	warning_mat = StandardMaterial3D.new()
@@ -72,15 +74,20 @@ static func pattern_hits(kind: int, x: float, height: float, center: float) -> b
 			return absf(x - center) > 24.0 and height < 6.0
 		2:
 			return (absf(x - 52.0) < 26.0 or absf(x + 52.0) < 26.0) and height < 8.0
-		_:
+		3:
 			return absf(x - center) < 34.0 and height > 7.0
+		4:
+			return absf(x - center) < 43.0 and height < 11.0
+		_:
+			return absf(x - center) > 38.0 and height > 3.0
 
 func boss_name() -> String:
 	return NAMES[posmod(shard - 1, NAMES.size())]
 
 func _plan(limit: float) -> void:
 	phase = clampi(int(next_s / maxf(1.0, limit) * 3.0), 0, 2)
-	pattern = posmod(cleared + shard - 1, mini(4, phase + 2))
+	var program: Array = PROGRAMS[clampi(shard - 1, 0, PROGRAMS.size() - 1)]
+	pattern = int(program[posmod(cleared + phase, mini(program.size(), 2 + phase * 2))])
 	lane = lane_for(cleared)
 	safe_center = lane
 
@@ -112,7 +119,7 @@ func tick(course: Node3D, runner: Node3D, old: Vector3) -> void:
 			cleared_clean += 1
 			runner.set("energy", minf(100.0, float(runner.get("energy")) + 8.0))
 		cleared += 1
-		next_s += maxf(105.0, 205.0 - float(phase) * 35.0 - float(shard - 1) * 3.0)
+		next_s += maxf(115.0, 220.0 - float(phase) * 35.0 - float(shard - 1) * 3.0 + (30.0 if pattern == 4 else 0.0))
 		_plan(limit)
 	if next_s > limit - 60.0:
 		hide()
@@ -120,7 +127,7 @@ func tick(course: Node3D, runner: Node3D, old: Vector3) -> void:
 	var distance := next_s - s
 	guardian.position = Vector3(lane * 0.65, float(course.call("elevation", lane * 0.65, s + 125.0)) + 34.0, -(s + 125.0))
 	guardian.rotation.z += 0.025
-	warning_mat.albedo_color = Color(0.70, 0.38, 1.0, 0.85) if pattern == 3 else Color(1.0, 0.34, 0.2, 0.85 if distance < 70.0 else 0.50)
+	warning_mat.albedo_color = Color(0.70, 0.38, 1.0, 0.85) if pattern in [3, 5] else Color(1.0, 0.34, 0.2, 0.85 if distance < 70.0 else 0.50)
 	second_warning.hide()
 	match pattern:
 		0:
@@ -135,6 +142,16 @@ func tick(course: Node3D, runner: Node3D, old: Vector3) -> void:
 			_place(second_warning, course, 52.0, 52.0, 0.9)
 		3:
 			_place(warning, course, lane, 68.0, 8.0)
+		4:
+			_place(warning, course, lane, 86.0, 2.0)
+		5:
+			var left := lane - 38.0
+			var right := lane + 38.0
+			_place(warning, course, (-110.0 + left) * 0.5, left + 110.0, 5.0)
+			_place(second_warning, course, (right + 110.0) * 0.5, 110.0 - right, 5.0)
 	if distance > 320.0:
 		warning.hide()
 		second_warning.hide()
+
+func instruction() -> String:
+	return PATTERN_NAMES[clampi(pattern, 0, PATTERN_NAMES.size() - 1)]

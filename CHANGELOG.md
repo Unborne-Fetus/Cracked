@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Gameplay depth and continuity
+- 52 items, four set bonuses, ten guardian programs, six patterns and ten terrain motifs.
+- Optional objective-based trials, persistent checkpoints, inventory and route explanations.
+- Void recovery item, refined flight prediction, guarded economy, and integrated shard transition tests.
+
 ## Expedition depth update
 - Five worlds, five routes, four active abilities, 40 items, shop rerolls and rest choices.
 - Three guardian phases with lane, safe corridor, split and aerial hazard patterns.
