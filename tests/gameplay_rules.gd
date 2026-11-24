@@ -9,11 +9,16 @@ func _run_tests() -> void:
 	root.add_child(game)
 	await physics_frame
 	game.set_physics_process(false)
+	game.set_process(false)
+	var map_view: Control = game.get("minimap")
+	map_view.set_process(false)
+	map_view.hide()
 	var runner: Node3D = game.get("runner")
 	var storm: Node3D = game.get("storm")
 	var course: Node3D = game.get("course")
 	course.set("showcase_layout", true)
 	game.call("_restart")
+	await process_frame
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
 		_fail("Uphill sliding must be available.")
 		return
@@ -96,6 +101,20 @@ func _run_tests() -> void:
 	if absf(float(runner.call("pad_axis", 0.1))) > 0.001 or absf(float(runner.call("pad_axis", -1.0)) + 1.0) > 0.001:
 		_fail("Controller deadzone failed.")
 		return
+	# Recenter must correct the camera without modifying gameplay state.
+	var camera: Camera3D = game.get("view_camera")
+	var before_recenter: Transform3D = runner.transform
+	var before_recenter_speed: float = runner.get("speed")
+	var before_recenter_mode: bool = game.get("first_person")
+	camera.basis = Basis(Vector3.UP, PI)
+	var center_key := InputEventKey.new()
+	center_key.pressed = true
+	center_key.keycode = KEY_G
+	game.call("_input", center_key)
+	var centered_goal: Basis = game.get("camera_goal")
+	if camera.basis.z.dot(centered_goal.z) < 0.999 or runner.transform != before_recenter or float(runner.get("speed")) != before_recenter_speed or bool(game.get("first_person")) != before_recenter_mode:
+		_fail("Camera recenter did not restore view independently of movement.")
+		return
 	# Controls must remain independent: C slides, Tab toggles camera.
 	for code in [KEY_SHIFT, KEY_CTRL, KEY_C]:
 		if not bool(runner.call("is_slide_key", code)):
@@ -158,6 +177,7 @@ func _run_tests() -> void:
 		return
 	# Flight retains its world-space orientation even when the road rolls.
 	game.call("_restart")
+	await process_frame
 	runner.set("distance", 784.0)
 	runner.set("speed", 40.0)
 	runner.call("sync_pose", course)
@@ -170,6 +190,7 @@ func _run_tests() -> void:
 			return
 	# Ground contact is immediate while the landing orientation eases in.
 	game.call("_restart")
+	await process_frame
 	runner.set("distance", 864.0)
 	runner.set("lane", 0.0)
 	runner.set("grounded", false)
@@ -197,6 +218,7 @@ func _run_tests() -> void:
 		return
 	# Head-first contact with a ceiling is blocked before the feet cross.
 	game.call("_restart")
+	await process_frame
 	var ceiling: Transform3D = course.call("surface_frame", 864.0, 0.0, 1)
 	var head_first := ceiling.basis.rotated(-ceiling.basis.z, PI)
 	runner.set("distance", 864.0)
@@ -215,6 +237,7 @@ func _run_tests() -> void:
 	# through the slab even when the local normal rotates during flight.
 	for bank_side: int in [1, -1]:
 		game.call("_restart")
+		await process_frame
 		runner.set("distance", 1010.0)
 		runner.set("lane", 0.0)
 		runner.set("speed", 90.0)
@@ -235,6 +258,7 @@ func _run_tests() -> void:
 						return
 	# A 180-bank underside is a real rideable face, not a visual duplicate.
 	game.call("_restart")
+	await process_frame
 	var underside: Transform3D = course.call("surface_frame", 864.0, 0.0, -1)
 	var topside: Transform3D = course.call("surface_frame", 864.0, 0.0, 1)
 	if underside.basis.y.dot(topside.basis.y) > -0.999 or underside.origin.distance_to(topside.origin) < 0.4:
@@ -257,6 +281,7 @@ func _run_tests() -> void:
 	# The preceding underside test streamed to chunk 4, recycling chunk 1.
 	# Reload the opening course so we actually test a loaded ramp.
 	game.call("_restart")
+	await process_frame
 	# Ramp only occupies a side lane; centre and opposite side stay flat.
 	var ramp_s := 192.0 + 99.0
 	if not bool(course.call("has_distance", ramp_s)):
@@ -268,6 +293,7 @@ func _run_tests() -> void:
 		return
 	# At takeoff the camera retains its previous offset instead of snapping.
 	game.call("_restart")
+	await process_frame
 	game.call("_update_camera", 1.0 / 60.0)
 	var previous_arm: Vector3 = game.get("camera_offset")
 	runner.call("request_jump")
@@ -279,6 +305,7 @@ func _run_tests() -> void:
 		return
 	# First-person sliding has a distinct visual cue and lowered eye height.
 	game.call("_restart")
+	await process_frame
 	game.set("first_person", true)
 	runner.set("is_sliding", true)
 	game.call("_update_camera", 1.0)
@@ -296,6 +323,7 @@ func _run_tests() -> void:
 	game.set("first_person", false)
 	# Crossing a road edge must detach instead of clamping the lane.
 	game.call("_restart")
+	await process_frame
 	runner.set("lane", float(course.call("half_width_at", 8.0)) - 0.1)
 	runner.set("touch_axis", 1.0)
 	runner.set("lateral_speed", 25.0)
@@ -316,6 +344,7 @@ func _run_tests() -> void:
 		_fail("Falling off must end the run.")
 		return
 	game.call("_restart")
+	await process_frame
 	# Roll curvature is not a launch ramp, even near the edge at high speed.
 	for s in [780.0, 810.0, 864.0, 1000.0, 1056.0, 1100.0]:
 		for edge: float in [-20.0, 20.0]:
@@ -323,6 +352,7 @@ func _run_tests() -> void:
 				_fail("High-degree banking generates false lift.")
 				return
 	game.call("_restart")
+	await process_frame
 	# Faster launches produce higher jumps, without changing forward speed.
 	var low_jump: float = runner.call("jump_impulse_for_speed", 22.0)
 	var fast_jump: float = runner.call("jump_impulse_for_speed", 80.0)
@@ -431,6 +461,7 @@ func _run_tests() -> void:
 	# Stream the new terrain showcase in order, verifying geometry and width.
 	for index in range(6, 16):
 		course.call("stream", float(index) * 192.0)
+		await process_frame
 		var kind: String = course.call("section_name", float(index) * 192.0 + 96.0)
 		var start_s := float(index) * 192.0
 		var expected: Array[String] = ["LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE"]
@@ -464,6 +495,7 @@ func _run_tests() -> void:
 	for entry_index in [16, 19]:
 		var entry_s := float(entry_index) * 192.0
 		course.call("stream", entry_s + 192.0)
+		await process_frame
 		var expected_kind := "WALL RUN" if entry_index == 16 else "CEILING RUN"
 		var held: Transform3D = course.call("sample", entry_s + 192.0)
 		for offset in range(192, 385, 12):
@@ -504,11 +536,13 @@ func _run_tests() -> void:
 				return
 	game.set("first_person", false)
 	course.call("stream", 6500.0)
+	await process_frame
 	chunks = course.get("chunks")
 	if chunks.size() > 8 or not bool(course.call("has_distance", 6700.0)) or chunks.has(0):
 		_fail("Endless streaming failed to recycle old track chunks.")
 		return
 	game.call("_restart")
+	await process_frame
 	var original_speed: float = storm.get("speed")
 	var original_s: float = storm.get("front_s")
 	storm.call("advance", 10.0)
@@ -520,6 +554,7 @@ func _run_tests() -> void:
 		_fail("Storm failure did not finish the run.")
 		return
 	game.call("_restart")
+	await process_frame
 	if bool(game.get("run_finished")) or absf(float(storm.get("speed")) - original_speed) > 0.001 or absf(float(storm.get("front_s")) - original_s) > 0.001:
 		_fail("Restart did not restore the storm.")
 		return
@@ -548,6 +583,7 @@ func _run_tests() -> void:
 		_fail("Double jump injected forward speed or failed to lift.")
 		return
 	game.call("_restart")
+	await process_frame
 	var shortcut_lane: float = course.call("shortcut_center", 0)
 	var center_hill: Transform3D = course.call("surface_frame", 145.0, 0.0, 1)
 	var side_hill: Transform3D = course.call("surface_frame", 145.0, shortcut_lane, 1)
@@ -579,6 +615,7 @@ func _run_tests() -> void:
 		_fail("High-speed banking length does not scale.")
 		return
 	course.call("stream", 384.0, 195.0)
+	await process_frame
 	var starts: Array[float] = course.get("chunk_starts")
 	# Index 7 is an S-curve generated at the higher speed.
 	if starts[8] - starts[7] < 575.0:
@@ -592,7 +629,9 @@ func _run_tests() -> void:
 		return
 	# After the showcase, a demanding sequence is followed by recovery.
 	game.call("_restart")
+	await process_frame
 	course.call("stream", 21.0 * 192.0)
+	await process_frame
 	var all_chunks: Dictionary = course.get("chunks")
 	var found_recovery := false
 	for data in all_chunks.values():
@@ -609,7 +648,9 @@ func _run_tests() -> void:
 		return
 	# Validate the actual special track surfaces and skill-based rewards.
 	game.call("_restart")
+	await process_frame
 	course.call("stream", 25.0 * 192.0)
+	await process_frame
 	var split_s := 23.0 * 192.0 + 96.0
 	var gap_s := 24.0 * 192.0 + 84.0
 	if bool(course.call("support_at", split_s, 0.0)) or not bool(course.call("support_at", split_s, -28.0)) or bool(course.call("support_at", gap_s, 32.0)) or not bool(course.call("support_at", gap_s, -32.0)):
@@ -675,19 +716,23 @@ func _run_tests() -> void:
 		return
 	game.set("mode", 1)
 	game.call("_restart")
+	await process_frame
 	var daily_seed: int = game.get("run_seed")
 	game.call("_restart")
+	await process_frame
 	if int(game.get("run_seed")) != daily_seed or not bool(course.get("fixed_daily_layout")):
 		_fail("Daily run did not preserve its deterministic course.")
 		return
 	game.set("mode", 2)
 	game.call("_restart")
+	await process_frame
 	runner.call("request_jump")
 	if bool(runner.get("queued_jump")):
 		_fail("No-jump challenge permits jumping.")
 		return
 	game.set("mode", 5)
 	game.call("_restart")
+	await process_frame
 	var storm_before_practice: float = storm.get("front_s")
 	game.call("_physics_process", 0.1)
 	if float(storm.get("front_s")) != storm_before_practice:
@@ -695,6 +740,7 @@ func _run_tests() -> void:
 		return
 	game.set("mode", 0)
 	game.call("_restart")
+	await process_frame
 	# Replay captures actual adaptive geometry and interpolated recorded
 	# motion. Playback and seeking must never run gameplay simulation.
 	var recorder = game.get("replay")
@@ -721,6 +767,7 @@ func _run_tests() -> void:
 		_fail("Replay unexpectedly runs live gameplay physics.")
 		return
 	game.call("_restart")
+	await process_frame
 	if bool(game.get("replay_active")) or bool(course.get("replay_layout")):
 		_fail("Replay exit did not restore normal generation.")
 		return
@@ -732,6 +779,7 @@ func _run_tests() -> void:
 	var first_signature := ""
 	for seed_value: int in [4731, 9127, 18304, 28419, 4731]:
 		course.call("reset_course", seed_value)
+		await process_frame
 		var recipes: Array = course.get("replay_recipes")
 		var signature := ""
 		for recipe in recipes:

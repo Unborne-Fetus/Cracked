@@ -406,6 +406,21 @@ func _lose(reason: String) -> void:
 	message_label.visible = true
 	restart_button.visible = true
 
+func _recenter_camera() -> void:
+	# Rebuild the chase arm and heading without changing camera mode,
+	# player orientation, momentum or position. In flight use the actual
+	# flight basis instead of the bank underneath the player.
+	var pose: Basis = runner.transform.basis
+	var up := pose.y
+	var forward := -pose.z
+	camera_rotation_ready = false
+	camera_height = 0.0
+	slide_eye_height = 0.85 if runner.is_grounded() and runner.is_sliding else 1.55
+	camera_offset = up * 1.55 if first_person else -forward * 9.0 + up * 4.0
+	takeoff_camera_offset = camera_offset
+	camera_was_grounded = runner.is_grounded()
+	_update_camera(1.0)
+
 func _toggle_camera() -> void:
 	if mode == 3 and not replay_active:
 		return
@@ -454,6 +469,8 @@ func _pad_button(button: int) -> bool:
 				_restart()
 			JOY_BUTTON_Y:
 				_toggle_camera()
+			JOY_BUTTON_LEFT_STICK:
+				_recenter_camera()
 			JOY_BUTTON_DPAD_LEFT:
 				_seek_replay(replay_time - 5.0)
 			JOY_BUTTON_DPAD_RIGHT:
@@ -506,6 +523,9 @@ func _pad_button(button: int) -> bool:
 				else:
 					_show_extras()
 		return true
+	if _bound_pad("recenter", button, JOY_BUTTON_LEFT_STICK):
+		_recenter_camera()
+		return true
 	if _bound_pad("camera", button, JOY_BUTTON_Y):
 		_toggle_camera()
 		return true
@@ -523,14 +543,14 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			effects.activate_audio()
-			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  START pause  ·  X retry"
+			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  L3 center  ·  START pause  ·  X retry"
 			if _pad_button(pad.button_index):
 				get_viewport().set_input_as_handled()
 		return
 	if event is InputEventJoypadMotion:
 		var motion := event as InputEventJoypadMotion
 		if absf(motion.axis_value) > 0.35:
-			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  START pause  ·  X retry"
+			controls_hint.text = "STICK steer  ·  A jump x2  ·  B / TRIGGERS slide  ·  R3 dive  ·  Y view  ·  L3 center  ·  START pause  ·  X retry"
 		if paused and (motion.axis == JOY_AXIS_LEFT_X or motion.axis == JOY_AXIS_LEFT_Y):
 			var value := signf(motion.axis_value) if absf(motion.axis_value) > 0.65 else 0.0
 			var horizontal := motion.axis == JOY_AXIS_LEFT_X
@@ -560,6 +580,8 @@ func _input(event: InputEvent) -> void:
 				_seek_replay(replay_time + 5.0)
 			KEY_TAB:
 				_toggle_camera()
+			KEY_G:
+				_recenter_camera()
 			KEY_UP:
 				_cycle_replay_speed()
 		get_viewport().set_input_as_handled()
@@ -577,7 +599,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	effects.activate_audio()
-	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  ESC pause  ·  R retry"
+	controls_hint.text = "A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  G center  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if paused and options_page.visible:
@@ -587,7 +609,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if paused:
 		return
-	if _bound_key("camera", key.keycode, KEY_TAB):
+	if _bound_key("recenter", key.keycode, KEY_G):
+		get_viewport().set_input_as_handled()
+		_recenter_camera()
+	elif _bound_key("camera", key.keycode, KEY_TAB):
 		# Consume Tab before UI focus navigation; C is exclusively slide.
 		get_viewport().set_input_as_handled()
 		_toggle_camera()
@@ -701,7 +726,7 @@ func _create_hud() -> void:
 	message_label.offset_bottom = 112
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message_label.visible = false
-	var hint := _label("A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
+	var hint := _label("A/D steer  ·  SPACE jump x2  ·  SHIFT slide  ·  F dive  ·  TAB view  ·  G center  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
 	controls_hint = hint
 	hint.anchor_top = 1.0
@@ -730,6 +755,9 @@ func _create_hud() -> void:
 	var view := _button("VIEW", -138, -20, 202, true)
 	root.add_child(view)
 	view.pressed.connect(_toggle_camera)
+	var recenter := _button("CENTER", -266, -148, 202, true)
+	root.add_child(recenter)
+	recenter.pressed.connect(_recenter_camera)
 	var dive := _button("DIVE", -266, -148, 124, true)
 	root.add_child(dive)
 	dive.button_down.connect(func() -> void: runner.touch_dive = true)
@@ -918,7 +946,7 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	cosmetic_picker.item_selected.connect(func(i: int) -> void: extras.cosmetic = i; runner.apply_cosmetic(i); extras.save_profile())
 	_add_extra(cosmetic_picker)
 	binding_picker = OptionButton.new()
-	for name_value in ["left", "right", "slide", "jump", "dive", "camera", "restart"]:
+	for name_value in ["left", "right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
 		binding_picker.add_item(name_value)
 	binding_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
 	_add_extra(binding_picker)
@@ -1075,7 +1103,7 @@ func _create_replay_panel() -> void:
 	replay_slider.value_changed.connect(func(value: float) -> void: _seek_replay(value))
 	var row := HBoxContainer.new()
 	stack.add_child(row)
-	for caption_text in ["-5 SEC", "PAUSE", "+5 SEC", "1x", "CAMERA", "EXIT"]:
+	for caption_text in ["-5 SEC", "PAUSE", "+5 SEC", "1x", "CAMERA", "CENTER", "EXIT"]:
 		var button := Button.new()
 		button.text = caption_text
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1093,9 +1121,11 @@ func _create_replay_panel() -> void:
 				button.pressed.connect(_cycle_replay_speed)
 			"CAMERA":
 				button.pressed.connect(_toggle_camera)
+			"CENTER":
+				button.pressed.connect(_recenter_camera)
 			"EXIT":
 				button.pressed.connect(_restart)
-	stack.add_child(_label("SPACE play/pause   ·   ← / → seek   ·   TAB camera   ·   ESC exit", 13, Color(0.75, 0.86, 1.0)))
+	stack.add_child(_label("SPACE play/pause   ·   ← / → seek   ·   TAB camera   ·   G center   ·   ESC exit", 13, Color(0.75, 0.86, 1.0)))
 	replay_panel.visible = false
 
 func _start_replay() -> void:

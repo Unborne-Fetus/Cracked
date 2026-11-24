@@ -13,6 +13,8 @@ An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 | Space | Jump; press again for one midair jump |
 | F (hold in air) | Dive |
 | Tab | First-person / third-person |
+| G | Recenter the current camera (remappable) |
+| L3 / left stick click | Recenter the current camera (remappable) |
 | Escape | Pause / resume; return from Options |
 | R | Restart |
 | Controller left stick / D-pad | Steer; navigate menus |
@@ -72,3 +74,5 @@ Browser releases display a readable version number, `V. 0.x`, in the game and br
 ## Development
 
 Open project.godot with Godot 4.7.2 and press F5. The Web export uses Compatibility rendering and single-threaded templates. GitHub Actions checks startup, ground contact, bank orientation, continuous track colors, shape variety, track seams, endless chunk recycling, momentum, obstacle and storm rules before deploying a unique versioned browser build to GitHub Pages.
+
+CI caches the deterministic soundtrack, frees recycled track meshes between regression-test phases, and sets bounded test/deployment timeouts. A pending commit status links to the running build from the beginning of the job.

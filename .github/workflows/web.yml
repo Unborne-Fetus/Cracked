@@ -15,11 +15,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     permissions:
       contents: read
       pages: read
       statuses: write
     steps:
+      - name: Report build started
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=pending -f context=cracked/godot-build \
+            -f description="Build and tests running" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Godot and matching export templates
@@ -36,7 +45,15 @@ jobs:
           find "${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates" -maxdepth 2 -type f -name 'web*zip' -print 2>/dev/null || true
           echo "Web export preset:"
           grep -E '^(name=|platform=|variant/thread_support=|vram_texture_compression/for_mobile=)' export_presets.cfg
+      - name: Restore generated soundtrack cache
+        id: audio-cache
+        uses: actions/cache@v4
+        with:
+          path: audio/generated/
+          key: velocity-soundtrack-v1-${{ runner.os }}-${{ hashFiles('tools/render_soundtrack.py') }}
       - name: Render original racing soundtrack
+        if: steps.audio-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
@@ -66,14 +83,16 @@ jobs:
             exit 1
           fi
       - name: Verify the player lands on the collision mesh
+        timeout-minutes: 2
         run: |
           set -euo pipefail
-          godot --headless --path . --script res://tests/ground_contact.gd 2>&1 | tee /tmp/godot-collision.log
+          timeout --signal=TERM --kill-after=10s 90s godot --headless --path . --script res://tests/ground_contact.gd 2>&1 | tee /tmp/godot-collision.log
           grep -F 'PASS: terrain raycast hit and player grounded' /tmp/godot-collision.log
       - name: Verify sliding, obstacles, and storm rules
+        timeout-minutes: 5
         run: |
           set -euo pipefail
-          godot --headless --path . --script res://tests/gameplay_rules.gd 2>&1 | tee /tmp/godot-gameplay.log
+          timeout --signal=TERM --kill-after=10s 270s godot --headless --path . --script res://tests/gameplay_rules.gd 2>&1 | tee /tmp/godot-gameplay.log
           grep -F 'PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm' /tmp/godot-gameplay.log
       - name: Export HTML5 with a unique release path
         env:
@@ -194,6 +213,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pages: write
       id-token: write
