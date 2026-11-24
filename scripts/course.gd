@@ -325,7 +325,9 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		if not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0:
 			# Try different obstacle-free downhill profiles before falling
 			# back to a recovery run; avoid making every rejected section identical.
-			var alternatives: Array[String] = ["LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"] if not showcase_layout else []
+			var alternatives: Array[String] = []
+			if not showcase_layout:
+				alternatives.assign(["LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"])
 			while not alternatives.is_empty():
 				var pick := rng.randi_range(0, alternatives.size() - 1)
 				var alternate := alternatives[pick]
@@ -947,12 +949,12 @@ func stream(distance: float, planned_speed: float = 22.0) -> void:
 	if next_index > 0 and (distance >= chunk_starts[-1] or next_index <= chunk_index_at(distance) + AHEAD):
 		_refresh_forecast()
 	while next_index == 0 or distance >= chunk_starts[-1]:
-		_build_chunk(next_index, planned_speed)
-		next_index += 1
+		if not _append_stream_chunk(planned_speed):
+			return
 	var current := chunk_index_at(distance)
 	while next_index <= current + AHEAD:
-		_build_chunk(next_index, planned_speed)
-		next_index += 1
+		if not _append_stream_chunk(planned_speed):
+			return
 	for key in chunks.keys():
 		if int(key) < current - BEHIND:
 			var node: Node3D = chunks[key]["node"]
@@ -968,6 +970,17 @@ func stream(distance: float, planned_speed: float = 22.0) -> void:
 			node.position -= shift
 		tail -= shift
 		origin_shift += shift
+
+func _append_stream_chunk(planned_speed: float) -> bool:
+	# If generation aborts on a runtime error, don't advance the index
+	# or spin forever trying to stream a nonexistent section.
+	var previous_end := chunk_starts[-1]
+	_build_chunk(next_index, planned_speed)
+	if chunk_starts.size() != next_index + 2 or chunk_starts[-1] <= previous_end or not chunks.has(next_index):
+		push_error("Track generation failed at chunk %d" % next_index)
+		return false
+	next_index += 1
+	return true
 
 func has_distance(distance: float) -> bool:
 	return distance < chunk_starts[-1] and chunks.has(chunk_index_at(distance))
