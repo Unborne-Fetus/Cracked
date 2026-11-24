@@ -8,6 +8,7 @@ var vibration_enabled := true
 var speed := 0.0
 var paused := false
 var audio: AudioStreamPlayer
+var intensity_audio: AudioStreamPlayer
 var browser_music_configured := false
 var previous_music_enabled := true
 var previous_adaptive_music := true
@@ -105,6 +106,7 @@ func set_paused(value: bool) -> void:
 		JavaScriptBridge.eval("window.velocityMusic?.setPaused(" + ("true" if value else "false") + ")", true)
 	elif is_instance_valid(audio) and audio.stream_paused != value:
 		audio.stream_paused = value
+		if is_instance_valid(intensity_audio): intensity_audio.stream_paused=value
 
 func configure_music() -> void:
 	if OS.has_feature("web"):
@@ -138,6 +140,17 @@ func activate_audio() -> void:
 	audio.volume_db = linear_to_db(maxf(0.0001, soundtrack_gain(music_enabled, adaptive_music, speed)))
 	audio.stream_paused = paused
 	add_child(audio)
+	var layer_path: String="res://audio/generated/soundtrack_intensity.ogg"
+	if ResourceLoader.exists(layer_path):
+		var layer:=load(layer_path) as AudioStreamOggVorbis
+		if layer!=null:
+			layer.loop=true
+			intensity_audio=AudioStreamPlayer.new()
+			intensity_audio.stream=layer
+			intensity_audio.volume_db=-80.0
+			add_child(intensity_audio)
+			intensity_audio.play()
+			intensity_audio.stream_paused=paused
 	audio.play()
 
 func update_run(v: float, hit: bool, landing: bool) -> void:
@@ -158,3 +171,6 @@ func _process(delta: float) -> void:
 		var gain := soundtrack_gain(music_enabled, adaptive_music, speed)
 		var target_db := linear_to_db(maxf(0.0001, gain))
 		audio.volume_db = lerpf(audio.volume_db, target_db, 1.0 - exp(-delta * 3.0))
+		if is_instance_valid(intensity_audio):
+			var layer_gain:=gain*(smoothstep(35.0,170.0,speed) if adaptive_music else 0.55)
+			intensity_audio.volume_db=lerpf(intensity_audio.volume_db,linear_to_db(maxf(0.0001,layer_gain)),1.0-exp(-delta*3.0))

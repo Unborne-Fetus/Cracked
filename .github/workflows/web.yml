@@ -68,6 +68,7 @@ jobs:
             /tmp/velocity-audio-venv/bin/python tools/render_soundtrack.py
           fi
           test -s audio/generated/soundtrack.ogg
+          test -s audio/generated/soundtrack_intensity.ogg
       - name: Import and validate project
         run: |
           set -euo pipefail
@@ -115,7 +116,9 @@ jobs:
           test -s "$RELEASE_DIR/index.pck"
           cp web/music.js "$RELEASE_DIR/music.js"
           cp audio/generated/soundtrack.ogg "$RELEASE_DIR/soundtrack.ogg"
+          cp audio/generated/soundtrack_intensity.ogg "$RELEASE_DIR/soundtrack_intensity.ogg"
           test -s "$RELEASE_DIR/soundtrack.ogg"
+          test -s "$RELEASE_DIR/soundtrack_intensity.ogg"
           # Keep the public address stable. A full-viewport iframe loads
           # the uniquely versioned engine files without redirecting the tab.
           cat > build/web/index.html <<EOF

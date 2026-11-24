@@ -1354,6 +1354,25 @@ func _run_tests() -> void:
 			if not (loop_model.get("lightcycle") as Node3D).visible or (loop_model.get("treads") as Node3D).visible or (loop_model.get("gyro") as Node3D).visible:
 				_fail("Loop changed the motorcycle to another vehicle.")
 				return
+	# Consecutive camera samples, not just independent crown snapshots.
+	game.set("camera_arm_ready",false)
+	game.set("loop_camera_ready",false)
+	var previous_loop_right:=Vector3.ZERO
+	for camera_step in range(181):
+		var camera_at:=fixture_length*(1.20+0.60*float(camera_step)/180.0)
+		runner.set("distance",camera_at)
+		runner.set("lane",-32.0)
+		runner.set("grounded",true)
+		runner.set("surface_side",1)
+		runner.call("sync_pose",course)
+		game.call("_update_camera",1.0/60.0)
+		if sprite_camera.position.distance_to(runner.position)<8.0:
+			_fail("Loop camera collapsed during continuous traversal.")
+			return
+		if camera_step>0 and sprite_camera.basis.x.dot(previous_loop_right)<0.0:
+			_fail("Loop camera rolled discontinuously.")
+			return
+		previous_loop_right=sprite_camera.basis.x
 	# A player flying parallel to the entrance must not snap onto the loop.
 	var air_at:=fixture_length*1.20
 	var air_face: Transform3D=course.call("surface_frame",air_at,-32.0,1)

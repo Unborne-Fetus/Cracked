@@ -1,5 +1,9 @@
 # Vector Velocity changelog
 
+## Smooth loop chase and adaptive rock
+- Continuous loop-relative chase arm, obstruction-aware selection, stable roll axis and exit hysteresis.
+- Original hard-rock score with synchronized adaptive stems; browser-local audio picker with speed-dependent filter and gain.
+
 ## Distant mountains, motorcycle freefall and loop flight
 - Move the background ring five times farther from the rider and extend the camera horizon.
 - Add freefall pitch, suspension and articulated body poses, including replay.

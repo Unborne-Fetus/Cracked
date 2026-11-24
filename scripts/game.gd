@@ -93,6 +93,10 @@ var orbit_visual_pitch := 0.0
 var orbit_visual_zoom := 1.0
 var last_camera_fp := false
 var camera_arm_ready := false
+var loop_camera_hold := 0.0
+var loop_camera_ready := false
+var loop_camera_arm := Vector3(0,5.5,12.0)
+var loop_camera_frame := Basis.IDENTITY
 const CAMERA_RESPONSE := 5.8
 const CAMERA_ARM_RESPONSE := 6.5
 var camera_goal := Basis.IDENTITY
@@ -171,6 +175,8 @@ func _restart() -> void:
 	orbit_visual_pitch = 0.0
 	orbit_visual_zoom = 1.0
 	camera_arm_ready = false
+	loop_camera_ready=false
+	loop_camera_hold=0.0
 	orbit_drag = false
 	camera_height = 0.0
 	slide_eye_height = 1.55
@@ -336,7 +342,9 @@ func _update_camera(delta: float) -> void:
 	var forward: Vector3 = -frame.basis.z
 	var pos: Vector3 = runner.position
 	var actively_sliding: bool = runner.is_grounded() and runner.is_sliding
-	var loop_view: bool = not first_person and (course.near_loop(player_s,24.0) or course.loop_world_near(pos,pos,15.0))
+	var near_loop: bool=course.near_loop(player_s,32.0) or course.loop_world_near(pos,pos,22.0)
+	loop_camera_hold=0.45 if near_loop else maxf(0.0,loop_camera_hold-delta)
+	var loop_view: bool=not first_person and loop_camera_hold>0.0
 	runner.set_first_person(first_person)
 	var mode_changed := last_camera_fp != first_person
 	last_camera_fp = first_person
@@ -345,6 +353,10 @@ func _update_camera(delta: float) -> void:
 	orbit_visual_pitch = lerpf(orbit_visual_pitch,orbit_pitch,orbit_alpha)
 	orbit_visual_zoom = lerpf(orbit_visual_zoom,orbit_zoom,orbit_alpha)
 	slide_eye_height = lerpf(slide_eye_height, 0.85 if actively_sliding else 1.55, 1.0 - exp(-delta * 10.0))
+	if loop_view:
+		_update_loop_chase(delta,pos,frame,player_s,mode_changed)
+		return
+	loop_camera_ready=false
 	# Camera stays on the correct side of the road; only orientation and
 	# the additional chase height are damped, never the bank-relative base.
 	camera_height = lerpf(camera_height,0.0 if runner.is_grounded() else clampf(float(runner.height)*float(runner.surface_side),0.0,2.0),1.0-exp(-delta*4.0))
@@ -375,8 +387,6 @@ func _update_camera(delta: float) -> void:
 		var gyro_view:=smoothstep(0.50,0.90,absf(frame.basis.x.y))*(1.0-float(runner.rider_inverted))
 		view_camera.position=pos+up*lerpf(hang_eye,1.22,gyro_view)+forward*lerpf(0.68,1.15,gyro_view)
 		_aim_camera(view_camera.position+(forward-up*0.34)*25.0,up)
-	elif loop_view:
-		_place_loop_camera(pos,frame,player_s,player_lane)
 	else:
 		var focus := pos + up * 1.35
 		# Sample the track AT the camera's trailing distance. Using the
@@ -456,26 +466,12 @@ func _update_camera(delta: float) -> void:
 			camera_projection=course.project_position(view_camera.position,player_s)
 			camera_track_clearance=float(course.surface_clearance(camera_projection.x,camera_projection.y,camera_projection.z,int(runner.surface_side)))
 		camera_track_s=camera_projection.x
-	if loop_view:
-		# Orbit may shorten an arm; never let it collapse into the rider.
-		if view_camera.position.distance_to(pos)<8.0 or not _camera_line_clear(view_camera.position,pos+up*1.35,camera_track_s,player_s):
-			_place_loop_camera(pos,frame,player_s,player_lane)
-		var loop_projection: Vector3=course.project_position(view_camera.position,camera_track_s)
-		camera_track_clearance=float(course.surface_clearance(loop_projection.x,loop_projection.y,loop_projection.z,int(runner.surface_side)))
-		# The mesh ray, not the signed gap of a distant branch, establishes
-		# clearance here. Keep diagnostics meaningful on loop surfaces.
-		if camera_track_clearance<1.05 and _camera_line_clear(view_camera.position,pos+up*1.35,camera_track_s,player_s):
-			camera_track_clearance=1.30
-		var exact_look: Vector3=(pos+up*1.35-view_camera.position).normalized()
-		if exact_look.length_squared()>0.01:
-			var camera_up:=Vector3.UP if absf(exact_look.dot(Vector3.UP))<0.985 else frame.basis.x
-			camera_goal=Basis.looking_at(exact_look,camera_up)
 	camera_offset = view_camera.position - pos
 	camera_was_grounded = runner.is_grounded()
 	# Quaternion interpolation avoids Euler flips near 180/360 degrees.
 	# A short time constant removes sudden orientation kicks without a
 	# long lag that would point the camera back through the ribbon.
-	if not camera_rotation_ready or loop_view:
+	if not camera_rotation_ready:
 		view_camera.basis = camera_goal
 		camera_rotation_ready = true
 	else:
@@ -1116,6 +1112,13 @@ func _create_settings_pages(pages: VBoxContainer) -> void:
 	audio_toggle.text = "Adaptive soundtrack"
 	audio_toggle.toggled.connect(func(v: bool) -> void: extras.music = v; effects.adaptive_music = v; effects.configure_music(); extras.save_profile(); effects.activate_audio())
 	_add_option(audio_toggle)
+	if OS.has_feature("web"):
+		var local_music:=_menu_button("USE LOCAL MUSIC FILE")
+		local_music.pressed.connect(func() -> void: JavaScriptBridge.eval("window.velocityMusic?.chooseLocal()",true))
+		_add_option(local_music)
+		var original_music:=_menu_button("RESTORE ORIGINAL ROCK SCORE")
+		original_music.pressed.connect(func() -> void: JavaScriptBridge.eval("window.velocityMusic?.restoreOriginal()",true))
+		_add_option(original_music)
 	trails_toggle = CheckButton.new()
 	trails_toggle.text = "Rider speed trail"
 	trails_toggle.toggled.connect(func(v: bool) -> void: extras.trails = v; effects.set_trails_enabled(v); extras.save_profile())
@@ -1469,37 +1472,71 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 		camera_offset = Vector3.ZERO
 		_update_camera(1.0)
 
-func _place_loop_camera(pos: Vector3, frame: Transform3D, player_s: float, player_lane: float) -> void:
-	var up:=frame.basis.y
-	var forward: Vector3=-frame.basis.z
-	var focus:=pos+up*1.35
-	var metric: float=course.loop_metric(player_s,player_lane) if course.section_name(player_s)=="LOOP ROUTE" else 1.0
-	# Keep a 10–14m physical trailing arm even where route parameter
-	# distance differs radically from real distance.
-	for back: float in [12.0,10.0,14.0]:
-		var s:=maxf(0.0,player_s-back/maxf(0.35,metric))
-		var rear: Transform3D=course.surface_frame(s,player_lane,int(runner.surface_side))
-		for lift: float in [5.5,8.0,11.0]:
-			for lateral: float in [0.0,-3.5,3.5]:
-				var candidate:=rear.origin+rear.basis.y*lift+rear.basis.x*lateral
-				if candidate.distance_to(pos)<8.0:
-					continue
-				if _camera_line_clear(candidate,focus,s,player_s):
-					view_camera.position=candidate
-					camera_track_s=s
-					_aim_camera(focus+forward*0.55,up)
-					return
-	# Local elevated chase positions preserve third person even if the
-	# trailing surface frame is on the other arm of the loop.
-	for lift: float in [7.0,10.0,14.0]:
-		for side: float in [0.0,-7.0,7.0]:
-			var candidate:=pos-forward*10.0+up*lift+frame.basis.x*side
-			if _camera_line_clear(candidate,focus,player_s,player_s):
-				view_camera.position=candidate
-				camera_track_s=player_s
-				_aim_camera(focus,up)
-				return
-	# Last resort stays well clear of the rider, never a first-person arm.
-	view_camera.position=pos+up*12.0-forward*6.0
+# Follow a single relative chase arm continuously, rather than jumping
+# to the first valid candidate on each update. Local coordinates remain
+# continuous through the crown and origin rebases.
+func _loop_camera_clear(candidate: Vector3, focus: Vector3, pos: Vector3) -> bool:
+	if candidate.distance_to(pos)<8.0:
+		return false
+	return course.loop_mesh_sweep(candidate,focus,true).is_empty() and course.loop_mesh_sweep(focus,candidate,true).is_empty()
+
+func _update_loop_chase(delta: float, pos: Vector3, frame: Transform3D, player_s: float, mode_changed: bool) -> void:
+	var target_basis: Basis=frame.basis if runner.is_grounded() else runner.transform.basis
+	target_basis=target_basis.orthonormalized()
+	var reset:=not loop_camera_ready or not camera_arm_ready or mode_changed or delta>0.25
+	if reset:
+		loop_camera_frame=target_basis
+		loop_camera_arm=Vector3(0,5.5,12.0)
+		if camera_arm_ready and not mode_changed and delta<=0.25 and camera_offset.length()>=8.0:
+			loop_camera_arm=target_basis.inverse()*camera_offset
+	else:
+		# Filter the orientation separately from the player's translation.
+		loop_camera_frame=loop_camera_frame.slerp(target_basis,1.0-exp(-delta*11.0)).orthonormalized()
+	var focus:=pos+target_basis.y*1.35
+	var elevation:=clampf(atan2(5.5,12.0)+orbit_visual_pitch,-0.65,1.2)
+	var azimuth:=Vector3.BACK.rotated(Vector3.UP,orbit_visual_yaw)
+	var ideal: Vector3=(azimuth*cos(elevation)+Vector3.UP*sin(elevation))*clampf(13.2*orbit_visual_zoom,10.0,26.0)
+	var eased:=loop_camera_arm.lerp(ideal,1.0-exp(-delta*5.5))
+	var candidate:=pos+loop_camera_frame*eased
+	if not _loop_camera_clear(candidate,focus,pos):
+		# Retain the previous local arm if the preferred path is blocked;
+		# score alternatives by continuity, not arbitrary search order.
+		var best_cost:=INF
+		var best:=Vector3.ZERO
+		for arm: Vector3 in [loop_camera_arm,ideal,ideal+Vector3(0,4,0),ideal+Vector3(-5,3,0),ideal+Vector3(5,3,0),Vector3(0,10,10),Vector3(-9,7,7),Vector3(9,7,7),Vector3(0,14,6),Vector3(-13,5,4),Vector3(13,5,4)]:
+			var world_candidate:=pos+loop_camera_frame*arm
+			if not _loop_camera_clear(world_candidate,focus,pos):
+				continue
+			var cost:=arm.distance_squared_to(eased)+0.4*arm.distance_squared_to(ideal)
+			if cost<best_cost:
+				best_cost=cost
+				best=arm
+		if is_finite(best_cost):
+			eased=best
+		else:
+			# Retain a full third-person arm even if the mesh occludes it.
+			eased=Vector3(0,12,8)
+		candidate=pos+loop_camera_frame*eased
+	loop_camera_arm=eased
+	loop_camera_ready=true
+	view_camera.position=candidate
 	camera_track_s=player_s
-	_aim_camera(focus,up)
+	# Use the loop's lateral axis as the stable roll reference. Unlike
+	# world-up look_at this never flips 180 degrees near a vertical view.
+	var look: Vector3=(focus-candidate).normalized()
+	var right: Vector3=loop_camera_frame.x.slide(look).normalized()
+	if right.length_squared()<0.01:
+		right=view_camera.basis.x.slide(look).normalized()
+	if right.length_squared()<0.01:
+		right=Vector3.UP.cross(look).normalized()
+	if right.length_squared()<0.01:
+		right=Vector3.RIGHT
+	camera_goal=Basis(right,right.cross(look).normalized(),-look).orthonormalized()
+	view_camera.basis=camera_goal
+	camera_rotation_ready=true
+	camera_arm_ready=true
+	camera_offset=candidate-pos
+	camera_was_grounded=runner.is_grounded()
+	camera_track_clearance=1.30 if _loop_camera_clear(candidate,focus,pos) else 0.0
+	view_camera.fov=lerpf(view_camera.fov,clampf(78.0+runner.speed*0.045,78.0,98.0),1.0-exp(-delta*3.0))
+	runner.update_rider_sprite(view_camera,1.0 if replay_active else delta)
