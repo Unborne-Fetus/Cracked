@@ -67,6 +67,10 @@ var world_cleared := false
 var trial_kind := 0
 var trial_success := false
 var best_chain := 0
+var endless := false
+var difficulty := 1
+const DIFFICULTIES := ["Flow", "Standard", "Expert"]
+const DIFFICULTY_DETAILS := ["Slower collapse • 5 attempts", "Balanced collapse • 3 attempts", "Faster collapse • 1 attempt"]
 const TRIAL_NAMES := ["Precision trial", "Velocity trial", "Spark trial", "Flow trial"]
 const ROUTE_DETAILS := ["Gentler hills and ordinary rewards", "Wide ravines and narrow bypasses", "Steeper hills and longer flights", "Short course + one recovery choice", "Harder course + optional bonus objective"]
 var shard := 1
@@ -82,8 +86,10 @@ var complete := false
 var total_distance := 0.0
 var total_time := 0.0
 
-func begin(shard_value: int, seed_input: int) -> void:
+func begin(shard_value: int, seed_input: int, difficulty_value: int = 1, endless_value: bool = false) -> void:
 	shard = clampi(shard_value, 1, SHARD_COUNT)
+	endless = endless_value
+	difficulty = clampi(difficulty_value, 0, 2)
 	world = 1
 	route = 0
 	seed_value = seed_input
@@ -91,7 +97,7 @@ func begin(shard_value: int, seed_input: int) -> void:
 	pending_currency = 0
 	items.clear()
 	offers.clear()
-	attempts = 3
+	attempts = 1 if endless else int([5, 3, 1][difficulty])
 	complete = false
 	total_distance = 0.0
 	total_time = 0.0
@@ -107,7 +113,7 @@ func terrain_seed() -> int:
 	return seed_value + shard * 7919 + world * 104729 + route * 15485863
 
 func guardian() -> bool:
-	return world == WORLDS_PER_SHARD
+	return not endless and world == WORLDS_PER_SHARD
 
 func collect(amount: int) -> void:
 	pending_currency += maxi(0, amount)
@@ -132,6 +138,9 @@ func finish_world(distance: float, time: float, perfect: int, energy: float = 0.
 	total_distance += distance
 	total_time += time
 	offers.clear()
+	if endless:
+		currency = 0
+		return
 	if guardian():
 		complete = true
 		return
@@ -174,10 +183,10 @@ func buy(id: String) -> bool:
 	return true
 
 func advance(choice: int) -> bool:
-	if complete or not world_cleared or world >= WORLDS_PER_SHARD:
+	if complete or not world_cleared or (not endless and world >= WORLDS_PER_SHARD):
 		return false
 	world += 1
-	route = clampi(choice, 0, ROUTES.size() - 1)
+	route = posmod(terrain_seed() + world, 3) if endless else clampi(choice, 0, ROUTES.size() - 1)
 	encounter_resolved = false
 	world_cleared = false
 	trial_success = false
@@ -186,7 +195,7 @@ func advance(choice: int) -> bool:
 	return true
 
 func title() -> String:
-	return "SHARD %02d  /  %s" % [shard, SHARD_NAMES[shard - 1]]
+	return "ENDLESS  /  WORLD %d" % world if endless else "SHARD %02d  /  %s" % [shard, SHARD_NAMES[shard - 1]]
 
 func rank_of(id: String) -> int:
 	return clampi(int(items.get(id, 0)), 0, 3)
@@ -233,16 +242,17 @@ func trial_text() -> String:
 	return "%s  /  %d %s" % [TRIAL_NAMES[trial_kind], trial_target(), unit]
 
 func checkpoint() -> Dictionary:
-	return {"version": 1, "shard": shard, "world": world, "route": route, "seed": seed_value, "currency": currency, "items": items.duplicate(), "offers": offers.duplicate(), "attempts": attempts, "complete": complete, "distance": total_distance, "time": total_time, "ability": ability, "encounter": encounter_resolved, "rerolls": rerolls, "cleared": world_cleared, "trial": trial_kind, "trial_success": trial_success, "chain": best_chain}
+	return {"version": 1, "shard": shard, "world": world, "route": route, "seed": seed_value, "currency": currency, "items": items.duplicate(), "offers": offers.duplicate(), "attempts": attempts, "complete": complete, "distance": total_distance, "time": total_time, "ability": ability, "encounter": encounter_resolved, "rerolls": rerolls, "cleared": world_cleared, "trial": trial_kind, "trial_success": trial_success, "chain": best_chain, "endless": endless, "difficulty": difficulty}
 
 func restore(data: Dictionary) -> bool:
 	if int(data.get("version", 0)) != 1:
 		return false
 	var sh := int(data.get("shard", 0))
 	var wo := int(data.get("world", 0))
-	if sh < 1 or sh > SHARD_COUNT or wo < 1 or wo > WORLDS_PER_SHARD:
+	var is_endless := bool(data.get("endless", false))
+	if sh < 1 or sh > SHARD_COUNT or wo < 1 or wo > (1000000 if is_endless else WORLDS_PER_SHARD):
 		return false
-	begin(sh, int(data.get("seed", 0)))
+	begin(sh, int(data.get("seed", 0)), int(data.get("difficulty", 1)), is_endless)
 	world = wo
 	route = clampi(int(data.get("route", 0)), 0, ROUTES.size() - 1)
 	currency = maxi(0, int(data.get("currency", 0)))
@@ -282,3 +292,9 @@ func active_sets() -> Array[String]:
 	if set_bonus(["charge", "boost", "saver"]): names.append("DYNAMO")
 	if set_bonus(["landing", "impact", "guardian"]): names.append("RESILIENT")
 	return names
+
+func storm_factor() -> float:
+	return float([0.76, 1.0, 1.16][difficulty])
+
+func stage_index() -> int:
+	return 1 + posmod(world - 1, 50) if endless else (shard - 1) * WORLDS_PER_SHARD + world

@@ -335,7 +335,7 @@ func safe_lane(gap: Rect2) -> float:
 
 # A smoothly approaching route, visible through pickups and used by tests.
 func guide_x(s: float) -> float:
-	var gap := next_gap(s - 55.0, 480.0)
+	var gap := next_gap(s - 115.0, 540.0)
 	if not gap.has_area():
 		return 0.0
 	var approach := smoothstep(gap.position.y - 300.0, gap.position.y - 65.0, s)

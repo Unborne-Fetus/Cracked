@@ -28,6 +28,11 @@ var paused_from := "running"
 var navigation_label: Label
 var title_button: Button
 var guidance_enabled := true
+var endless_unlocked := false
+var endless_setting := false
+var difficulty_setting := 1
+var difficulty_picker: OptionButton
+var endless_best := 0.0
 var course: Node3D
 var runner: Node3D
 var camera: Camera3D
@@ -122,6 +127,9 @@ func _ready() -> void:
 		best = float(config.get_value("record", "distance", 0.0))
 		music_enabled = bool(config.get_value("options", "music", true))
 		unlocked_shard = clampi(int(config.get_value("campaign", "unlocked", 1)), 1, Expedition.SHARD_COUNT)
+		endless_unlocked = bool(config.get_value("campaign", "endless_unlocked", false))
+		endless_best = float(config.get_value("record", "endless", 0.0))
+		difficulty_setting = clampi(int(config.get_value("options", "difficulty", 1)), 0, 2)
 		var stored: Variant = config.get_value("campaign", "checkpoint", {})
 		if stored is Dictionary:
 			checkpoint_data = stored
@@ -155,9 +163,9 @@ func _make_gate() -> void:
 func _reset_stage() -> void:
 	elapsed = 0.0
 	storm_s = -130.0
-	stage = (expedition.shard - 1) * Expedition.WORLDS_PER_SHARD + expedition.world
+	stage = expedition.stage_index()
 	lives = expedition.attempts
-	storm_speed = 17.0 + float(mini(stage - 1, 16)) * 0.65 + (3.0 if expedition.guardian() else 0.0)
+	storm_speed = (17.0 + float(mini((expedition.world - 1) if expedition.endless else (stage - 1), 24)) * 0.65 + (3.0 if expedition.guardian() else 0.0)) * expedition.storm_factor()
 	caught = 0.0
 	course.call("reset", expedition.terrain_seed(), stage, expedition.route, expedition.guardian())
 	runner.call("reset", course)
@@ -185,6 +193,9 @@ func _save() -> void:
 	var config := ConfigFile.new()
 	config.set_value("record", "distance", best)
 	config.set_value("campaign", "unlocked", unlocked_shard)
+	config.set_value("campaign", "endless_unlocked", endless_unlocked)
+	config.set_value("record", "endless", endless_best)
+	config.set_value("options", "difficulty", difficulty_setting)
 	config.set_value("campaign", "checkpoint", checkpoint_data)
 	config.set_value("options", "music", music_enabled)
 	config.save("user://velocity_flow.cfg")
@@ -239,32 +250,52 @@ func _physics_process(delta: float) -> void:
 		last_collected = new_collected
 	var s: float = runner.call("progress")
 	course.call("stream", s)
-	storm_speed += delta * (0.52 + 0.008 * elapsed) * (1.0 - float(expedition.rank_of("storm")) * 0.10)
+	storm_speed += delta * (0.52 + 0.008 * elapsed) * (1.0 - float(expedition.rank_of("storm")) * 0.10) * expedition.storm_factor()
 	course.call("collapse_behind", storm_s)
 	storm_s += storm_speed * delta
 	collapse.position = Vector3(0.0, float(course.call("elevation", 0.0, storm_s)) + 25.0, -storm_s)
 	caught = caught + delta if storm_s >= s else 0.0
 	if bool(runner.get("fallen")) or caught > 0.35:
-		best = maxf(best, s)
-		_save()
+		if not expedition.endless:
+			best = maxf(best, s)
+			_save()
 		expedition.fail_world()
+		if expedition.endless:
+			endless_best = maxf(endless_best, expedition.total_distance + maxf(0.0, s))
+			_store_checkpoint()
+			lives = 0
+			_show("lost", "ENDLESS RUN ENDED", "%.0f m  •  %d worlds cleared" % [expedition.total_distance + maxf(0.0, s), expedition.world - 1], "TRY AGAIN")
+			return
 		_store_checkpoint()
 		lives = expedition.attempts
 		var reason := "The collapse caught you." if caught > 0.35 else "You left the world."
 		_show("lost", "WORLD LOST", reason + ("  •  %d attempts left" % lives if lives > 0 else "  •  Expedition ended"), "TRY AGAIN" if lives > 0 else "NEW EXPEDITION")
 	elif s >= float(course.get("length")):
-		best = maxf(best, s)
-		_save()
+		if not expedition.endless:
+			best = maxf(best, s)
+			_save()
 		var pace := float(course.get("length")) / maxf(elapsed, 0.01)
 		var rank := "S" if pace >= 90.0 else ("A" if pace >= 65.0 else ("B" if pace >= 46.0 else "C"))
 		if int(runner.get("impacts")) == 0:
 			expedition.collect(expedition.rank_of("purity") * 8)
 		expedition.finish_world(float(course.get("length")), elapsed, int(runner.get("perfect_landings")), float(runner.get("energy")), float(runner.get("peak_speed")), int(runner.get("peak_chain")))
+		if expedition.endless:
+			endless_best = maxf(endless_best, expedition.total_distance)
+			var carry_speed: float = minf(95.0, float(runner.get("speed")))
+			var carry_energy: float = runner.get("energy")
+			expedition.advance(0)
+			_reset_stage()
+			runner.set("speed", maxf(float(runner.get("speed")), carry_speed))
+			runner.set("energy", maxf(float(runner.get("energy")), carry_energy))
+			_store_checkpoint()
+			return
 		_store_checkpoint()
 		if expedition.complete:
 			unlocked_shard = maxi(unlocked_shard, mini(expedition.shard + 1, Expedition.SHARD_COUNT))
+			if expedition.shard == Expedition.SHARD_COUNT:
+				endless_unlocked = true
 			_save()
-			_show("shard_complete", "SHARD CLEARED  /  " + rank, "%s  •  %.0f m in %.1f s  •  Guardian %s" % [expedition.title(), expedition.total_distance, expedition.total_time, guardian.call("grade")], "NEXT SHARD" if expedition.shard < Expedition.SHARD_COUNT else "NEW EXPEDITION")
+			_show("shard_complete", "SHARD CLEARED  /  " + rank, "%s  •  %.0f m in %.1f s  •  Guardian %s" % [expedition.title(), expedition.total_distance, expedition.total_time, guardian.call("grade")], "NEXT SHARD" if expedition.shard < Expedition.SHARD_COUNT else "START ENDLESS")
 		else:
 			_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d attempts left%s" % [runner.get("perfect_landings"), lives, ("  •  TRIAL " + ("PASSED" if expedition.trial_success else "MISSED")) if expedition.route == 4 else ""], "NEXT WORLD")
 
@@ -459,8 +490,14 @@ func _make_ui() -> void:
 	shard_picker = OptionButton.new()
 	shard_picker.custom_minimum_size = Vector2(300, 40)
 	stack.add_child(shard_picker)
-	shard_picker.item_selected.connect(func(index: int) -> void: selected_shard = index + 1)
+	shard_picker.item_selected.connect(_select_shard)
 	_refresh_shard_picker()
+	difficulty_picker = OptionButton.new()
+	for i in range(Expedition.DIFFICULTIES.size()):
+		difficulty_picker.add_item(Expedition.DIFFICULTIES[i] + " — " + Expedition.DIFFICULTY_DETAILS[i])
+	difficulty_picker.select(difficulty_setting)
+	difficulty_picker.item_selected.connect(func(index: int) -> void: difficulty_setting = index)
+	stack.add_child(difficulty_picker)
 	ability_picker = OptionButton.new()
 	for i in range(Expedition.ABILITIES.size()):
 		ability_picker.add_item(Expedition.ABILITIES[i] + " — " + Expedition.ABILITY_DETAILS[i])
@@ -483,9 +520,10 @@ func _make_ui() -> void:
 
 func _update_hud() -> void:
 	var s: float = runner.call("progress")
-	distance_label.text = "DISTANCE  %d m / %d m" % [maxi(0, int(s)), int(course.get("length"))]
-	time_label.text = "TIME  %02d:%05.2f" % [int(elapsed / 60.0), fmod(elapsed, 60.0)]
-	best_label.text = "BEST  %d m" % int(maxf(best, s))
+	distance_label.text = "DISTANCE  %d m  •  WORLD %d" % [int(expedition.total_distance + maxf(0.0, s)), expedition.world] if expedition.endless else "DISTANCE  %d m / %d m" % [maxi(0, int(s)), int(course.get("length"))]
+	var display_time := elapsed + (expedition.total_time if expedition.endless else 0.0)
+	time_label.text = "TIME  %02d:%05.2f" % [int(display_time / 60.0), fmod(display_time, 60.0)]
+	best_label.text = "BEST  %d m" % int(maxf(endless_best, expedition.total_distance + s) if expedition.endless else maxf(best, s))
 	energy_meter.value = float(runner.get("energy"))
 	var able := energy_meter.value >= float(runner.call("boost_cost")) and float(runner.get("cooldown")) <= 0.0 and float(runner.get("energy_lock")) <= 0.0
 	energy_label.text = str(Expedition.ABILITIES[expedition.ability]).to_upper() + (" READY" if able else "")
@@ -499,7 +537,7 @@ func _update_hud() -> void:
 	if navigation_label.visible:
 		var side := "RIGHT" if float(course.call("safe_lane", gap)) > 0.0 else "LEFT"
 		navigation_label.text = "RAVINE %dm  •  BYPASS %s" % [maxi(0, int(gap.position.y - s)), side]
-	expedition_label.text = "SHARD %02d  •  %d/%d  •  %d sparks  •  %d attempts" % [expedition.shard, expedition.world, Expedition.WORLDS_PER_SHARD, expedition.currency + expedition.pending_currency, expedition.attempts]
+	expedition_label.text = "ENDLESS  •  %s" % Expedition.DIFFICULTIES[expedition.difficulty] if expedition.endless else "SHARD %02d  •  %d/%d  •  %d sparks  •  %d attempts" % [expedition.shard, expedition.world, Expedition.WORLDS_PER_SHARD, expedition.currency + expedition.pending_currency, expedition.attempts]
 	cue_label.text = str(runner.get("cue"))
 	cue_label.visible = float(runner.get("cue_time")) > 0.0 and status == "running"
 
@@ -513,6 +551,7 @@ func _show(value: String, title: String, detail: String, action: String) -> void
 	shop_box.visible = value == "complete"
 	shard_picker.visible = value == "ready"
 	ability_picker.visible = value == "ready"
+	difficulty_picker.visible = value == "ready"
 	resume_button.visible = value == "ready" and not checkpoint_data.is_empty() and int(checkpoint_data.get("attempts", 0)) > 0 and not bool(checkpoint_data.get("complete", false))
 	rest_box.visible = value == "rest"
 	rest_label.visible = value == "rest"
@@ -565,14 +604,15 @@ func _primary() -> void:
 					_reset_stage()
 					_start()
 		"shard_complete":
-			selected_shard = mini(expedition.shard + 1, Expedition.SHARD_COUNT) if expedition.shard < Expedition.SHARD_COUNT else 1
+			endless_setting = expedition.shard == Expedition.SHARD_COUNT and endless_unlocked
+			selected_shard = mini(expedition.shard + 1, Expedition.SHARD_COUNT)
 			_new_expedition()
 			_start()
 
 func _new_expedition() -> void:
 	world_seed = randi()
 	next_route = 0
-	expedition.begin(selected_shard, world_seed)
+	expedition.begin(selected_shard, world_seed, difficulty_setting, endless_setting and endless_unlocked)
 	expedition.ability = ability_setting
 	_reset_stage()
 
@@ -629,7 +669,9 @@ func _refresh_shard_picker() -> void:
 	for i in range(Expedition.SHARD_COUNT):
 		shard_picker.add_item("%02d  %s" % [i + 1, Expedition.SHARD_NAMES[i]])
 		shard_picker.set_item_disabled(i, i + 1 > unlocked_shard)
-	shard_picker.select(selected_shard - 1)
+	shard_picker.add_item("ENDLESS — continuous worlds" if endless_unlocked else "ENDLESS — clear shard 10 to unlock")
+	shard_picker.set_item_disabled(Expedition.SHARD_COUNT, not endless_unlocked)
+	shard_picker.select(Expedition.SHARD_COUNT if endless_setting and endless_unlocked else selected_shard - 1)
 
 func _refresh_shop() -> void:
 	shop_label.text = "UPGRADES  •  %d sparks  •  %d attempts" % [expedition.currency, expedition.attempts]
@@ -678,6 +720,8 @@ func _resume_checkpoint() -> void:
 	if not expedition.restore(checkpoint_data):
 		return
 	selected_shard = expedition.shard
+	endless_setting = expedition.endless
+	difficulty_setting = expedition.difficulty
 	ability_setting = expedition.ability
 	lives = expedition.attempts
 	_reset_stage()
@@ -698,4 +742,10 @@ func _return_to_title() -> void:
 	_store_checkpoint()
 	_refresh_shard_picker()
 	ability_picker.select(ability_setting)
+	difficulty_picker.select(difficulty_setting)
 	_show("ready", "VECTOR VELOCITY", "Continue your expedition or start a new one.", "START NEW RUN")
+
+func _select_shard(index: int) -> void:
+	endless_setting = index == Expedition.SHARD_COUNT and endless_unlocked
+	if not endless_setting:
+		selected_shard = clampi(index + 1, 1, unlocked_shard)

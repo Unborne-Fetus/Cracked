@@ -342,6 +342,40 @@ func _run() -> void:
 		elif str(game.get("status")) != "shard_complete" or not session.complete:
 			_fail("Scene did not finish shard.")
 			return
+	var endless = expedition_rules.new()
+	endless.begin(10, 123456, 2, true)
+	if endless.attempts != 1 or endless.storm_factor() <= 1.0:
+		_fail("Endless difficulty settings invalid.")
+		return
+	for i in range(12):
+		endless.finish_world(2000.0, 32.0, 3)
+		if endless.guardian() or endless.complete or not endless.offers.is_empty() or not endless.advance(0) or endless.route >= 3:
+			_fail("Endless mode interrupted by campaign progression.")
+			return
+	var endless_copy = expedition_rules.new()
+	if not endless_copy.restore(endless.checkpoint()) or not endless_copy.endless or endless_copy.world != 13 or endless_copy.total_distance != 24000.0:
+		_fail("Endless checkpoint failed.")
+		return
+	endless_copy.fail_world()
+	if endless_copy.attempts != 0:
+		_fail("Endless should end after one failed world.")
+		return
+	var easy = expedition_rules.new()
+	easy.begin(1, 22, 0)
+	if easy.attempts != 5 or easy.storm_factor() >= 1.0:
+		_fail("Flow difficulty did not adjust attempts and collapse.")
+		return
+	game.set("endless_unlocked", true)
+	game.set("endless_setting", true)
+	game.call("_new_expedition")
+	game.call("_start")
+	var distance: float = course.get("length")
+	runner.position = Vector3(0.0, float(course.call("elevation", 0.0, distance)) + 0.08, -distance)
+	runner.set("grounded", true)
+	game.call("_physics_process", 1.0 / 60.0)
+	if str(game.get("status")) != "running" or session.world != 2 or not session.endless or session.total_distance < distance:
+		_fail("Endless scene did not transition automatically.")
+		return
 	print("PASS: flow movement, slopes, landings and streaming")
 	quit(0)
 

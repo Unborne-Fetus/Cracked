@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Endless and difficulty
+- Unlockable continuous-world endless mode, separate records, automatic transitions and checkpoint support.
+- Three selectable difficulty settings for collapse and attempts; smoother ravine guidance.
+- Automated model and scene-transition checks for endless progression.
+
 ## Movement and encounter polish
 - Shared swept landing contact, corrected Redline cap, ravine approach guidance and collectible paths.
 - Guardian-specific penalties, clean streaks, safe-corridor planning, and encounter grades.

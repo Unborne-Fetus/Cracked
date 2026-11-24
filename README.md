@@ -32,3 +32,6 @@ The regression suite also drives the actual 120 Hz runner physics along a comple
 
 ## Movement and encounter polish
 Shared swept landing contact for the live runner and its prediction, corrected high-speed item caps, visible ravine bypass guidance and pickup trails, airborne pickups on riskier routes, differentiated guardian penalties (energy drain, crosswind, ability jam, downdraft), safe-corridor-aware guardian placement, clean streaks and guardian grades. Trial HUD shows actual progress. The title can be reopened using M or the pause menu. New tests cover guardian effects, landing caps, geometry and a full guided ravine traversal.
+
+## Endless and difficulty
+Clear shard 10 to unlock continuous procedural worlds without shops, bosses or intermission menus. Endless records and checkpoints are persisted, and clearing a world carries forward some speed and energy. Choose Flow, Standard or Expert at the title; the settings alter initial attempts and collapse pressure. Endless has one attempt regardless of difficulty. No co-op implementation is included.
