@@ -53,6 +53,23 @@ func _run_tests() -> void:
 	if int(runner.get("rider_pose")) != 0:
 		_fail("Standing did not restore the cruising sprite.")
 		return
+	# Rear chase uses the centered rear art, and only the board flips.
+	var old_sprite_camera_position := sprite_camera.global_position
+	sprite_camera.global_position = runner.global_position + runner.transform.basis.z * 12.0 + runner.transform.basis.y * 4.0
+	runner.set("grounded", false)
+	runner.set("kickflip_progress", 0.5)
+	runner.call("update_rider_sprite", sprite_camera)
+	var flip_board: Node3D = runner.get("board_pivot")
+	if bool(runner.get("rider_is_side_view")) or absf(absf(flip_board.rotation.z) - PI) > 0.02:
+		_fail("Rear camera or board-only kickflip failed.")
+		return
+	runner.set("grounded", true)
+	runner.set("kickflip_progress", 1.0)
+	runner.call("update_rider_sprite", sprite_camera)
+	if absf(flip_board.rotation.z) > 0.01:
+		_fail("Board did not reset flat on landing.")
+		return
+	sprite_camera.global_position = old_sprite_camera_position
 	runner.call("set_first_person", true)
 	var sprite_avatar: Node3D = runner.get("avatar")
 	if sprite_avatar.visible:

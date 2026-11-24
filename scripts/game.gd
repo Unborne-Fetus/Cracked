@@ -1272,6 +1272,7 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.diving = bool(state["diving"])
 	runner.height = float(state["height"])
 	runner.air_time = float(state["air_time"])
+	runner.kickflip_progress = float(state.get("kickflip", 1.0))
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0

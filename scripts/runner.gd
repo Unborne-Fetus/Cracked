@@ -73,6 +73,10 @@ const RiderSprites = preload("res://scripts/rider_sprites.gd")
 var rider_sprite: Sprite3D
 var rider_textures: Array[Texture2D] = []
 var rider_side_textures: Array[Texture2D] = []
+var rider_side_body_textures: Array[Texture2D] = []
+var board_pivot: Node3D
+var kickflip_progress := 1.0
+const KICKFLIP_TIME := 0.42
 var rider_is_side_view := false
 var rider_pose := RiderSprites.CRUISE
 var rider_facing_left := false
@@ -93,6 +97,7 @@ func _ready() -> void:
 	add_child(avatar)
 	rider_textures = RiderSprites.make_textures()
 	rider_side_textures = RiderSprites.make_textures(true)
+	rider_side_body_textures = RiderSprites.make_textures(true, true)
 	rider_sprite = Sprite3D.new()
 	rider_sprite.name = "PixelHoverboardRider"
 	rider_sprite.texture = rider_textures[RiderSprites.CRUISE]
@@ -103,6 +108,20 @@ func _ready() -> void:
 	rider_sprite.double_sided = true
 	rider_sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 	avatar.add_child(rider_sprite)
+	# A separate deck gives the rear view real foreshortening and allows
+	# a kickflip without rotating the character or the collision body.
+	board_pivot = Node3D.new()
+	board_pivot.name = "HoverboardFlip"
+	avatar.add_child(board_pivot)
+	var deck := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(1.35, 0.12, 2.15)
+	deck.mesh = mesh
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color.WHITE
+	deck.material_override = material
+	board_pivot.add_child(deck)
 
 func update_rider_sprite(camera: Camera3D) -> void:
 	if not is_instance_valid(rider_sprite):
@@ -118,15 +137,24 @@ func update_rider_sprite(camera: Camera3D) -> void:
 		next_pose = RiderSprites.BOOST if diving else RiderSprites.CARVE
 	elif is_sliding:
 		next_pose = RiderSprites.BOOST if speed >= 90.0 and absf(lateral_speed) < 5.0 else RiderSprites.CARVE
-	var side_view := absf(relative.x) > absf(relative.z) * (0.85 if rider_is_side_view else 1.20)
-	if next_pose != rider_pose or side_view != rider_is_side_view:
-		rider_pose = next_pose
-		rider_is_side_view = side_view
-		rider_sprite.texture = rider_side_textures[rider_pose] if side_view else rider_textures[rider_pose]
+	# Rear art stays active throughout the chase cone. Only a deliberate
+	# near-profile camera orbit switches to the approved side art.
+	var side_view := absf(relative.x) > absf(relative.z) * (1.6 if rider_is_side_view else 2.4)
+	rider_pose = next_pose
+	rider_is_side_view = side_view
+	var flipping := not grounded and kickflip_progress < 1.0
+	if side_view:
+		rider_sprite.texture = rider_side_body_textures[rider_pose] if flipping else rider_side_textures[rider_pose]
+	else:
+		rider_sprite.texture = rider_textures[rider_pose]
+	board_pivot.visible = not side_view or flipping
+	board_pivot.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
+	board_pivot.position.y = (0.075 - (sin(PI * kickflip_progress) * 0.24 if flipping else 0.0)) / maxf(0.05, avatar.scale.y)
+	board_pivot.rotation.z = TAU * smoothstep(0.0, 1.0, kickflip_progress) if flipping else 0.0
 	# Hysteresis avoids rapid mirroring when the steering input is neutral.
 	if grounded and absf(lateral_speed) > 2.5:
 		rider_facing_left = lateral_speed * screen_steer_sign < 0.0
-	rider_sprite.flip_h = relative.x < 0.0 if rider_is_side_view else rider_facing_left
+	rider_sprite.flip_h = relative.x < 0.0 if rider_is_side_view else false
 	# The original collision envelope is unchanged; sprite-only pitch
 	# expresses the jump/dive and never changes contact or momentum.
 	# The crouched textures already contain their full pose. Counter the
@@ -136,7 +164,7 @@ func update_rider_sprite(camera: Camera3D) -> void:
 	var tilt := 0.0
 	if not grounded:
 		tilt = -0.18 if diving else 0.12
-	rider_sprite.rotation.z = -tilt if rider_facing_left else tilt
+	rider_sprite.rotation.z = (-tilt if rider_facing_left else tilt) if rider_is_side_view else 0.0
 
 func reset_run(course: Node3D) -> void:
 	distance = 8.0
@@ -178,6 +206,8 @@ func reset_run(course: Node3D) -> void:
 	dive_seconds = 0.0
 	avatar.scale = Vector3.ONE
 	avatar.position = Vector3.ZERO
+	kickflip_progress = 1.0
+	board_pivot.rotation = Vector3.ZERO
 	rider_pose = RiderSprites.CRUISE
 	rider_is_side_view = false
 	rider_facing_left = false
@@ -221,6 +251,7 @@ func _double_jump() -> bool:
 		return false
 	double_jump_available = false
 	double_jumps += 1
+	kickflip_progress = 0.0
 	var up := air_basis.y
 	var impulse := jump_impulse_for_speed(speed) * 0.75
 	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
@@ -403,6 +434,7 @@ func sync_pose(course: Node3D) -> void:
 	avatar.position = Vector3.ZERO
 
 func _finish_landing(course: Node3D) -> void:
+	kickflip_progress = 1.0
 	var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 	landing_from_basis = air_basis
 	# Small differences can still ease the camera, but a sideways or
@@ -423,7 +455,8 @@ func _finish_landing(course: Node3D) -> void:
 func is_grounded() -> bool:
 	return grounded
 
-func _begin_flight(frame: Transform3D, impulse: float, curved_launch: bool = false) -> void:
+func _begin_flight(frame: Transform3D, impulse: float, curved_launch: bool = false, trick: bool = false) -> void:
+	kickflip_progress = 0.0 if trick else 1.0
 	recover_air_roll = curved_launch
 	grounded = false
 	double_jump_available = true
@@ -662,7 +695,7 @@ func tick(delta: float, course: Node3D) -> void:
 		var natural_lift := natural_lift_impulse(normal_accel, speed)
 		if landing_timer <= 0.0 and (queued_jump or natural_lift > 0.0):
 			var impulse := jump_impulse_for_speed(speed) if queued_jump else natural_lift
-			_begin_flight(frame, impulse, curved_launch)
+			_begin_flight(frame, impulse, curved_launch, queued_jump)
 		else:
 			is_sliding = slide
 			if slide:
@@ -713,6 +746,7 @@ func tick(delta: float, course: Node3D) -> void:
 			_double_jump()
 			queued_jump = false
 		_advance_flight(delta, course, steer)
+		kickflip_progress = minf(1.0, kickflip_progress + delta / KICKFLIP_TIME)
 	else:
 		diving = false
 	avatar.scale.y = lerpf(avatar.scale.y, 0.55 if is_sliding else 1.0, minf(delta * 12.0, 1.0))

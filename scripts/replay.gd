@@ -40,7 +40,7 @@ func record(t: float, delta: float, runner: Node3D, course: Node3D, storm: Node3
 	var shift: Vector3 = course.get("origin_shift")
 	var pose := runner.transform
 	pose.origin += shift
-	var frame := {"t": t, "pose": pose, "shift": shift, "s": runner.get("distance"), "lane": runner.get("lane"), "side": runner.get("surface_side"), "speed": runner.get("speed"), "grounded": runner.get("grounded"), "sliding": runner.get("is_sliding"), "diving": runner.get("diving"), "height": runner.get("height"), "air_time": runner.get("air_time"), "reserve": runner.get("momentum_reserve"), "double_jump": runner.get("double_jump_available"), "storm_s": storm.get("front_s"), "storm_speed": storm.get("speed"), "storm_time": storm.get("elapsed"), "storm_visible": storm.visible}
+	var frame := {"t": t, "pose": pose, "shift": shift, "s": runner.get("distance"), "lane": runner.get("lane"), "side": runner.get("surface_side"), "speed": runner.get("speed"), "grounded": runner.get("grounded"), "sliding": runner.get("is_sliding"), "diving": runner.get("diving"), "height": runner.get("height"), "air_time": runner.get("air_time"), "kickflip": runner.get("kickflip_progress"), "reserve": runner.get("momentum_reserve"), "double_jump": runner.get("double_jump_available"), "storm_s": storm.get("front_s"), "storm_speed": storm.get("speed"), "storm_time": storm.get("elapsed"), "storm_visible": storm.visible}
 	if not frames.is_empty() and t <= float(frames[-1]["t"]):
 		frames[-1] = frame
 	else:
@@ -82,5 +82,11 @@ func sample(t: float) -> Dictionary:
 	result["pose"] = pose_a.interpolate_with(pose_b, blend)
 	for key in ["s", "lane", "speed", "height", "air_time", "reserve", "storm_s", "storm_speed", "storm_time"]:
 		result[key] = lerpf(float(a[key]), float(b[key]), blend)
+	var flip_a := float(a.get("kickflip", 1.0))
+	var flip_b := float(b.get("kickflip", 1.0))
+	if flip_b >= flip_a:
+		result["kickflip"] = lerpf(flip_a, flip_b, blend)
+	else:
+		result["kickflip"] = flip_a if blend < 0.5 else flip_b
 	result["t"] = time
 	return result

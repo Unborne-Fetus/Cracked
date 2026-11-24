@@ -1,197 +1,168 @@
 #!/usr/bin/env python3
-"""Vector Velocity — 'Through the Neon', an original continuous racing score.
-Render one seamless stereo loop from three offline layers. No external samples.
-Requires NumPy and FFmpeg with libvorbis. Run from any directory.
+"""Vector Velocity — REDLINE FRACTURE. Original industrial breakcore score.
+All instruments and patterns synthesized offline; no borrowed samples.
+Requires numpy and ffmpeg/libvorbis.
 """
 from pathlib import Path
-import subprocess
-import tempfile
-import wave
+from functools import lru_cache
+import subprocess, tempfile, wave
 import numpy as np
 
-SR = 44100
-BPM = 170
-BEAT = 60 / BPM
-BARS = 96
-N = round(BARS * 4 * BEAT * SR)
-TAU = 2 * np.pi
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "audio" / "generated"
-rng = np.random.default_rng(42813)
-stems = [np.zeros((N, 2), dtype=np.float32) for _ in range(3)]
+SR=44100
+BPM=190
+BEAT=60/BPM
+BARS=80
+N=round(BARS*4*BEAT*SR)
+TAU=2*np.pi
+OUT=Path(__file__).resolve().parents[1]/"audio"/"generated"
+rng=np.random.default_rng(76245)
+mix=np.zeros((N,2),np.float32)
 
 def time(seconds):
-    return np.arange(round(seconds * SR), dtype=np.float64) / SR
+    return np.arange(round(seconds*SR),dtype=np.float64)/SR
 
 def hz(note):
-    return 440 * 2 ** ((note - 69) / 12)
+    return 440*2**((note-69)/12)
 
-def env(t, attack, release, duration):
-    return np.minimum(t / max(attack, .0001), 1) * np.clip((duration - t) / max(release, .0001), 0, 1)
+def envelope(t, attack, release, duration):
+    return np.minimum(t/attack,1)*np.clip((duration-t)/release,0,1)
 
-def put(layer, position, signal, gain=1, pan=0):
-    # Equal-power stereo; wrap the effect tails across the loop boundary.
-    start = round(position * BEAT * SR) % N
-    mono = np.asarray(signal, dtype=np.float32) * gain
-    stereo = mono[:, None] * np.array([np.sqrt((1-pan)*.5), np.sqrt((1+pan)*.5)], dtype=np.float32)
-    count = min(len(mono), N-start)
-    layer[start:start+count] += stereo[:count]
-    if count < len(mono):
-        layer[:len(mono)-count] += stereo[count:]
+def put(beat,sig,gain=1.,pan=0.):
+    start=round(beat*BEAT*SR)%N
+    stereo=np.asarray(sig,dtype=np.float32)[:,None]*np.array([np.sqrt((1-pan)*.5),np.sqrt((1+pan)*.5)],np.float32)*gain
+    n=min(len(sig),N-start)
+    mix[start:start+n]+=stereo[:n]
+    if n<len(sig):mix[:len(sig)-n]+=stereo[n:]
 
-def delay(layer, pos, sig, gain, pan):
-    put(layer, pos, sig, gain, pan)
-    put(layer, pos + .75, sig, gain*.22, -pan)
-    put(layer, pos + 1.5, sig, gain*.095, pan)
+@lru_cache(maxsize=8)
+def kick(hard=True):
+    t=time(.24)
+    phase=TAU*(46*t+105*.019*(1-np.exp(-t/.019)))
+    body=np.sin(phase)*np.exp(-t*17)
+    click=np.sin(TAU*1680*t)*np.exp(-t*120)*.17
+    return np.tanh((body+click)*(2.2 if hard else 1.3))*envelope(t,.0015,.035,.24)
 
-def kick():
-    t = time(.29)
-    phase = TAU*(48*t + 58*.027*(1-np.exp(-t/.027)))
-    return (np.sin(phase)*np.exp(-t*13)+.12*np.sin(TAU*1300*t)*np.exp(-t*105))*env(t,.0015,.035,.29)
-
-def snare():
-    t = time(.23)
-    noise = rng.normal(0,1,len(t))
-    bright = np.convolve(noise, np.array([.16,.23,.22,.23,.16]), mode="same")
-    return (.28*bright*np.exp(-t*18)+.42*np.sin(TAU*(174*t+40*.018*(1-np.exp(-t/.018))))*np.exp(-t*31))*env(t,.001,.045,.23)
+def snare(variant=0):
+    t=time(.18 if variant==0 else .09)
+    noise=rng.normal(0,1,len(t))
+    mid=np.convolve(noise,[.14,.22,.28,.22,.14],mode="same")
+    body=np.sin(TAU*(182*t+54*.016*(1-np.exp(-t/.016))))*np.exp(-t*34)
+    return np.tanh((.95*mid*np.exp(-t*23)+.72*body)*1.9)*envelope(t,.001,.025,t[-1]+1/SR)
 
 def hat(open_hat=False):
-    dur = .20 if open_hat else .06
-    t = time(dur)
-    noise = rng.normal(0,1,len(t))
-    high = np.convolve(noise, np.array([.12,.26,.24,.26,.12]), mode="same")
-    metal = sum(np.sin(TAU*f*t) for f in (2651, 3827, 5049))/3
-    return (.28*high+.09*metal)*np.exp(-t*(15 if open_hat else 58))*env(t,.001,.018,dur)
+    dur=.19 if open_hat else .045
+    t=time(dur)
+    noise=rng.normal(0,1,len(t))
+    high=np.r_[0,np.diff(noise)]
+    metallic=sum(np.sin(TAU*f*t) for f in (3521,4933,6811))/3
+    return (.25*high+.18*metallic)*np.exp(-t*(18 if open_hat else 72))*envelope(t,.0015,.015,dur)
 
-def bass(note, beats, bright=False):
-    dur = beats*BEAT
-    t = time(dur)
-    p = TAU*hz(note)*t
-    sub = .76*np.sin(p)+.13*np.sin(2*p)
-    growl = .26*np.sin(2*p+.6*np.sin(TAU*2.1*t))+.10*np.sin(3*p)+.05*np.sin(5*p)
-    return (sub + growl*(.55 if bright else .25))*env(t,.018,.065,dur)
+@lru_cache(maxsize=256)
+def guitar(note,beats,voice=0,muted=True):
+    dur=beats*BEAT
+    t=time(dur)
+    freq=hz(note)*(1.003 if voice else .997)
+    phase=TAU*freq*t+.04*np.sin(TAU*5.6*t)
+    # Band-limited additive strings and cabinet-like rolloff. Layer
+    # separately voiced fifths, rather than copying a guitar recording.
+    sig=sum(np.sin(phase*k)/(k**.78) for k in range(1,min(17,int(8500/freq))+1))
+    amp=(.38+.62*np.exp(-t*15)) if muted else (.72+.28*np.exp(-t*3))
+    raw=np.tanh(sig*1.7*amp)
+    # Mild smoothing reduces digital fizz after intentional distortion.
+    raw=np.convolve(raw,[.12,.24,.28,.24,.12],mode="same")
+    return raw*envelope(t,.004,.022 if muted else .055,dur)
 
-def pad(note, beats, detune):
-    dur = beats*BEAT
-    t = time(dur)
-    f = hz(note)
-    p = TAU*f*t
-    return (.57*np.sin(p)+.18*np.sin(p*detune)+.11*np.sin(2*p)+.06*np.sin(3*p)) * env(t,.22,.35,dur)*(0.82+.18*np.sin(TAU*.55*t))
+@lru_cache(maxsize=160)
+def bass(note,beats,acid=False):
+    dur=beats*BEAT
+    t=time(dur)
+    p=TAU*hz(note)*t
+    sub=.85*np.sin(p)
+    growl=np.tanh((np.sin(2*p+.8*np.sin(TAU*9*t))+.45*np.sin(3*p)+.2*np.sin(5*p))*1.8)
+    return (sub+growl*(.55 if acid else .25))*envelope(t,.006,.035,dur)
 
-def pluck(note, beats, lead=False):
-    dur = beats*BEAT
-    t = time(dur)
-    p = TAU*hz(note)*t
-    if lead:
-        vibrato = .095*np.sin(TAU*5.2*t)*np.minimum(t/.12,1)
-        sig = .62*np.sin(p+vibrato)+.17*np.sin(2*p)+.09*np.sin(3*p)+.06*np.sin(p*1.003)
-        e = env(t,.035,.13,dur)*(.82+.18*np.exp(-t*3))
-    else:
-        sig = .65*np.sin(p)+.22*np.sin(2*p)*np.exp(-t*8)+.08*np.sin(3*p)*np.exp(-t*16)
-        e = env(t,.005,.05,dur)*np.exp(-t*4)
-    return sig*e
+@lru_cache(maxsize=128)
+def lead(note,beats):
+    dur=beats*BEAT
+    t=time(dur)
+    p=TAU*hz(note)*t+.12*np.sin(TAU*6.2*t)
+    return np.tanh((np.sin(p)+.35*np.sin(2*p)+.18*np.sin(3*p))*1.35)*envelope(t,.012,.065,dur)
 
-# D minor. Eight-bar phrase, a contrasting bridge, and an extended reprise.
-# Explicit voicings avoid the rigid transposed single-note loop of the old music.
-chords = [
-    (38,[62,65,69,76]), (34,[58,62,65,69]), (41,[60,65,69,72]), (36,[60,64,67,74]),
-    (38,[62,65,69,72]), (34,[58,62,65,72]), (43,[62,67,70,74]), (45,[61,64,69,76]),
+# Ten evolving eight-bar movements: thrash, chopped breaks, odd
+# syncopations, halftime industrial section, then a final double-time riff.
+roots=[38,38,41,37,38,34,43,36]
+alt=[38,41,37,38,34,35,36,37]
+riffs=[
+ [(0,0,.42),(.5,0,.22),(.75,0,.22),(1,3,.42),(1.5,0,.42),(2,0,.42),(2.5,6,.42),(3,5,.42),(3.5,1,.42)],
+ [(0,0,.7),(.75,0,.2),(1,7,.43),(1.5,6,.43),(2,0,.22),(2.25,0,.22),(2.5,3,.7),(3.25,1,.22),(3.5,0,.42)],
+ [(0,0,.42),(.5,0,.42),(1,1,.22),(1.25,3,.22),(1.5,5,.42),(2,0,.7),(2.75,6,.22),(3,3,.42),(3.5,1,.42)],
+ [(0,0,1.35),(1.5,6,.42),(2,0,1.35),(3.5,1,.42)],
+ [(0,0,.22),(.25,0,.22),(.5,0,.22),(.75,1,.22),(1,3,.42),(1.5,0,.42),(2,0,.22),(2.25,0,.22),(2.5,6,.42),(3,5,.22),(3.25,3,.22),(3.5,1,.42)]
 ]
-bridge = [(34,[58,62,65,69]),(36,[60,64,67,74]),(38,[62,65,69,76]),(38,[62,65,69,72]),
-          (43,[62,67,70,74]),(41,[60,65,69,72]),(36,[60,64,67,74]),(45,[61,64,69,76])]
-motifs = [
-    [(0,81,.75),(1,77,.5),(1.75,79,.5),(2.5,81,1.0)],
-    [(0,77,1.1),(1.5,74,.5),(2.25,72,.5),(3,74,.75)],
-    [(0,76,.5),(0.75,77,.5),(1.5,81,.75),(2.75,79,1)],
-    [(0,79,1),(1.5,76,.5),(2.5,74,1.0)],
-    [(0,81,.75),(1,84,.5),(1.75,82,.5),(2.5,81,1.0)],
-    [(0,77,.75),(1,79,.5),(1.75,77,.5),(2.5,74,1.0)],
-    [(0,79,.75),(1,82,.5),(1.75,81,.5),(2.5,79,1.0)],
-    [(0,76,.75),(1,73,.5),(1.75,76,.5),(2.5,81,1.0)],
+patterns=[
+ ([0,.75,1.5,2.5,3.25],[1,3]),
+ ([0,.5,1.75,2,2.75,3.5],[1,2.5,3.25]),
+ ([0,.25,.5,1.5,2,2.25,2.5,3.5],[1,3]),
+ ([0,1.5,2.75],[2]),
+ ([0,.75,1.25,1.75,2.5,3.5,3.75],[.5,1.5,3])
+]
+hooks=[
+ [74,75,81,80,77,73,74,77],
+ [74,81,80,77,75,73,68,70],
+ [86,85,81,80,77,80,75,73],
+ [74,77,80,81,85,80,77,75]
 ]
 for bar in range(BARS):
-    pos = bar*4
-    part = bar//8
-    root, chord = (bridge if part in (2,4,5,8,9,10) else chords)[bar%8]
-    breakdown = part in (4, 9)
-    full = part not in (0, 4, 9)
-    driving = part in (2, 3, 6, 7, 10, 11)
-    # Foundation: fast broken-beat rhythm, substantial low end, chord-aware bass.
-    kicks = [0, 2.5] if breakdown else ([0, .75, 1.75, 2.5, 3.5] if driving and bar%4==3 else [0, 1.5, 2.5, 3.25] if driving and bar%2 else [0, 2.5, 3.5] if driving else [0, 2.5])
-    for j in kicks:
-        put(stems[0], pos+j, kick(), .40 if j in (0,2.5) else .24)
-    for j in (1,3):
-        put(stems[0], pos+j, snare(), .52 if driving else .42 if not breakdown else .30, .04)
-    for j in range(8):
-        if breakdown and j%2:
-            continue
-        put(stems[0], pos+j*.5, hat(j%4==2), .074 if j%2 else .045, -.37 if j%2 else .32)
-        if driving and j in (3, 6, 7):
-            put(stems[0], pos+j*.5+.25, hat(), .035, .22)
-    bassline = [(0,.66,root),(.75,.65,root),(1.5,.42,root+12),(2,.42,root),(2.5,.78,root),(3.35,.58,root+7)] if driving else [(0,1.48,root),(1.5,.94,root),(2.5,.82,root+12),(3.35,.70,root+7)]
-    if breakdown:
-        bassline = [(0,1.7,root),(2.5,1.0,root)]
+    beat=bar*4
+    part=bar//8
+    p=[0,1,2,1,3,4,2,0,4,2][part]
+    root=(alt if part in (2,5,6,8) else roots)[bar%8]
+    ks,ss=patterns[p]
+    for k in ks:put(beat+k,kick(),.50 if k in (0,2) else .36)
+    for k in ss:put(beat+k,snare(),.46)
+    for k in ([.25,1.75,2.25,3.75] if p in (1,2,4) else [1.75,3.75]):
+        put(beat+k,snare(1),.15,(-.25 if k<2 else .25))
+    for step in range(16):
+        if p==3 and step%2:continue
+        put(beat+step*.25,hat(step%8==6),.082 if step%2==0 else .046,(-.45 if step%2 else .45))
+    if bar%4==3:
+        for k in (3.0,3.25,3.5,3.625,3.75,3.875):
+            put(beat+k,snare(1),.13+.035*(k-3))
+    for offset,interval,length in riffs[p]:
+        note=root+interval
+        put(beat+offset,bass(note-12,length,p in (1,2,4)),.29)
+        for voice,pan in [(0,-.72),(1,.72)]:
+            put(beat+offset,guitar(note,length,voice,p!=3),.22,pan)
+            put(beat+offset,guitar(note+7,length,voice,p!=3),.105,pan)
+    # Distinct lead phrases enter and leave without an abrupt silent gap.
+    if part in (1,2,3,5,6,8,9):
+        melody=hooks[(part+bar//4)%4]
+        for step in range(4 if p==3 else 8):
+            note=melody[(step+bar%4*2)%8]
+            offset=step*(1 if p==3 else .5)
+            sig=lead(note,.82 if p==3 else .39)
+            put(beat+offset,sig,.11,.12)
+            put(beat+offset+.75,sig,.027,-.45)
     if bar%8==7:
-        bassline[-1]=(3.35,.45,37)
-    for j,dur,note in bassline:
-        put(stems[0],pos+j,bass(note,dur,full),.32 if driving else .24)
-    # Chords and a syncopated, stereo arpeggio.
-    for v,note in enumerate(chord):
-        put(stems[1],pos,pad(note,4.45,1.0018 if v%2 else .9982),.12,[-.68,-.25,.27,.67][v])
-    order = ([0,1,3,2,1,3,0,2] if part%3==0 else [3,1,2,0,2,3,1,0] if part%3==1 else [0,2,1,3,2,1,3,2]) if not breakdown else [0,1,2,3]
-    for j,k in enumerate(order):
-        note = chord[k]+(12 if j%4==3 else 0)
-        delay(stems[1],pos+j*(4/len(order))+.10,pluck(note,.43 if not breakdown else .75),.13, -.44 if j%2 else .44)
-    # High-speed layer: independent hook, breakbeat ghost hits, and bright octave pulse.
-    for j in (0.75, 2.0, 3.75):
-        put(stems[2],pos+j,hat(j==3.75),.05,.56 if j==2.0 else -.56)
-    if full:
-        for j in (1.75,3.75) if bar%4==3 else (3.5,):
-            put(stems[2],pos+j,snare(),.12,-.2)
-        for j,note,dur in motifs[bar%8]:
-            # Warm lead register and legato note tails, no shrill octave jumps.
-            lead_note = note-12 if part in (1,5,8) else note if part in (2,6,10) else note-7
-            delay(stems[2],pos+j,pluck(lead_note,dur+.08,True),.21 if driving else .16,.12)
-        for j in (0.5,1.5,2.5,3.5):
-            put(stems[2],pos+j,bass(root+12,.32,True),.10)
-    elif not breakdown:
-        for j,k in enumerate((0,2,1,3)):
-            delay(stems[2],pos+j,pluck(chord[k]+12,.45),.095,.24)
-    if bar%8==7:
-        # Short filtered-noise transition. No borrowed samples.
-        t=time(.72)
-        noise=rng.normal(0,1,len(t))
-        high=np.r_[0.,np.diff(noise)]
-        put(stems[2],pos+2.05,high*env(t,.50,.05,.72),.037)
-        for j in (3.25,3.5,3.75):
-            put(stems[2],pos+j,snare(),.09)
-
-# Preserve headroom for all three stems playing together. Shared normalization
-# preserves relative arrangement levels; use gentle saturation, no hard clipping.
-for j,stem in enumerate(stems):
-    stems[j]=np.tanh(stem*1.05)/1.05
-peak=float(np.max(np.abs(sum(stems))))
-gain=min(1.0,.88/max(peak,1e-6))
-OUT.mkdir(parents=True,exist_ok=True)
-# Balance the layers offline. A single browser-native sample avoids
-# three streaming decoders fighting the single-threaded Web renderer.
-mix = (stems[0] + stems[1]*.86 + stems[2]*.82)
+        t=time(.65)
+        sweep=np.convolve(rng.normal(0,1,len(t)),[.1,.2,.4,.2,.1],mode="same")
+        put(beat+2.0,sweep*envelope(t,.45,.06,.65),.17)
+# Loudness control: intentional instrument distortion, not clipped final audio.
+mix=np.tanh(mix*1.15)
 peak=float(np.max(np.abs(mix)))
-gain=min(1.0,.78/max(peak,1e-6))
-mix *= gain
-# Match the end to the first sample without dipping the whole mix
-# to silence. Wrapped chord tails already maintain musical continuity.
-fade = round(.006*SR)
-difference = mix[0] - mix[-1]
-mix[-fade:] += np.linspace(0,1,fade,dtype=np.float32)[:,None] * difference
-assert np.isfinite(mix).all() and .02 < float(np.sqrt(np.mean(mix**2))) < .35
+mix*=.86/max(peak,1e-6)
+fade=round(.008*SR)
+mix[-fade:]+=np.linspace(0,1,fade,dtype=np.float32)[:,None]*(mix[0]-mix[-1])
+rms=float(np.sqrt(np.mean(mix**2)))
+assert np.isfinite(mix).all() and .02<rms<.55
+OUT.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory() as tmp:
-    wav=Path(tmp)/"soundtrack.wav"
-    samples=np.asarray(np.clip(mix,-1,1)*32767,dtype="<i2")
+    wav=Path(tmp)/"redline.wav"
     with wave.open(str(wav),"wb") as f:
-        f.setnchannels(2);f.setsampwidth(2);f.setframerate(SR);f.writeframes(samples.tobytes())
+        f.setnchannels(2);f.setsampwidth(2);f.setframerate(SR)
+        f.writeframes(np.asarray(np.clip(mix,-1,1)*32767,dtype="<i2").tobytes())
     target=OUT/"soundtrack.ogg"
     subprocess.run(["ffmpeg","-v","error","-y","-i",str(wav),"-c:a","libvorbis","-q:a","5",str(target)],check=True)
     length=float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(target)]))
-    assert abs(length-N/SR)<.03 and target.stat().st_size>10000,(target,length)
-    print(f"Soundtrack: {length:.2f}s, {target.stat().st_size:,} bytes, peak {peak*gain:.3f}")
+    assert abs(length-N/SR)<.03 and target.stat().st_size>10000
+    print(f"REDLINE FRACTURE: {BPM} BPM, {length:.2f}s, RMS {rms:.3f}, {target.stat().st_size:,} bytes")
