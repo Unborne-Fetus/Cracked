@@ -1,40 +1,233 @@
 name: Build & Publish Browser Prototype
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: vector-velocity-pages
+  cancel-in-progress: true
+
 permissions:
   contents: read
-concurrency:
-  group: beatbreak-pages
-  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      pages: read
+      statuses: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Report build started
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=pending -f context=cracked/godot-build \
+            -f description="Build and tests running" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Godot and matching export templates
+        uses: chickensoft-games/setup-godot@v2
         with:
-          node-version: '22'
-      - name: Validate JavaScript and rhythm rules
+          version: 4.7.2
+          use-dotnet: false
+          include-templates: true
+      - name: Inspect Web export prerequisites
         run: |
-          node --check site/core.js
-          node --check site/game.js
-          node tests/rhythm.test.cjs
-      - name: Prepare versioned website
+          echo "Godot editor version:"
+          godot --version
+          echo "Godot Web export template files:"
+          find "${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates" -maxdepth 2 -type f -name 'web*zip' -print 2>/dev/null || true
+          echo "Web export preset:"
+          grep -E '^(name=|platform=|variant/thread_support=|vram_texture_compression/for_mobile=)' export_presets.cfg
+      - name: Restore generated soundtrack cache
+        id: audio-cache
+        uses: actions/cache@v4
+        with:
+          path: audio/generated/
+          key: velocity-soundtrack-v2-${{ runner.os }}-${{ hashFiles('tools/render_soundtrack.py') }}
+      - name: Render original racing soundtrack
+        if: steps.audio-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
         run: |
-          mkdir -p build/web
-          cp -R site/. build/web/
-          printf 'V. 0.%s\n' "$GITHUB_RUN_NUMBER" > build/web/version.txt
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          if python3 -c 'import numpy' 2>/dev/null; then
+            python3 tools/render_soundtrack.py
+          else
+            python3 -m venv /tmp/velocity-audio-venv
+            /tmp/velocity-audio-venv/bin/pip install 'numpy>=1.26,<3'
+            /tmp/velocity-audio-venv/bin/python tools/render_soundtrack.py
+          fi
+          test -s audio/generated/soundtrack.ogg
+      - name: Import and validate project
+        run: |
+          set -euo pipefail
+          godot --headless --path . --import 2>&1 | tee /tmp/godot-import.log
+          if grep -E 'SCRIPT ERROR:|Parse Error:|ERROR: Failed to load|Invalid call' /tmp/godot-import.log; then
+            echo "::error::Godot import or GDScript parser failed"
+            exit 1
+          fi
+      - name: Headless game startup smoke test
+        run: |
+          set -euo pipefail
+          godot --headless --path . --quit-after 100 2>&1 | tee /tmp/godot-run.log
+          if grep -E 'SCRIPT ERROR:|Parse Error:|ERROR: Failed to load|Invalid call' /tmp/godot-run.log; then
+            echo "::error::Godot encountered script/runtime errors during startup"
+            exit 1
+          fi
+      - name: Verify momentum and procedural terrain
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 150s godot --headless --path . --script res://tests/flow.gd 2>&1 | tee /tmp/godot-gameplay.log
+          grep -F 'PASS: flow movement, slopes, landings and streaming' /tmp/godot-gameplay.log
+      - name: Export HTML5 with a unique release path
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${RELEASE_SHA:0:12}"
+          # Public version is readable and increments with each workflow run.
+          # Keep a private cache key so even reruns cannot reuse stale assets.
+          VERSION="0.${GITHUB_RUN_NUMBER}"
+          RELEASE_KEY="v${VERSION}-${SHORT_SHA}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_DIR="build/web/releases/$RELEASE_KEY"
+          mkdir -p "$RELEASE_DIR"
+          godot --headless --path . --export-release "Web" "$RELEASE_DIR/index.html" 2>&1 | tee /tmp/godot-export.log
+          test -s "$RELEASE_DIR/index.html"
+          test -s "$RELEASE_DIR/index.js"
+          test -s "$RELEASE_DIR/index.wasm"
+          test -s "$RELEASE_DIR/index.pck"
+          cp web/music.js "$RELEASE_DIR/music.js"
+          cp audio/generated/soundtrack.ogg "$RELEASE_DIR/soundtrack.ogg"
+          test -s "$RELEASE_DIR/soundtrack.ogg"
+          # Keep the public address stable. A full-viewport iframe loads
+          # the uniquely versioned engine files without redirecting the tab.
+          cat > build/web/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+          <title>Vector Velocity · V. $VERSION</title>
+          <style>html,body{width:100%;height:100%;margin:0;background:#070819;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style>
+          </head>
+          <body>
+          <iframe id="game" title="Vector Velocity" src="./releases/$RELEASE_KEY/index.html" allow="fullscreen; autoplay; gamepad" allowfullscreen tabindex="0"></iframe>
+          <script>const game=document.getElementById('game');game.addEventListener('load',()=>{game.focus();});</script>
+          </body>
+          </html>
+          EOF
+          # Repair old bookmarks/tabs that point to removed release directories.
+          # A cache-busting query also bypasses any cached old redirect page.
+          cat > build/web/404.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Vector Velocity — Updated</title>
+          <style>body{background:#070819;color:#e8faff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;text-align:center}a{color:#2aebff}</style>
+          </head>
+          <body>
+          <main><h1>VECTOR VELOCITY</h1><p>This release has been replaced.</p><p><a href="/Cracked/?v=$RELEASE_KEY">Open the latest build</a></p></main>
+          <script>if(location.pathname.startsWith('/Cracked/releases/'))location.replace('/Cracked/?v=$RELEASE_KEY');</script>
+          </body>
+          </html>
+          EOF
+          # Insert a persistent build ID into the real game page.
+          python3 - "$RELEASE_DIR/index.html" "$VERSION" <<'PY'
+          import pathlib, sys
+          page = pathlib.Path(sys.argv[1])
+          version = sys.argv[2]
+          html = page.read_text(encoding="utf-8")
+          badge = (f'<aside id="build-id" aria-label="Game version" style="position:fixed;'
+                   f'top:8px;right:10px;z-index:100;pointer-events:none;'
+                   f'background:rgba(2,8,26,.7);color:#a9faff;padding:4px 8px;'
+                   f'font:12px monospace;border:1px solid #31748e;'
+                   f'border-radius:4px">V. {version}</aside>')
+          if '</body>' not in html:
+              raise SystemExit("Cannot find closing body in exported Godot HTML")
+          # Install the native audio controller before Godot starts.
+          html = html.replace('</head>', '<script src="music.js"></script></head>', 1)
+          page.write_text(html.replace('</body>', badge + '</body>', 1), encoding="utf-8")
+          PY
+          printf 'V. %s\n' "$VERSION" > build/web/version.txt
+          cp CHANGELOG.md build/web/CHANGELOG.md
+          python3 - <<'PY'
+          from pathlib import Path
+          from html import escape
+          source = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          parts = []
+          for line in source.splitlines():
+              if line.startswith("# "):
+                  parts.append("<h1>"+escape(line[2:])+"</h1>")
+              elif line.startswith("## "):
+                  parts.append("<h2>"+escape(line[3:])+"</h2>")
+              elif line.startswith("- "):
+                  parts.append("<p>• "+escape(line[2:])+"</p>")
+          Path("build/web/changelog.html").write_text('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vector Velocity — Changelog</title><style>body{background:#080c1a;color:#e5f7ff;font:16px/1.6 system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 20px}h1,h2,a{color:#35e8ff}h2{border-bottom:1px solid #275166;padding-bottom:8px;margin-top:34px}p{margin:8px 0}</style><a href="./">Back to Vector Velocity</a>'+"".join(parts)+"</html>",encoding="utf-8")
+          PY
+          test -s build/web/changelog.html
           touch build/web/.nojekyll
-          sed -i "s|</body>|<small style='position:fixed;bottom:4px;right:6px;color:#9c90b1;font:10px monospace'>V. 0.$GITHUB_RUN_NUMBER</small></body>|" build/web/index.html
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+          test -s build/web/index.html
+          test -s build/web/version.txt
+          grep -Fx "V. $VERSION" build/web/version.txt
+          grep -F "V. $VERSION</aside>" "$RELEASE_DIR/index.html"
+          test -s build/web/404.html
+          grep -F "./releases/$RELEASE_KEY/index.html" build/web/index.html
+          echo "Published stable URL: https://unborne-fetus.github.io/Cracked/?v=$RELEASE_KEY"
+      - name: Publish readable CI result to commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then
+            STATE="success"
+            DETAIL="Godot import, headless tests and browser export passed"
+          else
+            STATE="failure"
+            DETAIL="Build failed; see Actions logs"
+            for LOG in /tmp/godot-export.log /tmp/godot-gameplay.log /tmp/godot-collision.log /tmp/godot-run.log /tmp/godot-import.log; do
+              if [ -f "$LOG" ]; then
+                LINE=$(grep -E 'SCRIPT ERROR:|Parse Error:|ERROR:|FAILED|Assertion failed|GAMEPLAY REGRESSION:|GROUND COLLISION REGRESSION:' "$LOG" | tail -n 1 || true)
+                if [ -n "$LINE" ]; then
+                  DETAIL="$(printf "%s" "$LINE" | tr -cd '[:print:]' | cut -c1-135)"
+                  break
+                fi
+              fi
+            done
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$STATE" \
+            -f context="cracked/godot-build" \
+            -f description="$DETAIL" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      # Pages artifact is already downloadable from the run; do not
+      # upload the identical wasm/pck a second time.
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Prepare GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          path: build/web
+          path: build/web/
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pages: write
       id-token: write
@@ -42,6 +235,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy
+      - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
