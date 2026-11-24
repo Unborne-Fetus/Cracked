@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Loop motorcycle and broader terrain
+- Keep lightcycle through the entire loop; exact-contact landings and trajectory-preserving impacts.
+- Keep chase camera aimed at the player during loops, including replay.
+- Seven new speed-scaled flowing track profiles, with frequent long sweeping turns.
+
 ## Loop clipping and chase camera
 - Match grounded loop contact to the actual emitted triangles and sweep airborne feet/body against both loop faces.
 - Refine loop projection and route metric; preserve a full third-person chase arm at loops.

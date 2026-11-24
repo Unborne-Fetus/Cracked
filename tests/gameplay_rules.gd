@@ -1266,6 +1266,7 @@ func _run_tests() -> void:
 		return
 	# Directly exercise the branch cadence without expensive extra meshes.
 	course.set("sections_since_split", 5)
+	course.set("sections_since_sweep",0)
 	course.set("sections_since_roll", 0)
 	course.set("sections_since_loop", 0)
 	course.set("demanding_sections", 0)
@@ -1343,7 +1344,38 @@ func _run_tests() -> void:
 			if sprite_camera.position.distance_to(runner.position)<8.0:
 				_fail("Loop chase camera collapsed into near first-person.")
 				return
-	print("PASS: actual loop triangle sweeps and chase distance")
+			var target_direction: Vector3=(runner.position+loop_face.basis.y*1.35-sprite_camera.position).normalized()
+			if (-sprite_camera.basis.z).dot(target_direction)<0.98:
+				_fail("Loop camera is not aimed at the rider.")
+				return
+			runner.call("_update_rider_animation",0.1)
+			runner.call("update_rider_sprite",sprite_camera,1.0)
+			var loop_model: Node3D=runner.get("rider_model")
+			if not (loop_model.get("lightcycle") as Node3D).visible or (loop_model.get("treads") as Node3D).visible or (loop_model.get("gyro") as Node3D).visible:
+				_fail("Loop changed the motorcycle to another vehicle.")
+				return
+	# A player flying parallel to the entrance must not snap onto the loop.
+	var air_at:=fixture_length*1.20
+	var air_face: Transform3D=course.call("surface_frame",air_at,-32.0,1)
+	runner.set("distance",air_at)
+	runner.set("lane",-32.0)
+	runner.set("grounded",false)
+	runner.set("air_time",0.4)
+	runner.set("fallen",false)
+	runner.set("air_basis",air_face.basis)
+	runner.set("air_velocity",-air_face.basis.z*30.0)
+	runner.position=air_face.origin+air_face.basis.y*5.0
+	var air_before: Vector3=runner.position
+	runner.call("_flight_step",1.0/120.0,course,0.0)
+	if bool(runner.get("grounded")) or runner.position.distance_to(air_before)>1.0:
+		_fail("Airborne near miss teleported onto loop.")
+		return
+	var sweep_basis: Basis=course.call("_orientation","GRAND TURN",1.0,-1.0,1.0,1.0,1.0)
+	var sweep_start: Basis=course.call("_orientation","GRAND TURN",0.0,-1.0,1.0,1.0,1.0)
+	if (-sweep_start.z).angle_to(-sweep_basis.z)<1.8 or float(course.call("bank_length","GRAND TURN",180.0))<900.0:
+		_fail("Grand turns are not sufficiently wide.")
+		return
+	print("PASS: actual loop triangle sweeps, motorcycle, flight and chase distance")
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")
 	game.queue_free()

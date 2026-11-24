@@ -127,3 +127,6 @@ The regular ground and short-hop visual is now a dark hubless-wheel lightcycle w
 
 ## Loop collision and camera
 Loop riding positions interpolate the actual mesh triangles; airborne contacts sweep those same triangles across both loop arms and both faces. The third-person loop camera uses physical-distance trailing positions and an elevated fallback instead of collapsing onto the rider. The camera's loop sightline tests use the actual loop geometry. Existing loop rewards, safe bypass and momentum rules remain.
+
+## Loop vehicle and terrain variety
+The lightcycle stays active throughout a grounded vertical loop, including its crown; ceiling and wall hardware are reserved for actual ceiling/wall routes. Loop landings require exact swept foot contact, while body impacts deflect at the impact position. New speed-scaled track profiles include grand turns, descending sweeps, double bends, wave runs, crest runs, wide slaloms and banked bowls. Recovery and loop scheduling remain in place.

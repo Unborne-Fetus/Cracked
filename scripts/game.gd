@@ -336,7 +336,7 @@ func _update_camera(delta: float) -> void:
 	var forward: Vector3 = -frame.basis.z
 	var pos: Vector3 = runner.position
 	var actively_sliding: bool = runner.is_grounded() and runner.is_sliding
-	var loop_view: bool = not first_person and course.near_loop(player_s,24.0)
+	var loop_view: bool = not first_person and (course.near_loop(player_s,24.0) or course.loop_world_near(pos,pos,15.0))
 	runner.set_first_person(first_person)
 	var mode_changed := last_camera_fp != first_person
 	last_camera_fp = first_person
@@ -466,12 +466,16 @@ func _update_camera(delta: float) -> void:
 		# clearance here. Keep diagnostics meaningful on loop surfaces.
 		if camera_track_clearance<1.05 and _camera_line_clear(view_camera.position,pos+up*1.35,camera_track_s,player_s):
 			camera_track_clearance=1.30
+		var exact_look: Vector3=(pos+up*1.35-view_camera.position).normalized()
+		if exact_look.length_squared()>0.01:
+			var camera_up:=Vector3.UP if absf(exact_look.dot(Vector3.UP))<0.985 else frame.basis.x
+			camera_goal=Basis.looking_at(exact_look,camera_up)
 	camera_offset = view_camera.position - pos
 	camera_was_grounded = runner.is_grounded()
 	# Quaternion interpolation avoids Euler flips near 180/360 degrees.
 	# A short time constant removes sudden orientation kicks without a
 	# long lag that would point the camera back through the ribbon.
-	if not camera_rotation_ready:
+	if not camera_rotation_ready or loop_view:
 		view_camera.basis = camera_goal
 		camera_rotation_ready = true
 	else:

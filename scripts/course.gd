@@ -44,6 +44,8 @@ var recent_kinds: Array[String] = []
 var sections_since_split := 0
 var sections_since_roll := 0
 var sections_since_loop := 0
+var sections_since_sweep := 0
+const SWEEP_TRACKS: Array[String]=["GRAND TURN","DESCENDING SWEEP","DOUBLE BEND","WAVE RUN","CREST RUN","WIDE SLALOM","BANKED BOWL"]
 const LOOP_MIN_SPACING := 2
 const LOOP_TARGET_SPACING := 3
 const LOOP_MAX_SPACING := 5
@@ -86,6 +88,7 @@ func reset_course(seed_value: int) -> void:
 	sections_since_split = 0
 	sections_since_roll = 0
 	sections_since_loop = 0
+	sections_since_sweep = 0
 	last_kind = ""
 	sustained_roll_queue.clear()
 	sustained_roll_sign = 1.0
@@ -173,6 +176,15 @@ func _kind(index: int) -> String:
 	if not showcase_layout and index >= 3 and sections_since_loop >= LOOP_MIN_SPACING and last_kind != "LOOP ROUTE":
 		if sections_since_loop >= LOOP_MAX_SPACING or (sections_since_loop >= LOOP_TARGET_SPACING and rng.randf() < 0.80):
 			return "LOOP ROUTE"
+	# Long flowing bends have a dedicated cadence, without interrupting loops
+	# or the already committed wall/ceiling sequences.
+	if not showcase_layout and index>=2 and sections_since_sweep>=3:
+		var sweep_choices: Array[String]=[]
+		for profile in SWEEP_TRACKS:
+			if not recent_kinds.has(profile):
+				sweep_choices.append(profile)
+		if not sweep_choices.is_empty():
+			return sweep_choices[rng.randi_range(0,sweep_choices.size()-1)]
 	# Wall and ceiling sequences recur much more often than the random bag.
 	if not showcase_layout and index>=2 and (sections_since_roll>=4 or (sections_since_roll>=2 and rng.randf()<0.42)):
 		if rng.randf()<0.52:
@@ -188,6 +200,7 @@ func _kind(index: int) -> String:
 		return "STACKED ROUTES" if rng.randf()<0.18 else "SPLIT ROUTE"
 	if terrain_bag.is_empty():
 		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY", "SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"])
+		terrain_bag.append_array(SWEEP_TRACKS)
 	var candidates: Array[int] = []
 	for i in range(terrain_bag.size()):
 		var candidate := terrain_bag[i]
@@ -228,6 +241,8 @@ func chunk_index_at(distance: float) -> int:
 	return clampi(chunk_starts.bsearch(maxf(0.0, distance), false) - 1, 0, maxi(0, next_index - 1))
 
 func bank_length(kind: String, planned_speed: float) -> float:
+	if kind in SWEEP_TRACKS:
+		return maxf(640.0,planned_speed*5.5)
 	if is_extreme_bank(kind) or kind in ["BANKED TURN", "TURN", "BANKED DESCENT", "S CURVE", "CHICANE", "CAMBER WAVE", "STACKED ROUTES", "SPLIT ROUTE", "SLIPSTREAM"]:
 		# Scale length, not roll angle; no change to already generated road.
 		return CHUNK_LENGTH * clampf(planned_speed / 65.0, 1.0, 8.0)
@@ -293,6 +308,28 @@ func _orientation(kind: String, u: float, start_yaw: float, target_yaw: float, b
 		roll = signf(target_yaw - start_yaw) * 0.52 * sin(PI * u) * sin(PI * u)
 	elif kind == "WIDE BASIN":
 		pitch = -0.20 * sin(TAU * u) * strength
+	elif kind=="GRAND TURN":
+		roll=signf(target_yaw-start_yaw)*0.48*pow(sin(PI*u),2.0)
+		pitch=-0.08*sin(PI*u)
+	elif kind=="DESCENDING SWEEP":
+		roll=signf(target_yaw-start_yaw)*0.58*pow(sin(PI*u),2.0)
+		pitch=-0.36*sin(PI*u)*strength
+	elif kind=="DOUBLE BEND":
+		angle=clampf(start_yaw+bank_sign*0.95*sin(TAU*u)*pow(sin(PI*u),1.3),-1.25,1.25)
+		roll=bank_sign*0.45*sin(TAU*u)*sin(PI*u)
+		pitch=-0.11*sin(PI*u)
+	elif kind=="WAVE RUN":
+		pitch=(-0.18*sin(TAU*3.0*u)-0.13*sin(PI*u))*strength
+		roll=bank_sign*0.22*sin(TAU*2.0*u)*sin(PI*u)
+	elif kind=="CREST RUN":
+		pitch=(0.24*sin(TAU*u)-0.16*sin(PI*u))*strength
+	elif kind=="WIDE SLALOM":
+		angle=clampf(start_yaw+bank_sign*0.72*sin(TAU*2.0*u)*pow(sin(PI*u),2.0),-1.25,1.25)
+		roll=bank_sign*0.37*sin(TAU*2.0*u)*sin(PI*u)
+		pitch=-0.10*sin(PI*u)
+	elif kind=="BANKED BOWL":
+		pitch=-0.33*sin(TAU*u)*strength
+		roll=bank_sign*0.44*sin(PI*u)*sin(PI*u)
 	elif is_sustained_roll(kind):
 		var target_roll := PI * 0.5 if kind.begins_with("WALL ") else PI
 		var progress := 1.0
@@ -340,7 +377,12 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 		if kind.ends_with("ENTRY"):
 			sustained_roll_sign = bank_sign
 		bank_sign = sustained_roll_sign
-	if kind == "TURN" or kind == "BANKED TURN" or kind == "BANKED DESCENT":
+	if kind in ["GRAND TURN","DESCENDING SWEEP"]:
+		# Deliberately sweep between opposite heading limits for 90–125
+		# degree corners, while retaining forward world progress.
+		var direction:= -1.0 if yaw>0.0 else 1.0
+		target_yaw=clampf(yaw+direction*rng.randf_range(1.6,2.2),-1.25,1.25)
+	elif kind == "TURN" or kind == "BANKED TURN" or kind == "BANKED DESCENT":
 		var direction := -1.0 if yaw > 0.35 else (1.0 if yaw < -0.35 else (-1.0 if rng.randf() < 0.5 else 1.0))
 		target_yaw = clampf(yaw + direction * rng.randf_range(0.75, 0.98), -1.25, 1.25)
 	# Plan terrain and obstacle groups before instantiating the mesh. The
@@ -395,6 +437,7 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 				forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 	last_kind = kind
 	sections_since_loop = 0 if kind == "LOOP ROUTE" else sections_since_loop + 1
+	sections_since_sweep=0 if kind in SWEEP_TRACKS else sections_since_sweep+1
 	if is_sustained_roll(kind) or kind in ["180 BANK","360 BANK","CORKSCREW TUNNEL","HALFPIPE"]:
 		sections_since_roll=0
 	else:

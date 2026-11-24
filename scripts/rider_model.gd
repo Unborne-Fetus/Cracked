@@ -560,13 +560,16 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var grab_total := clampf(grab+nose_grab+tail_grab+indy+method_grab+cross_grab,0.0,1.0)
 	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
 	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
-	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
+	var loop_cycle:=bool(extra.get("loop_cycle",false)) and not airborne
+	var inverted := 0.0 if loop_cycle else clampf(float(extra.get("inverted",0.0)),0.0,1.0)
 	var hang:=maxf(inverted if not airborne else 0.0,glide*(1.0-release)*(1.0-transfer_settle))
 	var wing_span:=glide*(1.0-wing_fold)*(1.0-smoothstep(0.10,0.48,gyro_transfer) if transferring else 1.0)
 	wings.visible=wing_span>0.015
 	wings.scale.x=maxf(0.01,wing_span)
 	var side_ride:=clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang) if not airborne and not gliding else 0.0
-	var sideways:=smoothstep(0.50,0.90,absf(side_ride))
+	var sideways:=0.0 if loop_cycle else smoothstep(0.50,0.90,absf(side_ride))
+	if loop_cycle:
+		side_ride=0.0
 	if transferring:
 		sideways=smoothstep(0.42,1.0,gyro_transfer)
 	# Hardware is tied to contact, not the hanging animation. Airborne
@@ -600,7 +603,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		var jet_length:=0.65+0.27*sin(phase*16.0+float(exhaust_index))+0.75*clampf(float(extra.get("speed_factor",0.0)),0.0,1.0)+glider_dive*0.65
 		exhaust.scale.z=jet_length
 		exhaust.position.z=0.52+0.43*jet_length
-	gyro_deploy=lerpf(gyro_deploy,sideways,blend)
+	gyro_deploy=0.0 if loop_cycle else lerpf(gyro_deploy,sideways,blend)
 	gyro.visible=gyro_deploy>0.015 and not first_person_view
 	_pose_gyro_panels(gyro_deploy,phase,gyro_trick,gyro_cycle,gyro_progress)
 	# The hoverboard remains full-size as the pilot's inner platform.
@@ -911,6 +914,14 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			rotation=rotation.lerp(Vector3.ZERO,smoothstep(0.0,0.75,cycle_target))
 			visual_lift*=1.0-cycle_target
 			visual_pivot*=1.0-cycle_target
+	if loop_cycle and use_cycle:
+		cycle_target=1.0
+		wings.hide()
+		treads.hide()
+		gyro.hide()
+		rotation=Vector3.ZERO
+		visual_lift=0.0
+		visual_pivot=0.0
 	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,float(extra.get("cycle_distance",phase*4.0)))
 	if cycle_target>0.5:
 		for mesh_index in range(2):
