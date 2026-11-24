@@ -376,21 +376,47 @@ func _run() -> void:
 	if str(game.get("status")) != "running" or session.world != 2 or not session.endless or session.total_distance < distance:
 		_fail("Endless scene did not transition automatically.")
 		return
-	# The original articulated body is restored without changing movement or adding vehicles.
+	# Original board/glider geometry and real automatic animation transitions.
 	var rider_model: Node3D = runner.get("model")
-	if rider_model.get_script() != preload("res://scripts/rider_model.gd") or rider_model.get_child_count() != 13:
-		_fail("Original white rider body not restored.")
+	var board: Node3D = rider_model.get("board")
+	var wings: Node3D = rider_model.get("wings")
+	var gyro: Node3D = rider_model.get("gyro")
+	var ceiling: Node3D = rider_model.get("treads")
+	runner.call("reset", course)
+	if not board.visible or wings.visible or gyro.visible or ceiling.visible:
+		_fail("Original board ground pose incorrect.")
 		return
-	var boots: Array = rider_model.get("boots")
-	var original_boot: Vector3 = boots[0].position
-	rider_model.call("pose_run", PI * 0.5, 90.0, 0.0, true, false, 0.0, 0.0, 1.0)
-	if boots[0].position.distance_to(original_boot) < 0.05:
-		_fail("Original rider lacks running animation.")
+	runner.set("grounded", false)
+	runner.set("air_time", 0.5)
+	runner.set("vy", 15.0)
+	runner.position.y += 30.0
+	for frame in range(50):
+		runner.call("_pose", 1.0 / 60.0, course)
+	if not wings.visible or float(runner.get("glider_deploy")) != 1.0 or float(runner.get("glider_entry")) >= 0.0:
+		_fail("Original glider failed to deploy.")
 		return
-	rider_model.call("pose_run", 0.0, 90.0, 0.0, false, true, 0.0, -0.4, 1.0)
+	runner.set("diving", true)
+	runner.call("_pose", 0.1, course)
+	if not wings.visible:
+		_fail("Glider dive folded prematurely.")
+		return
+	runner.set("diving", false)
+	runner.set("vy", -30.0)
+	runner.position.y = float(course.call("elevation", runner.position.x, -runner.position.z)) + 8.0
+	runner.call("_pose", 0.01, course)
+	if float(runner.get("glider_return")) < 0.0:
+		_fail("Glider return did not begin before landing.")
+		return
+	for frame in range(40):
+		runner.call("_pose", 1.0 / 60.0, course)
+	runner.set("grounded", true)
+	runner.call("_pose", 0.1, course)
+	if wings.visible or not board.visible or gyro.visible or ceiling.visible or float(runner.get("glider_deploy")) != 0.0:
+		_fail("Board catch did not restore ground configuration.")
+		return
 	for part in rider_model.get_children():
 		if not (part as Node3D).transform.is_finite():
-			_fail("Original rider dive pose is nonfinite.")
+			_fail("Original vehicle rig pose is nonfinite.")
 			return
 	print("PASS: flow movement, slopes, landings and streaming")
 	quit(0)

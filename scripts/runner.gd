@@ -33,6 +33,15 @@ var cue := ""
 var cue_time := 0.0
 var gait := 0.0
 var model: Node3D
+var visual_mount: Node3D
+var glider_deploy := 0.0
+var glider_entry := -1.0
+var glider_return := -1.0
+var glider_used := false
+var glider_clock := 0.0
+var rider_crouch := 0.0
+const GLIDER_ENTRY_TIME := 0.64
+const GLIDER_RETURN_TIME := 0.52
 var landing_marker: MeshInstance3D
 var landing_mat: StandardMaterial3D
 var marker_clock := 0.0
@@ -57,9 +66,12 @@ var gust_direction := 0.0
 var energy_lock := 0.0
 
 func _ready() -> void:
+	visual_mount = Node3D.new()
+	visual_mount.name = "VehicleMount"
+	add_child(visual_mount)
 	model = RiderModel.new()
 	model.name = "OriginalRider"
-	add_child(model)
+	visual_mount.add_child(model)
 	trail = MeshInstance3D.new()
 	trail.mesh = trail_mesh
 	trail.top_level = true
@@ -130,9 +142,17 @@ func reset(course: Node3D) -> void:
 	gait = 0.0
 	position = Vector3(0.0, float(course.call("elevation", 0.0, 0.0)) + FOOT, 0.0)
 	safe_position = position
+	glider_deploy = 0.0
+	glider_entry = -1.0
+	glider_return = -1.0
+	glider_used = false
+	glider_clock = 0.0
+	rider_crouch = 0.0
+	model.position = Vector3.ZERO
 	model.rotation = Vector3.ZERO
 	model.scale = Vector3.ONE
-	model.call("pose_run", 0.0, speed, 0.0, true, false, 0.0, 0.0, 1.0)
+	visual_mount.basis = Basis.IDENTITY
+	model.call("pose", 0.0, 0.0, false, 1.0)
 
 func progress() -> float:
 	return -position.z
@@ -416,15 +436,61 @@ func apply_guardian_hit(effect: int = 0, direction: float = 1.0) -> void:
 			cue = "GUARDIAN WAVE"
 	cue_time = 0.7
 
+# Visual state only: preserve the current momentum, flight and energy equations.
+# A low hop stays on the board; a longer launch unfolds the original glider.
+func _update_vehicle(dt: float, clearance: float) -> void:
+	if grounded:
+		if glider_deploy > 0.0:
+			glider_entry = -1.0
+			glider_return = maxf(0.74, glider_return)
+		else:
+			glider_used = false
+	if glider_return >= 0.0:
+		glider_return = minf(1.0, glider_return + dt / GLIDER_RETURN_TIME)
+		if glider_return >= 1.0:
+			glider_return = -1.0
+			glider_deploy = 0.0
+			glider_clock = 0.0
+		return
+	var near_landing := clearance < 5.0 or (vy < -1.0 and clearance / maxf(1.0, -vy) < 0.75)
+	if glider_entry >= 0.0:
+		if near_landing and vy < 0.0:
+			glider_return = maxf(0.0, 1.0 - glider_entry)
+			glider_entry = -1.0
+		else:
+			glider_entry = minf(1.0, glider_entry + dt / GLIDER_ENTRY_TIME)
+			if glider_entry >= 1.0:
+				glider_entry = -1.0
+	elif glider_deploy > 0.0 and near_landing:
+		glider_return = 0.0
+	elif not grounded and not diving and not glider_used and air_time >= 0.18 and clearance >= 9.0 and not near_landing:
+		glider_deploy = 1.0
+		glider_entry = 0.0
+		glider_used = true
+	if glider_deploy > 0.0:
+		glider_clock += dt
+
 func _pose(dt: float, course: Node3D) -> void:
-	gait += dt * clampf(speed * 0.24, 5.0, 24.0)
-	var slope: Vector2 = course.call("grade", position.x, -position.z)
+	gait = fposmod(gait + dt * (0.75 + clampf(speed / 100.0, 0.0, 1.5)), TAU * 50.0)
+	var floor_height: float = course.call("elevation", position.x, -position.z)
+	_update_vehicle(dt, maxf(0.0, position.y - floor_height))
 	landing_compression = move_toward(landing_compression, 0.0, dt * 4.8)
-	var pitch := atan(slope.y) if grounded else clampf(atan2(vy, speed), -0.8, 0.65)
 	var steer := clampf(lateral / maxf(speed, 25.0), -1.0, 1.0)
-	model.rotation.y = lerpf(model.rotation.y, -atan2(lateral, speed), 1.0 - exp(-dt * 9.0))
-	model.rotation.x = lerpf(model.rotation.x, pitch * (0.65 if grounded else 0.30), 1.0 - exp(-dt * 10.0))
-	model.call("pose_run", gait, speed, steer, grounded, diving, landing_compression, pitch, 1.0 - exp(-dt * 20.0))
+	var crouch_target := 0.12 + 0.30 * smoothstep(30.0, 150.0, speed) if grounded else (1.0 if diving else 0.48)
+	rider_crouch = lerpf(rider_crouch, crouch_target, 1.0 - exp(-dt * 13.0))
+	var forward := Vector3(lateral, 0.0, -speed).normalized()
+	var up := Vector3.UP
+	if grounded:
+		up = course.call("normal_at", position.x, -position.z)
+		forward = forward.slide(up).normalized()
+	var desired := Basis.looking_at(forward, up)
+	visual_mount.basis = visual_mount.basis.orthonormalized().slerp(desired, 1.0 - exp(-dt * 12.0)).orthonormalized()
+	# Reuse the original rigid wing deployment, fly-away, freefall, swoop
+	# and catch animation. The old gyro and ceiling modes are never enabled.
+	model.call("pose", rider_crouch, steer, not grounded, 1.0, gait, landing_compression, 0.0, diving, 1.0 if diving else 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, {"glider": glider_deploy, "glider_return": glider_return, "glider_entry": glider_entry, "glider_spin": 1.0, "glider_clock": glider_clock, "speed_factor": clampf(speed / 250.0, 0.0, 1.0), "pose_blend": 1.0 - exp(-dt * 20.0)})
+	var pivot: float = model.get("visual_pivot")
+	var lift: float = model.get("visual_lift")
+	model.position = Vector3.UP * (pivot + lift) - model.basis * Vector3.UP * pivot
 
 func _update_trail(dt: float) -> void:
 	trail_clock += dt

@@ -1,5 +1,9 @@
 # Vector Velocity changelog
 
+## Board and glider restoration
+- Reused original board, wing geometry, engines and transformation solver. Automatic long-flight deployment, diving pose and return-to-board catch on landing.
+- Kept current physics, upgrades and expedition structure; gyro and ceiling vehicles remain excluded.
+
 ## Original rider restoration
 - Restored the original white articulated body and cyan trail, using on-foot run, dive and landing animation. Kept current physics and progression; vehicles remain excluded.
 
