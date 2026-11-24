@@ -445,8 +445,8 @@ func _run_tests() -> void:
 	var original_speed: float = storm.get("speed")
 	var original_s: float = storm.get("front_s")
 	storm.call("advance", 10.0)
-	if float(storm.get("speed")) < original_speed + 17.0 or float(storm.get("front_s")) <= original_s:
-		_fail("Storm must advance and accelerate.")
+	if absf(float(storm.get("speed")) - (original_speed + 11.1)) > 0.01 or float(storm.get("front_s")) <= original_s:
+		_fail("Storm must advance at the revised gentler acceleration rate.")
 		return
 	game.call("_lose", "TEST")
 	if not bool(game.get("run_finished")):
