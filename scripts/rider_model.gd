@@ -361,7 +361,7 @@ func _cycle_shell(parent: Node3D, material: StandardMaterial3D) -> void:
 
 # The old board remains the glider/gyro/ceiling platform. The cycle
 # folds its wheel carriers into that platform at a surface/flight handoff.
-func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, _blend: float) -> void:
+func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, traveled: float) -> void:
 	cycle_amount=amount
 	cycle_fold=1.0-amount
 	lightcycle.visible=amount>0.015
@@ -390,7 +390,7 @@ func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, fli
 		var z:float=-1.08 if i==0 else 1.08
 		fork.position=Vector3(0,lerpf(0.17,0.52,amount),z*lerpf(0.46,1.0,amount))
 		fork.rotation=Vector3(0,turn*0.18 if i==0 else 0.0,(1.0 if i==0 else -1.0)*PI*0.5*cycle_fold)
-		cycle_wheels[i].rotation.x=fposmod(phase*(5.0+speed_mix*13.0),TAU)
+		cycle_wheels[i].rotation.x=fposmod(-traveled/0.52,TAU)
 	# Fade from the former rig pose to a real seated pose; hands and feet
 	# are solved against the bike's current steering/compression transforms.
 	var strength:=smoothstep(0.12,0.85,amount)
@@ -420,7 +420,7 @@ func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, fli
 		var grip:=cycle_grips[i]
 		grip.rotation.y=turn*0.22
 		var grip_target:=lightcycle.transform*(cycle_frame.transform*grip.position)
-		var old_hand:=lower_arms[i].position-lower_arms[i].basis.y*0.5
+		var old_hand:=lower_arms[i].position+lower_arms[i].basis.y*0.5
 		var hand:=old_hand.lerp(grip_target,strength)
 		var elbow:=_joint(arm_start,hand,lightcycle.basis*Vector3(side*0.65,-0.1,0.6),ARM_LENGTH)
 		_segment(upper_arms[i],arm_start,elbow)
@@ -911,7 +911,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			rotation=rotation.lerp(Vector3.ZERO,smoothstep(0.0,0.75,cycle_target))
 			visual_lift*=1.0-cycle_target
 			visual_pivot*=1.0-cycle_target
-	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,blend)
+	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,float(extra.get("cycle_distance",phase*4.0)))
 	if cycle_target>0.5:
 		for mesh_index in range(2):
 			(board.get_child(mesh_index) as Node3D).visible=false
