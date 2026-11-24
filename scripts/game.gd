@@ -11,6 +11,9 @@ var combat
 var combat_label: Label
 var crosshair: Label
 var pulse_button: Button
+var aim_cursor: ImageTexture
+var aim_cursor_active := false
+var mouse_aim_active := true
 var replay
 var replay_active := false
 var replay_playing := false
@@ -179,8 +182,8 @@ func _restart() -> void:
 	course.fixed_daily_layout = mode == 1
 	course.reset_course(run_seed)
 	runner.reset_run(course)
-	combat.reset(mode==6,run_seed)
-	runner.combat_enabled=mode==6
+	combat.reset(true,run_seed)
+	runner.combat_enabled=true
 	runner.jumps_disabled = mode == 2
 	if mode == 3:
 		first_person = true
@@ -208,7 +211,7 @@ func _physics_process(delta: float) -> void:
 	var previous_speed: float = runner.speed
 	runner.tick(delta, course)
 	combat.tick(delta,course,runner)
-	if mode==6 and combat.shield<=0.0:
+	if combat.enabled and mode!=5 and combat.shield<=0.0:
 		_lose("SHIELD DEPLETED")
 		return
 	extras.track(delta, runner, previous_speed)
@@ -300,7 +303,7 @@ func _update_camera(delta: float) -> void:
 		var air_forward: Vector3 = -frame.basis.z
 		camera_track_s = player_s
 		if first_person:
-			view_camera.position = pos+air_up*1.90-air_forward*0.32
+			view_camera.position=pos+air_up*1.90+air_forward*0.65
 			_aim_camera(view_camera.position+(air_forward-air_up*0.34)*25.0,air_up)
 		else:
 			view_camera.position = pos - air_forward * 9.0 + air_up * 4.0
@@ -311,7 +314,7 @@ func _update_camera(delta: float) -> void:
 	elif first_person:
 		camera_track_s = player_s
 		var hang_eye: float=lerpf(slide_eye_height+0.30,1.08,float(runner.rider_inverted))
-		view_camera.position = pos+up*hang_eye-forward*0.36
+		view_camera.position=pos+up*hang_eye+forward*0.68
 		_aim_camera(view_camera.position+(forward-up*0.34)*25.0,up)
 	else:
 		var focus := pos + up * 1.35
@@ -344,7 +347,7 @@ func _update_camera(delta: float) -> void:
 		var from_basis: Basis = runner.landing_from_basis
 		var from_up := from_basis.y
 		var from_forward := -from_basis.z
-		var air_offset := from_up * 1.55 if first_person else -from_forward * 9.0 + from_up * 4.0
+		var air_offset:=from_up*1.90+forward*0.65 if first_person else -forward*9.0+from_up*4.0
 		var ground_offset := view_camera.position - pos
 		var candidate := pos + air_offset.lerp(ground_offset, blend)
 		var projected: Vector3 = course.project_position(candidate, lerpf(player_s, camera_track_s, blend))
@@ -356,9 +359,15 @@ func _update_camera(delta: float) -> void:
 			view_camera.position = candidate
 			camera_track_s = projected.x
 		# Match the blended body orientation, preserving the pre-impact view.
-		var air_look := from_forward if first_person else from_forward * 13.0 - from_up * 2.6
+		var air_look:=forward-up*0.34 if first_person else forward*13.0-from_up*2.6
 		var air_goal := _level_camera_basis(air_look)
 		camera_goal = air_goal.slerp(camera_goal, blend).orthonormalized()
+	if first_person and runner.is_grounded():
+		var eye_projection: Vector3=course.project_position(view_camera.position,player_s)
+		var eye_gap: float=course.surface_clearance(eye_projection.x,eye_projection.y,eye_projection.z,int(runner.surface_side))
+		if course.support_at(eye_projection.x,eye_projection.y) and eye_gap<0.95:
+			var eye_surface: Transform3D=course.surface_frame(eye_projection.x,eye_projection.y,int(runner.surface_side))
+			view_camera.position+=eye_surface.basis.y*(0.95-eye_gap)
 	_apply_camera_orbit(pos, up, forward, player_s)
 	# Damp the relative arm, not world coordinates (safe during rebases).
 	var desired_arm := view_camera.position-pos
@@ -403,9 +412,12 @@ func _distance_display(meters: float) -> String:
 	return "%d m" % int(meters)
 
 func _update_hud() -> void:
-	var combat_visible: bool=mode==6 and not replay_active and not run_finished
+	var combat_visible: bool=combat.enabled and not replay_active and not run_finished and not paused
 	combat_label.visible=combat_visible
-	crosshair.visible=combat_visible
+	# Mouse uses a custom crosshair at its actual position. Controller
+	# and touch retain a centered indicator when no mouse is in use.
+	crosshair.visible=combat_visible and not mouse_aim_active
+	_update_combat_cursor(combat_visible)
 	pulse_button.visible=combat_visible
 	if combat_visible:
 		combat_label.text="SHIELD %d%%  //  DRONES %d" % [int(combat.shield),int(combat.score)]
@@ -448,6 +460,7 @@ func _lose(reason: String) -> void:
 	if run_finished:
 		return
 	run_finished = true
+	_update_combat_cursor(false)
 	replay.record(run_time, 0.0, runner, course, storm, true)
 	replay.finish(course, run_seed, mode, extras.cosmetic)
 	watch_replay_button.visible = replay.available()
@@ -478,17 +491,24 @@ func _poll_camera_stick(delta: float) -> void:
 			motion = candidate
 	_orbit_input(motion * delta * 2.4)
 
+func _first_person_look(forward: Vector3,up: Vector3,yaw_offset: float,pitch_offset: float) -> Vector3:
+	var baseline:=_level_camera_basis(forward-up*0.34)
+	var look:=(-baseline.z).rotated(Vector3.UP,yaw_offset)
+	var right:=look.cross(Vector3.UP).normalized()
+	if right.length_squared()>0.001:
+		look=look.rotated(right,-pitch_offset)
+	return look.normalized()
+
 func _apply_camera_orbit(pos: Vector3, track_up: Vector3, track_forward: Vector3, player_s: float) -> void:
 	if absf(orbit_visual_yaw) < 0.0001 and absf(orbit_visual_pitch) < 0.0001 and absf(orbit_visual_zoom - 1.0) < 0.0001:
 		return
 	var up: Vector3 = track_up
 	var forward: Vector3 = track_forward
 	if first_person:
-		var look: Vector3 = (forward-up*0.34).normalized().rotated(up,orbit_visual_yaw)
-		var axis: Vector3 = look.cross(up).normalized()
-		if axis.length_squared() > 0.001:
-			look = look.rotated(axis, orbit_visual_pitch)
-		camera_goal = _level_camera_basis(look)
+		# Mouse right/down always means screen right/down. World-up
+		# yaw and camera-right pitch remain consistent upside down.
+		var look: Vector3=_first_person_look(forward,up,orbit_visual_yaw,orbit_visual_pitch)
+		camera_goal=_level_camera_basis(look)
 		return
 	var focus: Vector3 = pos + up * 1.35
 	# Orbit a track-relative hemisphere, allowing a full 360-degree yaw.
@@ -556,8 +576,30 @@ func _pad_direction(x: int, y: int) -> void:
 	elif x != 0 and options_page.visible and pad_menu_index == 0:
 		_set_units(1 if x > 0 else 0)
 
+func _update_combat_cursor(active: bool) -> void:
+	if DisplayServer.get_name()=="headless" or aim_cursor_active==active:
+		return
+	aim_cursor_active=active
+	if active:
+		if aim_cursor==null:
+			# High contrast, transparent 31x31 cursor with a precise hotspot.
+			var image:=Image.create(31,31,false,Image.FORMAT_RGBA8)
+			image.fill(Color.TRANSPARENT)
+			for y in range(31):
+				for x in range(31):
+					var a:=absi(x-15)
+					var b:=absi(y-15)
+					if (a<=1 and b>=5 and b<=13) or (b<=1 and a>=5 and a<=13) or (a<=1 and b<=1):
+						image.set_pixel(x,y,Color(0.1,1.0,0.92))
+					elif (a<=2 and b>=4 and b<=14) or (b<=2 and a>=4 and a<=14) or (a<=2 and b<=2):
+						image.set_pixel(x,y,Color(0.02,0.06,0.12,0.95))
+			aim_cursor=ImageTexture.create_from_image(image)
+		Input.set_custom_mouse_cursor(aim_cursor,Input.CURSOR_ARROW,Vector2(15,15))
+	else:
+		Input.set_custom_mouse_cursor(null,Input.CURSOR_ARROW)
+
 func _fire_center() -> void:
-	if mode==6 and not paused and not run_finished and not replay_active:
+	if combat.enabled and not paused and not run_finished and not replay_active:
 		combat.fire(view_camera,get_viewport().get_visible_rect().size*0.5)
 
 func _pad_button(button: int) -> bool:
@@ -623,7 +665,7 @@ func _pad_button(button: int) -> bool:
 				else:
 					_show_extras()
 		return true
-	if mode==6 and not run_finished and button==JOY_BUTTON_RIGHT_SHOULDER:
+	if combat.enabled and not run_finished and button==JOY_BUTTON_RIGHT_SHOULDER:
 		_fire_center()
 		return true
 	if _bound_pad("recenter", button, JOY_BUTTON_LEFT_STICK):
@@ -640,7 +682,7 @@ func _pad_button(button: int) -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if paused or (run_finished and not replay_active):
 		return
-	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and mode==6 and not replay_active:
+	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and combat.enabled and not replay_active:
 		combat.fire(view_camera,event.position)
 		get_viewport().set_input_as_handled()
 		return
@@ -650,6 +692,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion or event is InputEventMouseButton:
+		mouse_aim_active=true
+	elif event is InputEventJoypadMotion or event is InputEventJoypadButton or event is InputEventScreenTouch or event is InputEventScreenDrag:
+		mouse_aim_active=false
 	if event is InputEventMouseButton and not paused and (not run_finished or replay_active):
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_RIGHT:
@@ -739,7 +785,7 @@ func _input(event: InputEvent) -> void:
 		return
 	if paused:
 		return
-	if mode==6 and not run_finished and key.keycode==KEY_Z:
+	if combat.enabled and not run_finished and key.keycode==KEY_Z:
 		_fire_center()
 		get_viewport().set_input_as_handled()
 		return
@@ -963,6 +1009,7 @@ func _set_units(index: int, persist: bool = true) -> void:
 
 func _set_paused(value: bool) -> void:
 	paused = value
+	_update_combat_cursor(not value and combat.enabled and not run_finished and not replay_active)
 	if value:
 		orbit_drag = false
 	effects.set_paused(value)
@@ -1284,6 +1331,7 @@ func _start_replay() -> void:
 	_set_paused(false)
 	replay_active = true
 	combat.reset(false)
+	_update_combat_cursor(false)
 	run_finished = true
 	replay_time = 0.0
 	replay_rate = 1.0

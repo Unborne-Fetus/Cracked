@@ -118,6 +118,9 @@ func _run_tests() -> void:
 		return
 	runner.call("set_first_person", bool(game.get("first_person")))
 	var combat_probe: Node3D=game.get("combat")
+	if not bool(combat_probe.get("enabled")):
+		_fail("Combat is not enabled in the normal run.")
+		return
 	combat_probe.call("reset",true,4)
 	combat_probe.call("_spawn",course,runner)
 	var drones_probe: Array=combat_probe.get("drones")
@@ -137,6 +140,21 @@ func _run_tests() -> void:
 		return
 	combat_probe.call("reset",false)
 	sprite_camera.transform=saved_camera_pose
+	# Stalling on an uphill track must not permanently stop progress.
+	for slide_test: bool in [false,true]:
+		var restart_speed:=0.0
+		for recovery_tick in range(60):
+			restart_speed=float(runner.call("step_speed",restart_speed,0.35,true,slide_test,1.0/60.0))
+		if restart_speed<6.9:
+			_fail("Zero-speed recovery failed on an uphill surface.")
+			return
+	for view_up: Vector3 in [Vector3.UP,Vector3.DOWN]:
+		var center_look: Vector3=game.call("_first_person_look",Vector3.FORWARD,view_up,0.0,0.0)
+		var right_look: Vector3=game.call("_first_person_look",Vector3.FORWARD,view_up,-0.2,0.0)
+		var down_look: Vector3=game.call("_first_person_look",Vector3.FORWARD,view_up,0.0,0.2)
+		if right_look.x<=center_look.x or down_look.y>=center_look.y:
+			_fail("First-person look controls invert on a bank.")
+			return
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
 		_fail("Uphill sliding must be available.")
 		return
@@ -408,6 +426,24 @@ func _run_tests() -> void:
 					if top_gap < -0.04 and bottom_gap < -0.04:
 						_fail("Jump through twisting bank penetrated track slab.")
 						return
+	# A shallow approaching bank contact should settle onto the board's
+	# actual face, not enter a persistent airborne scrape.
+	game.call("_restart")
+	await process_frame
+	var bank_recover_s:=1008.0
+	var bank_recover_frame: Transform3D=course.call("surface_frame",bank_recover_s,0.0,1)
+	runner.set("distance",bank_recover_s)
+	runner.set("lane",0.0)
+	runner.set("grounded",false)
+	runner.set("surface_side",1)
+	runner.set("air_time",0.4)
+	runner.set("air_basis",bank_recover_frame.basis)
+	runner.set("air_velocity",-bank_recover_frame.basis.z*20.0-bank_recover_frame.basis.y*0.5)
+	var bank_old:=bank_recover_frame.origin+bank_recover_frame.basis.y*0.22
+	var bank_new:=bank_recover_frame.origin+bank_recover_frame.basis.y*0.18
+	if not bool(runner.call("_recover_bank_contact",course,bank_old,bank_new,bank_recover_s)) or not bool(runner.get("grounded")):
+		_fail("Shallow bank contact did not recover.")
+		return
 	# A 180-bank underside is a real rideable face, not a visual duplicate.
 	game.call("_restart")
 	await process_frame

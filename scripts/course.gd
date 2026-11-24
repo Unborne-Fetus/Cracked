@@ -1564,6 +1564,31 @@ func distance_to_rideable_surface(world_pos: Vector3, projected: Vector3) -> flo
 			nearest = minf(nearest, world_pos.distance_to(face.origin))
 	return nearest
 
+func nearby_contact(world_pos: Vector3, guess_s: float, preferred_side: int) -> Dictionary:
+	var best: Dictionary={}
+	var best_distance:=INF
+	for offset: float in [0.0,-2.0,2.0,-6.0,6.0]:
+		var at:=maxf(0.0,guess_s+offset)
+		if not has_distance(at):
+			continue
+		var projected:=project_position(world_pos,at)
+		var edge:=half_width_at(projected.x)
+		# Never invent a contact on the far side of an open edge.
+		if absf(projected.y)>edge+0.75:
+			continue
+		var lane_value:=clampf(projected.y,-edge+0.01,edge-0.01)
+		for lane_test: float in [lane_value,clampf(lane_value-0.35,-edge+0.01,edge-0.01),clampf(lane_value+0.35,-edge+0.01,edge-0.01)]:
+			if not support_at(projected.x,lane_test):
+				continue
+			for face_side: int in [preferred_side,-preferred_side]:
+				var face:=surface_frame(projected.x,lane_test,face_side)
+				var diff:=world_pos-face.origin
+				var distance_value:=diff.length()
+				if distance_value<best_distance:
+					best_distance=distance_value
+					best={"s":projected.x,"lane":lane_test,"side":face_side,"frame":face,"gap":diff.dot(face.basis.y),"distance":distance_value}
+	return best
+
 func nearest_road_point(world_pos: Vector3, projected: Vector3) -> Dictionary:
 	var floor_y := INF
 	var nearest := INF

@@ -3,6 +3,7 @@ extends Node3D
 
 const START_SPEED := 22.0
 const MIN_SPEED := 7.0
+const RESTART_ACCEL := 12.0
 const SLIDE_BASE_ACCEL := 8.0
 const SLIDE_DOWNHILL_ACCEL := 100.0
 const SLIDE_UPHILL_DRAG := 5.0
@@ -316,6 +317,8 @@ func can_slide_on_grade(_grade: float) -> bool:
 	return true
 
 static func slide_speed_step(current: float, grade: float, delta: float) -> float:
+	if current<MIN_SPEED:
+		return move_toward(maxf(0.0,current),MIN_SPEED,RESTART_ACCEL*delta)
 	var change := SLIDE_BASE_ACCEL + maxf(-grade, 0.0) * SLIDE_DOWNHILL_ACCEL
 	if grade > 0.025:
 		change = -SLIDE_UPHILL_DRAG - grade * UPHILL_GRADE_DRAG
@@ -323,6 +326,8 @@ static func slide_speed_step(current: float, grade: float, delta: float) -> floa
 	return maxf(minf(current, floor_speed), current + change * delta)
 
 func step_speed(current: float, grade: float, grounded: bool, slide: bool, delta: float) -> float:
+	if grounded and current<MIN_SPEED:
+		return move_toward(maxf(0.0,current),MIN_SPEED,RESTART_ACCEL*delta)
 	var change := 0.0
 	if grounded and slide:
 		return slide_speed_step(current, grade, delta)
@@ -595,6 +600,36 @@ func _recover_floor_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3,
 	_finish_landing(course)
 	return true
 
+func _recover_bank_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, guess_s: float) -> bool:
+	if air_time<0.18:
+		return false
+	var kind: String=course.call("section_name",guess_s)
+	if not bool(course.call("is_extreme_bank",kind)) and kind not in ["BANKED TURN","BANKED DESCENT","CAMBER WAVE","HALFPIPE","CORKSCREW TUNNEL","STACKED ROUTES","SPLIT ROUTE","LOOP ROUTE"]:
+		return false
+	var contact: Dictionary=course.call("nearby_contact",next_pos,guess_s,surface_side)
+	if contact.is_empty() or float(contact["distance"])>1.0:
+		return false
+	var face: Transform3D=contact["frame"]
+	var gap:=float(contact["gap"])
+	var old_gap: float=(old_pos-face.origin).dot(face.basis.y)
+	var alignment:=air_basis.y.dot(face.basis.y)
+	var normal_velocity:=air_velocity.dot(face.basis.y)
+	# The board has to face the actual riding face. Head-first contact
+	# and a deliberate jump away from the bank still use the sweep.
+	if alignment<0.20 or gap< -0.10 or old_gap< -0.12 or normal_velocity>1.5:
+		return false
+	if gap>0.32 or gap>old_gap+0.07:
+		return false
+	if str(kind)=="LOOP ROUTE" and float(contact["lane"])<0.0 and face.basis.y.y<0.15 and speed<float(course.call("loop_required_speed",float(contact["s"]))):
+		return false
+	distance=float(contact["s"])
+	lane=float(contact["lane"])
+	surface_side=int(contact["side"])
+	_apply_landing_result(face)
+	lateral_speed=air_velocity.dot(face.basis.x)*float(surface_side)
+	_finish_landing(course)
+	return true
+
 func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: float) -> void:
 	# Airtime is never grounds for defeat. A high jump over a road,
 	# or a rider on a bank below its spine, is still a valid run.
@@ -616,9 +651,15 @@ func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: floa
 	if not is_finite(floor_y):
 		var reference: Transform3D = course.call("sample",projected.x)
 		floor_y = reference.origin.y
-	var escaping := point.y < floor_y-FALL_DEPTH and air_velocity.y < -0.1
-	fall_grace = fall_grace+delta if escaping else 0.0
-	if fall_grace > 0.22:
+	var escaping := point.y<floor_y-FALL_DEPTH and air_velocity.y< -0.1
+	if escaping and absf(projected.y)<=float(course.call("half_width_at",projected.x))+3.0:
+		# Signed height on a rotated bank is not world elevation. Search
+		# both actual faces before confirming a fall near the ribbon.
+		var contact: Dictionary=course.call("nearby_contact",point,projected.x,surface_side)
+		if not contact.is_empty() and float(contact["distance"])<FALL_DEPTH+5.0:
+			escaping=false
+	fall_grace=fall_grace+delta if escaping else 0.0
+	if fall_grace>0.45:
 		fallen = true
 
 func _obstacle_rebound(course: Node3D, collision: Dictionary, from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float) -> void:
@@ -725,7 +766,9 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		if not obstacle.is_empty():
 			_obstacle_rebound(course,obstacle,old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1)
 			return
-	if _recover_floor_contact(course, previous_pos, next_pos, old_s, predicted_s):
+	if _recover_floor_contact(course,previous_pos,next_pos,old_s,predicted_s):
+		return
+	if _recover_bank_contact(course,previous_pos,next_pos,predicted_s):
 		return
 	var body_contact := _body_sweep(course, previous_pos, next_pos, old_s, predicted_s)
 	if not body_contact.is_empty():

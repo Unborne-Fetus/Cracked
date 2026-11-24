@@ -1,5 +1,12 @@
 # Vector Velocity changelog
 
+## 2026-11-23 — Default combat, restart traction and first-person corrections
+- Robotic enemies and pulse controls are enabled automatically in every run; Practice does not end from shield depletion.
+- Mouse cursor becomes a precise crosshair during play and returns to normal in menus, replays and defeat screens.
+- Grounded riders regain minimum speed after stalling, including uphill.
+- Shallow bank contacts can recover onto the correct rideable face; fall confirmation is less sensitive to brief projection errors.
+- First-person camera moved forward, with consistent screen-relative horizontal and vertical look controls.
+
 ## 2026-11-23 — Loop routes, rider hanging poses, camera and arcade combat
 - Falls require sustained downward movement beneath nearby supported road; high or sideways flight alone cannot kill the rider.
 - Track-aligned camera does not rotate with carving; revised first-person eye placement and field of view.
