@@ -1,5 +1,11 @@
 # Vector Velocity changelog
 
+## 2026-11-24 — Deck sweeps, transformation handoffs and mesh mountains
+- Stacked-route flight checks upper and lower decks independently, selecting the earliest actual swept contact.
+- Ceiling spider legs suspend the rider 2.5 m below the surface.
+- Faster glider catch, reverse deployment, direct glider-to-gyro handoff and dedicated glider dive.
+- Animated tessellated neon mountain mesh with continuous movement and extreme speed-dependent elevation.
+
 ## 2026-11-24 — Replay rates, cosmetics and glider recovery
 - Fixed replay speed cycling (0.5x, 1x, 2x); recorded poses follow replay time.
 - Restored original, amber, violet and emerald cosmetic palettes, saved unlocks and replay selection.

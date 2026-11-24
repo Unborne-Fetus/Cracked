@@ -317,7 +317,13 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	# and render rate never alter the animation or the player's physics.
 	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
 	var return_progress:=float(extra.get("glider_return",-1.0))
+	var entry_progress:=float(extra.get("glider_entry",-1.0))
+	var gyro_transfer:=float(extra.get("glider_gyro",-1.0))
+	if entry_progress>=0.0:
+		return_progress=1.0-entry_progress
 	var returning:=return_progress>=0.0
+	var transferring:=gyro_transfer>=0.0
+	var transfer_settle:=smoothstep(0.0,0.44,gyro_transfer) if transferring else 0.0
 	var return_arc:=smoothstep(0.02,0.20,return_progress) if returning else 0.0
 	var release:=smoothstep(0.015,0.16,return_progress) if returning else 0.0
 	var wing_fold:=smoothstep(0.76,1.0,return_progress) if returning else 0.0
@@ -327,7 +333,8 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var glide_clock:=float(extra.get("glider_clock",0.0))
 	var glide_cycle:=posmod(int(floor(glide_clock/2.2)),8)
 	var glide_progress:=fposmod(glide_clock,2.2)/2.2
-	var glide_trick:=sin(PI*glide_progress)*smoothstep(0.85,1.0,glide) if not returning and not bool(extra.get("fp",false)) else 0.0
+	var glider_dive:=dive_amount if gliding and not returning and not transferring else 0.0
+	var glide_trick:=sin(PI*glide_progress)*smoothstep(0.85,1.0,glide)*(1.0-glider_dive) if not returning and not transferring and not bool(extra.get("fp",false)) else 0.0
 	var gyro_clock:=float(extra.get("gyro_clock",0.0))
 	var gyro_cycle:=posmod(int(floor(gyro_clock/1.8)),6)
 	var gyro_progress:=fposmod(gyro_clock,1.8)/1.8
@@ -370,12 +377,14 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
 	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
 	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
-	var hang:=maxf(inverted if not airborne else 0.0,glide*(1.0-release))
-	var wing_span:=glide*(1.0-wing_fold)
+	var hang:=maxf(inverted if not airborne else 0.0,glide*(1.0-release)*(1.0-transfer_settle))
+	var wing_span:=glide*(1.0-wing_fold)*(1.0-smoothstep(0.10,0.48,gyro_transfer) if transferring else 1.0)
 	wings.visible=wing_span>0.015
 	wings.scale.x=maxf(0.01,wing_span)
 	var side_ride:=clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang) if not airborne and not gliding else 0.0
 	var sideways:=smoothstep(0.50,0.90,absf(side_ride))
+	if transferring:
+		sideways=smoothstep(0.42,1.0,gyro_transfer)
 	# Hardware is tied to contact, not the hanging animation. Airborne
 	# gliders never show ceiling treads, even during a blended pose.
 	tread_deploy=lerpf(tread_deploy,inverted if not airborne else 0.0,blend)
@@ -392,8 +401,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		var lift_foot:=maxf(0.0,cos(gait))*0.48
 		var anchor:=Vector3(sign_value*0.48,-0.09,z)
 		var fan:=float(leg_index%4)-1.5
-		var knee:=Vector3(sign_value*2.65,1.10,z+fan*0.45)
-		var toe:=Vector3(sign_value*4.25,-0.25+lift_foot,z+fan*0.65+stride)
+		var knee:=Vector3(sign_value*2.65,-0.72,z+fan*0.45)
+		# Board hangs 2.5 m away from the contact plane. Feet
+		# reach back to the ceiling while the knees fan outward.
+		var toe:=Vector3(sign_value*4.25,-2.75+lift_foot,z+fan*0.65+stride)
 		knee=anchor.lerp(knee,tread_deploy)
 		toe=anchor.lerp(toe,tread_deploy)
 		_segment(spider_upper[leg_index],anchor,knee)
@@ -402,7 +413,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		spider_feet[leg_index].scale=Vector3.ONE*maxf(0.01,tread_deploy)
 	for exhaust_index in range(exhausts.size()):
 		var exhaust:=exhausts[exhaust_index]
-		var jet_length:=0.65+0.27*sin(phase*16.0+float(exhaust_index))+0.75*clampf(float(extra.get("speed_factor",0.0)),0.0,1.0)
+		var jet_length:=0.65+0.27*sin(phase*16.0+float(exhaust_index))+0.75*clampf(float(extra.get("speed_factor",0.0)),0.0,1.0)+glider_dive*0.65
 		exhaust.scale.z=jet_length
 		exhaust.position.z=0.52+0.43*jet_length
 	gyro_deploy=lerpf(gyro_deploy,sideways,blend)
@@ -484,8 +495,8 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		# character, grips and wings. It never spins the deck alone.
 		var spin_progress:=clampf(float(extra.get("glider_spin",1.0)),0.0,1.0)
 		var whole_spin:=TAU*smoothstep(0.0,1.0,spin_progress) if not returning and spin_progress<1.0 else 0.0
-		rotation=Vector3(0.0,0.0,PI*glide*(1.0-return_arc)+whole_spin)
-		if not returning and spin_progress>=1.0:
+		rotation=Vector3(-0.82*glider_dive,0.0,PI*glide*(1.0-return_arc)*(1.0-transfer_settle)+whole_spin)
+		if not returning and not transferring and spin_progress>=1.0 and glider_dive<0.05:
 			match glide_cycle:
 				0: rotation.z+=0.40*glide_trick # wing rock
 				1: rotation.y+=0.55*glide_trick # yaw sweep
@@ -496,7 +507,9 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 				6: rotation.x-=0.25*glide_trick # tuck
 				7: rotation.z-=0.35*glide_trick # scissor sway
 		visual_pivot=0.95
-		visual_lift=glide*0.55*(1.0-return_arc)
+		visual_lift=glide*0.55*(1.0-return_arc)*(1.0-transfer_settle)
+	if not airborne and not gliding:
+		visual_lift+=2.50*tread_deploy
 	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
 	var compression := clampf(landing, 0.0, 1.0)
 	var recoil := clampf(impact, 0.0, 1.0)
@@ -561,7 +574,12 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		# No separate kickflip during gliding. The board remains attached
 		# to the whole-rig rotation until the release phase.
 		board.rotation=Vector3.ZERO
-		if returning:
+		if transferring:
+			# Direct wall handoff: swing from the overhead grips into
+			# the inner platform as wings fold, then assemble the rim.
+			board.position=Vector3(0,lerpf(0.13,0.45,smoothstep(0.40,1.0,gyro_transfer)),0)
+			board.rotation.x=0.32*sin(PI*transfer_settle)
+		elif returning:
 			# World-relative arc: glide wing overhead -> free glide around
 			# the rider -> feet. Convert back to the animated root basis.
 			var root_basis:=Basis.from_euler(rotation)
@@ -629,6 +647,9 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 			foot=foot.lerp(Vector3(sign_value*0.51,0.36,0.45+sign_value*0.25),freefall)
 			foot=foot.lerp(board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34),catch_blend)
 		foot=foot.lerp(Vector3(sign_value*0.22,2.27,0.20+sign_value*0.09),hang)
+		# A glider dive uses the same grips, but trails both legs
+		# aft in a streamlined pose while the entire rig noses down.
+		foot=foot.lerp(Vector3(sign_value*0.12,2.10,0.78),glider_dive)
 		if gliding and not returning:
 			if glide_cycle==5:
 				foot.x+=sign_value*glide_trick*0.48

@@ -27,16 +27,6 @@ void sky(){
 	vec3 sun=mix(vec3(0.98,0.055,0.40),vec3(1.0,0.86,0.14),h);
 	color+=vec3(0.25,0.045,0.14)*pow(max(0.0,cosdist),25.0)*(0.4+power);
 	color=mix(color,sun,disc*stripe);
-	// Layered jagged purple mountain ranges, with neon crest.
-	// Distance raises the ceiling of the ranges while the repeating
-	// elevation wave alternates valleys with enormous angular peaks.
-	float swell=0.5+0.5*sin(mountain_phase);
-	float scale=1.0+mountain_scale*(1.5+3.0*swell);
-	float ridge=-0.035+scale*(0.045+0.035*sin(a*9.0+mountain_phase*0.17)+0.017*sin(a*23.0+0.8)+0.009*sin(a*41.0));
-	float far_ridge=-0.015+scale*(0.052+0.029*sin(a*6.0+0.8-mountain_phase*0.11)+0.015*sin(a*15.0));
-	color=mix(color,vec3(0.16,0.025,0.21)*(0.8+power*0.5),1.0-smoothstep(far_ridge-0.002,far_ridge+0.002,y));
-	color=mix(color,vec3(0.052,0.012,0.085),1.0-smoothstep(ridge-0.002,ridge+0.002,y));
-	color+=vec3(0.4,0.025,0.38)*exp(-abs(y-ridge)*220.0)*(0.35+power*0.8);
 	// Infinite retro perspective grid below the horizon, no geometry cost.
 	if(y< -0.026){
 		vec2 p=d.xz/max(0.028,-y)*2.2;

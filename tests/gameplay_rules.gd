@@ -91,7 +91,7 @@ func _run_tests() -> void:
 	var ceiling_treads:Node3D=model.get("treads")
 	var spider_segments:Array=model.get("spider_upper")
 	var long_feet:Array=model.get("spider_feet")
-	if absf((long_feet[0] as Node3D).position.x)<4.0:
+	if absf((long_feet[0] as Node3D).position.x)<4.0 or float(model.get("visual_lift"))<2.4:
 		_fail("Spider legs lack the extended contact span.")
 		return
 	if not (spider_segments[0] as Node3D).transform.is_finite():
@@ -151,6 +151,18 @@ func _run_tests() -> void:
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.90})
 	if glider_rig.scale.x>=0.85:
 		_fail("Glider wings did not retract after the catch.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,true,1.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
+	if absf(model.rotation.x)<0.5 or not glider_rig.visible:
+		_fail("Glider dive did not pitch the full wing rig.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_gyro":0.80,"sideways":1.0})
+	if not gyro_probe.visible or glider_rig.visible:
+		_fail("Glider-to-gyro handoff did not fold wings and assemble wheel.")
+		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_entry":0.70})
+	if flip_board.position.x<3.0 or not glider_rig.visible:
+		_fail("Board-to-glider reverse transfer did not separate the deck.")
 		return
 	# Distinct glider trick poses, independently of board kickflips.
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_clock":1.1})
@@ -1076,6 +1088,11 @@ func _run_tests() -> void:
 	var lower: Transform3D = course.call("surface_frame", stacked_s, 30.0, 1)
 	if upper.origin.y - lower.origin.y < 20.0 or Vector2(upper.origin.x - lower.origin.x, upper.origin.z - lower.origin.z).length() > 1.0:
 		_fail("Stacked routes do not physically overlap.")
+		return
+	runner.set("air_basis",Basis.IDENTITY)
+	var upper_hit:Dictionary=runner.call("_stacked_sweep",course,upper.origin+Vector3.UP*2.0,upper.origin-Vector3.UP*2.0,stacked_s,stacked_s)
+	if upper_hit.is_empty() or float(upper_hit.get("lane",0.0))>=0.0 or int(upper_hit.get("side",0))!=1:
+		_fail("Upper overpass crossing incorrectly selected lower deck.")
 		return
 	for offset: float in [12.0, 24.0, 48.0, 72.0, 96.0, 120.0, 144.0, 168.0]:
 		var overpass_s := 27.0 * 192.0 + offset

@@ -1329,7 +1329,7 @@ func sample(distance: float) -> Transform3D:
 	frame.origin += node.position
 	return frame
 
-func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
+func project_position(world_pos: Vector3, guess_s: float, deck: int = 0) -> Vector3:
 	if has_distance(guess_s) and section_name(guess_s)=="LOOP ROUTE":
 		return _loop_projection(world_pos,guess_s)
 	# Project onto the nearest cross-section locally. Bounded Newton-like
@@ -1383,14 +1383,17 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 				across = sign_value * (low + high) * 0.5
 		elif kind == "STACKED ROUTES":
 			var envelope := _branch_envelope(local_s)
-			var lower := clampf(across, 0.001, HALF_WIDTH)
-			var upper := clampf(across - 60.0 * envelope, -HALF_WIDTH, -4.0)
-			var upper_xy := _cross_xy(kind, local_s, upper)
-			var lower_xy := _cross_xy(kind, local_s, lower)
-			var query := Vector2(across, raw_y)
-			if query.distance_squared_to(upper_xy) < query.distance_squared_to(lower_xy):
-				across -= 60.0 * envelope
-			# Retain out-of-bounds lanes for edge detection.
+			var upper := across-60.0*envelope
+			var lower := across
+			var upper_xy := _cross_xy(kind,local_s,clampf(upper,-HALF_WIDTH,-4.0))
+			var lower_xy := _cross_xy(kind,local_s,clampf(lower,4.0,HALF_WIDTH))
+			var query := Vector2(across,raw_y)
+			if deck<0 or (deck==0 and query.distance_squared_to(upper_xy)<query.distance_squared_to(lower_xy)):
+				across=upper
+			else:
+				across=lower
+			# Forced branches intentionally retain out-of-bounds lanes;
+			# a sweep must prove that it crossed a real supported cell.
 		var xy := _cross_xy(kind, local_s, across)
 		var n := _cross_normal(kind, local_s, across)
 		raw_y = (Vector2(offset.dot(local_frame.basis.x), raw_y) - xy).dot(n)

@@ -13,6 +13,8 @@ var crosshair: Label
 var pulse_button: Button
 var aim_cursor: ImageTexture
 var reactive_sky: ShaderMaterial
+var mountain_mesh: MeshInstance3D
+var mountain_material: ShaderMaterial
 var sky_level := -1
 var sky_clock := 0.0
 var mountain_level := -1
@@ -125,6 +127,7 @@ func _ready() -> void:
 	sky.process_mode=Sky.PROCESS_MODE_INCREMENTAL
 	sky.radiance_size=Sky.RADIANCE_SIZE_32
 	sky.sky_material = sky_mat
+	_create_mountains()
 	env.sky = sky
 	world.environment = env
 	add_child(world)
@@ -236,7 +239,31 @@ func _physics_process(delta: float) -> void:
 			return
 	replay.record(run_time, delta, runner, course, storm)
 
+func _create_mountains() -> void:
+	mountain_material=ShaderMaterial.new()
+	mountain_material.shader=preload("res://shaders/neon_mountains.gdshader")
+	var st:=SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ring in range(18):
+		for sector in range(128):
+			for corner:Vector2 in [Vector2(0,0),Vector2(1,0),Vector2(0,1),Vector2(0,1),Vector2(1,0),Vector2(1,1)]:
+				var u:float=(float(sector)+corner.x)/128.0
+				var v:float=(float(ring)+corner.y)/18.0
+				var radius:=lerpf(380.0,1120.0,v)
+				st.set_uv(Vector2(u,v))
+				st.add_vertex(Vector3(cos(TAU*u)*radius,0,sin(TAU*u)*radius))
+	mountain_mesh=MeshInstance3D.new()
+	mountain_mesh.mesh=st.commit()
+	mountain_mesh.material_override=mountain_material
+	mountain_mesh.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mountain_mesh.custom_aabb=AABB(Vector3(-1200,-600,-1200),Vector3(2400,1800,2400))
+	add_child(mountain_mesh)
+
 func _process(delta: float) -> void:
+	if is_instance_valid(mountain_mesh):
+		mountain_mesh.position=Vector3(runner.position.x,runner.position.y-90.0,runner.position.z)
+		mountain_material.set_shader_parameter("velocity",clampf(float(runner.speed)/300.0,0.0,2.0))
+		mountain_material.set_shader_parameter("progress",clampf(float(runner.distance)/18000.0,0.0,1.0))
 	sky_clock-=delta
 	if sky_clock<=0.0 and is_instance_valid(reactive_sky):
 		sky_clock=0.25
@@ -1478,6 +1505,8 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.rider_inverted = float(state.get("rider_inverted",0.0))
 	runner.rider_glider=float(state.get("rider_glider",0.0))
 	runner.rider_glider_return=float(state.get("rider_glider_return",-1.0))
+	runner.rider_glider_entry=float(state.get("rider_glider_entry",-1.0))
+	runner.rider_glider_gyro=float(state.get("rider_glider_gyro",-1.0))
 	runner.rider_glider_spin=float(state.get("rider_glider_spin",1.0))
 	runner.glider_trick_clock=float(state.get("glider_trick_clock",0.0))
 	runner.gyro_trick_clock=float(state.get("gyro_trick_clock",0.0))

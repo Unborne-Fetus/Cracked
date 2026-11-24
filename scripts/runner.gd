@@ -63,7 +63,10 @@ var rider_glider_spin := 1.0
 var glider_idle_clock := 0.0
 var glider_trick_clock := 0.0
 var gyro_trick_clock := 0.0
-const GLIDER_RETURN_TIME := 1.80
+const GLIDER_RETURN_TIME := 1.10
+const GLIDER_ENTRY_TIME := 1.20
+var rider_glider_entry := -1.0
+var rider_glider_gyro := -1.0
 const GLIDER_SPIN_TIME := 0.85
 var glide_height := 0.0
 var clearance_clock := 0.0
@@ -140,7 +143,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot:float=rider_model.get("visual_pivot")
 	var lift:float=rider_model.get("visual_lift")
 	# Correct the inherited bank roll in a separate visual parent.
@@ -148,6 +151,8 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 	var upright_blend:=smoothstep(0.05,0.90,rider_glider) if not grounded else 0.0
 	if rider_glider_return>=0.0:
 		upright_blend*=1.0-smoothstep(0.72,1.0,rider_glider_return)
+	if rider_glider_entry>=0.0:
+		upright_blend*=smoothstep(0.0,0.28,rider_glider_entry)
 	var flight_forward:Vector3=Vector3(air_velocity.x,0.0,air_velocity.z)
 	if flight_forward.length_squared()<0.01:
 		flight_forward=-transform.basis.z
@@ -182,9 +187,19 @@ func _update_rider_animation(delta: float) -> void:
 		glide_height=position.y-road_frame.origin.y
 	else:
 		glide_height=0.0
-	# Releasing starts early enough to finish the catch before contact.
-	# Once initiated, the sequence completes rather than reversing.
-	if rider_glider_return>=0.0:
+	# Surface-specific handoff takes priority over airborne sequences.
+	var wall_contact:=grounded and absf(transform.basis.x.y)>0.65 and transform.basis.y.y> -0.55
+	if wall_contact and rider_glider>0.01 and rider_glider_gyro<0.0:
+		rider_glider_gyro=0.0
+		rider_glider_entry=-1.0
+		rider_glider_return=-1.0
+		rider_glider_spin=1.0
+	if rider_glider_gyro>=0.0:
+		rider_glider_gyro=minf(1.0,rider_glider_gyro+delta/0.78)
+		if rider_glider_gyro>=1.0:
+			rider_glider_gyro=-1.0
+			rider_glider=0.0
+	elif rider_glider_return>=0.0:
 		if grounded:
 			rider_glider_return=maxf(rider_glider_return,0.74)
 		rider_glider_return=minf(1.0,rider_glider_return+delta/GLIDER_RETURN_TIME)
@@ -193,16 +208,24 @@ func _update_rider_animation(delta: float) -> void:
 			rider_glider_return=-1.0
 			rider_glider_spin=1.0
 			glider_idle_clock=0.0
-	elif rider_glider>0.01 and (grounded or diving or glide_height<32.0 or (air_velocity.y< -1.0 and glide_height/maxf(1.0,-air_velocity.y)<1.65)):
+	elif rider_glider_entry>=0.0:
+		if grounded or glide_height<20.0:
+			rider_glider_return=maxf(0.0,1.0-rider_glider_entry)
+			rider_glider_entry=-1.0
+		else:
+			rider_glider_entry=minf(1.0,rider_glider_entry+delta/GLIDER_ENTRY_TIME)
+			if rider_glider_entry>=1.0:
+				rider_glider_entry=-1.0
+	elif rider_glider>0.01 and (grounded or glide_height<30.0 or (air_velocity.y< -1.0 and glide_height/maxf(1.0,-air_velocity.y)<1.0)):
 		rider_glider_return=0.74 if grounded else 0.0
 		rider_glider_spin=1.0
 		glider_idle_clock=0.0
+	elif rider_glider<=0.01 and not grounded and not diving and glide_height>=50.0:
+		rider_glider=1.0
+		rider_glider_entry=0.0
+		rider_glider_spin=1.0
 	else:
-		var glider_target:=smoothstep(38.0,50.0,glide_height) if not grounded and not diving else 0.0
-		if rider_glider>0.65 and not grounded and not diving and glide_height>=32.0:
-			glider_target=1.0
-		rider_glider=move_toward(rider_glider,glider_target,delta*2.8)
-		if rider_glider>0.95 and glide_height>55.0:
+		if rider_glider>0.95 and glide_height>55.0 and not diving:
 			glider_idle_clock+=delta
 			if glider_idle_clock>5.0 and rider_glider_spin>=1.0:
 				rider_glider_spin=0.0
@@ -255,6 +278,8 @@ func reset_run(course: Node3D) -> void:
 	fall_grace = 0.0
 	rider_glider=0.0
 	rider_glider_return=-1.0
+	rider_glider_entry=-1.0
+	rider_glider_gyro=-1.0
 	rider_glider_spin=1.0
 	glider_idle_clock=0.0
 	glider_trick_clock=0.0
@@ -666,6 +691,35 @@ func _advance_flight(delta: float, course: Node3D, steer: float) -> void:
 			break
 		_flight_step(step, course, steer)
 
+func _stacked_sweep(course: Node3D, from_pos: Vector3, to_pos: Vector3, from_s: float, to_s: float) -> Dictionary:
+	var best:Dictionary={}
+	var earliest:=2.0
+	for deck:int in [-1,1]:
+		for probe:int in [-1,0,1]:
+			var offset:=Vector3.ZERO if probe<0 else _body_offset(air_basis,probe)
+			var a:Vector3=course.call("project_position",from_pos+offset,from_s,deck)
+			var b:Vector3=course.call("project_position",to_pos+offset,to_s,deck)
+			for side:int in [1,-1]:
+				var af:Transform3D=course.call("surface_frame",a.x,a.y,side)
+				var bf:Transform3D=course.call("surface_frame",b.x,b.y,side)
+				var support_a:=0.0 if probe<0 else _body_support(af.basis.y,air_basis,probe)
+				var support_b:=0.0 if probe<0 else _body_support(bf.basis.y,air_basis,probe)
+				if probe>=0 and offset.dot(bf.basis.y)-support_b> -0.06:
+					continue
+				var gap_a:float=(from_pos+offset-af.origin).dot(af.basis.y)-support_a
+				var gap_b:float=(to_pos+offset-bf.origin).dot(bf.basis.y)-support_b
+				if gap_a< -0.07 or gap_b>0.0 or gap_b>=gap_a:
+					continue
+				var fraction:=clampf(gap_a/maxf(0.0001,gap_a-gap_b),0.0,1.0)
+				if fraction>=earliest:
+					continue
+				var hit:Vector3=course.call("project_position",from_pos.lerp(to_pos,fraction)+offset,lerpf(from_s,to_s,fraction),deck)
+				if str(course.call("section_name",hit.x))!="STACKED ROUTES" or hit.y*float(deck)<=0.0 or not bool(course.call("support_at",hit.x,hit.y)):
+					continue
+				earliest=fraction
+				best={"fraction":fraction,"s":hit.x,"lane":hit.y,"side":side}
+	return best
+
 func _recover_floor_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, old_s: float, predicted_s: float) -> bool:
 	if air_time < 0.12:
 		return false
@@ -894,11 +948,25 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		if not obstacle.is_empty():
 			_obstacle_rebound(course,obstacle,old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1)
 			return
-	if _recover_floor_contact(course,previous_pos,next_pos,old_s,predicted_s):
+	var stacked_contact:bool=str(course.call("section_name",old_projection.x))=="STACKED ROUTES" or str(course.call("section_name",obstacle_projection.x))=="STACKED ROUTES"
+	if stacked_contact:
+		var deck_hit:=_stacked_sweep(course,previous_pos,next_pos,old_s,predicted_s)
+		if not deck_hit.is_empty():
+			var hit_s:float=deck_hit["s"]
+			var hit_lane:float=deck_hit["lane"]
+			var hit_side:int=deck_hit["side"]
+			var hit_face:Transform3D=course.call("surface_frame",hit_s,hit_lane,hit_side)
+			if hit_face.basis.y.y>0.55 or _magnetic_face(course,hit_s,hit_lane,hit_face):
+				_attach_magnetic_face(course,hit_s,hit_lane,hit_side,hit_face)
+				return
+			# Stop against the actual underside, not a different deck.
+			next_pos=previous_pos.lerp(next_pos,float(deck_hit["fraction"]))+hit_face.basis.y*0.10
+			air_velocity-=hit_face.basis.y*minf(0.0,air_velocity.dot(hit_face.basis.y))*1.25
+	if not stacked_contact and _recover_floor_contact(course,previous_pos,next_pos,old_s,predicted_s):
 		return
-	if absf(obstacle_projection.z)<3.5 and _recover_bank_contact(course,previous_pos,next_pos,predicted_s):
+	if not stacked_contact and absf(obstacle_projection.z)<3.5 and _recover_bank_contact(course,previous_pos,next_pos,predicted_s):
 		return
-	var body_contact := _body_sweep(course, previous_pos, next_pos, old_s, predicted_s)
+	var body_contact:Dictionary={} if stacked_contact else _body_sweep(course,previous_pos,next_pos,old_s,predicted_s)
 	if not body_contact.is_empty():
 		var normal: Vector3 = body_contact["normal"]
 		# Stop at first impact and gently deflect away from the surface,
@@ -949,7 +1017,7 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		# A crossing at the beginning of the step is not a landing if the
 		# player has already moved past the edge by the end of that step.
 		# Keep both face checks, but require support under the new position.
-		if not body_contact.is_empty() or not bool(course.call("support_at", distance, lane)) or old_gap < -0.025 or new_gap > 0.0 or new_gap >= old_gap:
+		if stacked_contact or not body_contact.is_empty() or not bool(course.call("support_at", distance, lane)) or old_gap < -0.025 or new_gap > 0.0 or new_gap >= old_gap:
 			continue
 		# The signed gap is relative to the rotating surface; a positive
 		# world-space normal velocity does not rule out a collision.
