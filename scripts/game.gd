@@ -21,6 +21,12 @@ var pause_overlay: Control
 var pause_page: VBoxContainer
 var options_page: VBoxContainer
 var units_picker: OptionButton
+var resume_button: Button
+var options_button: Button
+var back_button: Button
+var controls_hint: Label
+var pad_menu_index := 0
+var pad_menu_axis := Vector2.ZERO
 var distance_label: Label
 var clock_label: Label
 var record_label: Label
@@ -303,12 +309,97 @@ func _toggle_camera() -> void:
 	runner.set_first_person(first_person)
 	_update_camera(1.0)
 
+func _pad_focus() -> void:
+	if not paused:
+		return
+	if options_page.visible:
+		if pad_menu_index == 0:
+			units_picker.grab_focus()
+		else:
+			back_button.grab_focus()
+	elif pad_menu_index == 0:
+		resume_button.grab_focus()
+	else:
+		options_button.grab_focus()
+
+func _pad_direction(x: int, y: int) -> void:
+	if y != 0:
+		pad_menu_index = 1 - pad_menu_index
+		_pad_focus()
+	elif x != 0 and options_page.visible and pad_menu_index == 0:
+		_set_units(1 if x > 0 else 0)
+
+func _pad_button(button: int) -> bool:
+	if button == JOY_BUTTON_START:
+		if paused and options_page.visible:
+			_show_options(false)
+		else:
+			_set_paused(not paused)
+		return true
+	if paused:
+		match button:
+			JOY_BUTTON_B, JOY_BUTTON_BACK:
+				if options_page.visible:
+					_show_options(false)
+				else:
+					_set_paused(false)
+			JOY_BUTTON_DPAD_UP:
+				_pad_direction(0, -1)
+			JOY_BUTTON_DPAD_DOWN:
+				_pad_direction(0, 1)
+			JOY_BUTTON_DPAD_LEFT:
+				_pad_direction(-1, 0)
+			JOY_BUTTON_DPAD_RIGHT:
+				_pad_direction(1, 0)
+			JOY_BUTTON_A:
+				if options_page.visible:
+					if pad_menu_index == 0:
+						_set_units(0 if imperial else 1)
+					else:
+						_show_options(false)
+				elif pad_menu_index == 0:
+					_set_paused(false)
+				else:
+					_show_options(true)
+		return true
+	if button == JOY_BUTTON_Y:
+		_toggle_camera()
+		return true
+	if button == JOY_BUTTON_X or (run_finished and button == JOY_BUTTON_A):
+		_restart()
+		return true
+	return false
+
 func _input(event: InputEvent) -> void:
+	if event is InputEventJoypadButton:
+		var pad := event as InputEventJoypadButton
+		if pad.pressed:
+			controls_hint.text = "STICK / D-PAD steer  ·  A jump  ·  B / TRIGGERS slide  ·  Y view  ·  START pause  ·  X retry"
+			if _pad_button(pad.button_index):
+				get_viewport().set_input_as_handled()
+		return
+	if event is InputEventJoypadMotion:
+		var motion := event as InputEventJoypadMotion
+		if absf(motion.axis_value) > 0.35:
+			controls_hint.text = "STICK / D-PAD steer  ·  A jump  ·  B / TRIGGERS slide  ·  Y view  ·  START pause  ·  X retry"
+		if paused and (motion.axis == JOY_AXIS_LEFT_X or motion.axis == JOY_AXIS_LEFT_Y):
+			var value := signf(motion.axis_value) if absf(motion.axis_value) > 0.65 else 0.0
+			var horizontal := motion.axis == JOY_AXIS_LEFT_X
+			var prior := pad_menu_axis.x if horizontal else pad_menu_axis.y
+			if horizontal:
+				pad_menu_axis.x = value
+			else:
+				pad_menu_axis.y = value
+			if value != 0.0 and value != prior:
+				_pad_direction(int(value) if horizontal else 0, 0 if horizontal else int(value))
+			get_viewport().set_input_as_handled()
+		return
 	if not event is InputEventKey:
 		return
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
 		return
+	controls_hint.text = "A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  ESC pause  ·  R retry"
 	if key.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if paused and options_page.visible:
@@ -411,6 +502,7 @@ func _create_hud() -> void:
 	message_label.visible = false
 	var hint := _label("A / D steer  ·  SPACE jump  ·  SHIFT / CTRL / C slide  ·  TAB view  ·  ESC pause  ·  R retry", 15, Color(0.7, 0.83, 0.96))
 	root.add_child(hint)
+	controls_hint = hint
 	hint.anchor_top = 1.0
 	hint.anchor_bottom = 1.0
 	hint.anchor_right = 1.0
@@ -471,7 +563,12 @@ func _set_units(index: int, persist: bool = true) -> void:
 func _set_paused(value: bool) -> void:
 	paused = value
 	pause_overlay.visible = value
+	pad_menu_axis = Vector2.ZERO
 	_show_options(false)
+	if not value:
+		var focused := get_viewport().gui_get_focus_owner()
+		if is_instance_valid(focused):
+			focused.release_focus()
 	if value:
 		# Avoid a stuck touch button if it was held when Escape was pressed.
 		runner.touch_slide = false
@@ -481,13 +578,15 @@ func _set_paused(value: bool) -> void:
 func _show_options(value: bool) -> void:
 	pause_page.visible = not value
 	options_page.visible = value
+	pad_menu_index = 0
+	_pad_focus()
 
 func _menu_button(label_text: String) -> Button:
 	var button := Button.new()
 	button.text = label_text
 	button.custom_minimum_size = Vector2(260, 52)
 	button.add_theme_font_size_override("font_size", 20)
-	button.focus_mode = Control.FOCUS_NONE
+	button.focus_mode = Control.FOCUS_ALL
 	return button
 
 func _create_pause_menu() -> void:
@@ -527,12 +626,14 @@ func _create_pause_menu() -> void:
 	var title := _label("PAUSED", 34, Color(0.1, 0.9, 1.0))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pause_page.add_child(title)
-	var resume := _menu_button("RESUME")
-	pause_page.add_child(resume)
-	resume.pressed.connect(func() -> void: _set_paused(false))
-	var options := _menu_button("OPTIONS")
-	pause_page.add_child(options)
-	options.pressed.connect(func() -> void: _show_options(true))
+	resume_button = _menu_button("RESUME")
+	pause_page.add_child(resume_button)
+	resume_button.pressed.connect(func() -> void: _set_paused(false))
+	resume_button.focus_entered.connect(func() -> void: pad_menu_index = 0)
+	options_button = _menu_button("OPTIONS")
+	pause_page.add_child(options_button)
+	options_button.pressed.connect(func() -> void: _show_options(true))
+	options_button.focus_entered.connect(func() -> void: pad_menu_index = 1)
 	options_page = VBoxContainer.new()
 	options_page.add_theme_constant_override("separation", 14)
 	pages.add_child(options_page)
@@ -547,8 +648,13 @@ func _create_pause_menu() -> void:
 	units_picker.add_item("Imperial (mph, ft, mi)")
 	units_picker.item_selected.connect(func(index: int) -> void: _set_units(index))
 	options_page.add_child(units_picker)
-	var back := _menu_button("BACK")
-	options_page.add_child(back)
-	back.pressed.connect(func() -> void: _show_options(false))
+	units_picker.focus_entered.connect(func() -> void: pad_menu_index = 0)
+	back_button = _menu_button("BACK")
+	options_page.add_child(back_button)
+	back_button.pressed.connect(func() -> void: _show_options(false))
+	back_button.focus_entered.connect(func() -> void: pad_menu_index = 1)
+	var pad_hint := _label("STICK / D-PAD  ·  A SELECT  ·  B BACK", 14, Color(0.55, 0.84, 0.96))
+	pad_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pages.add_child(pad_hint)
 	_show_options(false)
 	pause_overlay.visible = false

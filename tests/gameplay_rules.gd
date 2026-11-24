@@ -57,6 +57,43 @@ func _run_tests() -> void:
 	if bool(game.get("paused")):
 		_fail("Escape did not resume the run.")
 		return
+	# Controller menu and camera actions must work for any device index.
+	var pad := InputEventJoypadButton.new()
+	pad.device = 2
+	pad.pressed = true
+	pad.button_index = JOY_BUTTON_START
+	game.call("_input", pad)
+	pad.button_index = JOY_BUTTON_DPAD_DOWN
+	game.call("_input", pad)
+	pad.button_index = JOY_BUTTON_A
+	game.call("_input", pad)
+	if not bool(game.get("paused")) or not options_control.visible:
+		_fail("Controller could not navigate pause menu.")
+		return
+	pad.button_index = JOY_BUTTON_DPAD_RIGHT
+	game.call("_input", pad)
+	if not bool(game.get("imperial")):
+		_fail("Controller could not change units.")
+		return
+	pad.button_index = JOY_BUTTON_DPAD_LEFT
+	game.call("_input", pad)
+	pad.button_index = JOY_BUTTON_B
+	game.call("_input", pad)
+	pad.button_index = JOY_BUTTON_START
+	game.call("_input", pad)
+	if bool(game.get("paused")) or bool(game.get("imperial")):
+		_fail("Controller could not back out and resume.")
+		return
+	var view_before: bool = game.get("first_person")
+	pad.button_index = JOY_BUTTON_Y
+	game.call("_input", pad)
+	if bool(game.get("first_person")) == view_before:
+		_fail("Controller camera toggle failed.")
+		return
+	game.call("_input", pad)
+	if absf(float(runner.call("pad_axis", 0.1))) > 0.001 or absf(float(runner.call("pad_axis", -1.0)) + 1.0) > 0.001:
+		_fail("Controller deadzone failed.")
+		return
 	# Controls must remain independent: C slides, Tab toggles camera.
 	for code in [KEY_SHIFT, KEY_CTRL, KEY_C]:
 		if not bool(runner.call("is_slide_key", code)):

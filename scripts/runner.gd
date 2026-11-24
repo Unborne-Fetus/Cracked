@@ -162,9 +162,36 @@ func natural_lift_impulse(normal_accel: float, forward_speed: float) -> float:
 func is_slide_key(code: int) -> bool:
 	return SLIDE_KEYS.has(code)
 
+static func pad_axis(raw: float) -> float:
+	return signf(raw) * clampf((absf(raw) - 0.18) / 0.82, 0.0, 1.0)
+
+func _pad_steer() -> float:
+	var result := 0.0
+	for device in Input.get_connected_joypads():
+		var axis := pad_axis(Input.get_joy_axis(device, JOY_AXIS_LEFT_X))
+		if Input.is_joy_button_pressed(device, JOY_BUTTON_DPAD_LEFT):
+			axis = -1.0
+		if Input.is_joy_button_pressed(device, JOY_BUTTON_DPAD_RIGHT):
+			axis = 1.0
+		if absf(axis) > absf(result):
+			result = axis
+	return result
+
+func _pad_jump() -> bool:
+	for device in Input.get_connected_joypads():
+		if Input.is_joy_button_pressed(device, JOY_BUTTON_A):
+			return true
+	return false
+
 func _slide_input() -> bool:
-	if touch_slide or Input.is_joy_button_pressed(0, JOY_BUTTON_B):
+	if touch_slide:
 		return true
+	for device in Input.get_connected_joypads():
+		for button in [JOY_BUTTON_B, JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]:
+			if Input.is_joy_button_pressed(device, button):
+				return true
+		if Input.get_joy_axis(device, JOY_AXIS_TRIGGER_LEFT) > 0.3 or Input.get_joy_axis(device, JOY_AXIS_TRIGGER_RIGHT) > 0.3:
+			return true
 	for code in SLIDE_KEYS:
 		if Input.is_key_pressed(code):
 			return true
@@ -397,9 +424,9 @@ func tick(delta: float, course: Node3D) -> void:
 		steer -= 1.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 		steer += 1.0
-	steer = clampf(steer + Input.get_joy_axis(0, JOY_AXIS_LEFT_X), -1.0, 1.0)
+	steer = clampf(steer + _pad_steer(), -1.0, 1.0)
 	var slide := _slide_input()
-	var jump := Input.is_key_pressed(KEY_SPACE) or Input.is_joy_button_pressed(0, JOY_BUTTON_A)
+	var jump := Input.is_key_pressed(KEY_SPACE) or _pad_jump()
 	if jump and not jump_held and grounded:
 		queued_jump = true
 	jump_held = jump
