@@ -17,8 +17,9 @@ var mountain_mesh: MeshInstance3D
 var mountain_material: ShaderMaterial
 var sky_level := -1
 var sky_clock := 0.0
-var mountain_level := -1
-var mountain_phase := -1
+var mountain_velocity := 0.0
+var mountain_altitude := 0.0
+var mountain_pose_ready := false
 var aim_cursor_active := false
 var mouse_aim_active := true
 var replay
@@ -192,6 +193,7 @@ func _restart() -> void:
 	course.fixed_daily_layout = mode == 1
 	course.reset_course(run_seed)
 	runner.reset_run(course)
+	mountain_pose_ready = false
 	combat.reset(true,run_seed)
 	runner.combat_enabled=true
 	runner.jumps_disabled = mode == 2
@@ -261,8 +263,21 @@ func _create_mountains() -> void:
 
 func _process(delta: float) -> void:
 	if is_instance_valid(mountain_mesh):
-		mountain_mesh.position=Vector3(runner.position.x,runner.position.y-90.0,runner.position.z)
-		mountain_material.set_shader_parameter("velocity",clampf(float(runner.speed)/300.0,0.0,2.0))
+		# Follow the course altitude, not the rider's jumps, rolls or free fall.
+		# Work in absolute altitude so floating-origin shifts cannot jerk the horizon.
+		var floor_frame: Transform3D = course.surface_frame(float(runner.distance),0.0,1)
+		var world_shift: Vector3 = course.origin_shift
+		var target_altitude: float = floor_frame.origin.y+world_shift.y-90.0
+		var target_velocity: float = clampf(float(runner.speed)/300.0,0.0,2.0)
+		if not mountain_pose_ready:
+			mountain_altitude=target_altitude
+			mountain_velocity=target_velocity
+			mountain_pose_ready=true
+		elif not paused and (not run_finished or replay_active) and (not replay_active or replay_playing):
+			mountain_altitude=lerpf(mountain_altitude,target_altitude,1.0-exp(-delta*0.65))
+			mountain_velocity=lerpf(mountain_velocity,target_velocity,1.0-exp(-delta*0.85))
+		mountain_mesh.position=Vector3(runner.position.x,mountain_altitude-world_shift.y,runner.position.z)
+		mountain_material.set_shader_parameter("velocity",mountain_velocity)
 		mountain_material.set_shader_parameter("progress",clampf(float(runner.distance)/18000.0,0.0,1.0))
 	sky_clock-=delta
 	if sky_clock<=0.0 and is_instance_valid(reactive_sky):
@@ -271,15 +286,6 @@ func _process(delta: float) -> void:
 		if level!=sky_level:
 			sky_level=level
 			reactive_sky.set_shader_parameter("intensity",float(level)/12.0)
-		var distance_value:=maxf(0.0,float(runner.distance))
-		var escalation:=clampi(int(distance_value/600.0),0,28)
-		var wave_step:=int(distance_value/85.0)%4096
-		if escalation!=mountain_level:
-			mountain_level=escalation
-			reactive_sky.set_shader_parameter("mountain_scale",float(escalation)/28.0)
-		if wave_step!=mountain_phase:
-			mountain_phase=wave_step
-			reactive_sky.set_shader_parameter("mountain_phase",float(wave_step)*0.075)
 	if not paused and (not run_finished or replay_active):
 		_poll_camera_stick(delta)
 	if replay_active:
@@ -1482,6 +1488,8 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.lane = float(state["lane"])
 	runner.surface_side = int(state["side"])
 	runner.speed = float(state["speed"])
+	if snap_camera:
+		mountain_pose_ready = false
 	runner.grounded = bool(state["grounded"])
 	runner.is_sliding = bool(state["sliding"])
 	runner.diving = bool(state["diving"])
