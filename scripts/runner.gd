@@ -933,6 +933,29 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		if not obstacle.is_empty():
 			_obstacle_rebound(course,obstacle,old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1)
 			return
+	if bool(course.call("near_loop",old_s,60.0)) or bool(course.call("near_loop",predicted_s,60.0)):
+		var loop_hit:=_loop_flight_contact(course,previous_pos,next_pos)
+		if not loop_hit.is_empty():
+			var loop_face: Transform3D=loop_hit["frame"]
+			var loop_normal:=loop_face.basis.y
+			var loop_s: float=loop_hit["s"]
+			var loop_lane: float=loop_hit["lane"]
+			var loop_side: int=loop_hit["side"]
+			var loop_probe: int=loop_hit["probe"]
+			if _magnetic_face(course,loop_s,loop_lane,loop_face) or (air_basis.y.dot(loop_normal)>0.25 and (loop_probe<0 or air_basis.y.dot(loop_normal)>0.55)):
+				_attach_magnetic_face(course,loop_s,loop_lane,loop_side,loop_face)
+				return
+			# No snap to the opposite arm or through the slab on a head hit.
+			var loop_push:=0.10
+			for probe in range(2):
+				loop_push=maxf(loop_push,_body_support(loop_normal,air_basis,probe)-_body_offset(air_basis,probe).dot(loop_normal)+0.10)
+			position=loop_face.origin+loop_normal*loop_push
+			air_velocity-=loop_normal*minf(0.0,air_velocity.dot(loop_normal))*1.25
+			distance=loop_s
+			lane=loop_lane
+			height=loop_push if loop_side>0 else -loop_push-0.45
+			transform=Transform3D(air_basis,position)
+			return
 	var stacked_contact:bool=str(course.call("section_name",old_projection.x))=="STACKED ROUTES" or str(course.call("section_name",obstacle_projection.x))=="STACKED ROUTES"
 	if stacked_contact:
 		var deck_hit:=_stacked_sweep(course,previous_pos,next_pos,old_s,predicted_s)
@@ -1190,3 +1213,26 @@ func tick(delta: float, course: Node3D) -> void:
 		diving = false
 	avatar.scale.y = lerpf(avatar.scale.y, 0.55 if is_sliding else 1.0, minf(delta * 12.0, 1.0))
 	_update_rider_animation(delta)
+
+func _loop_flight_contact(course: Node3D, from_pos: Vector3, to_pos: Vector3) -> Dictionary:
+	var best: Dictionary={}
+	var earliest:=2.0
+	# Feet and forward/side extremities of torso/head, not only centers.
+	# Sweeps use the same exact surface cells as the visible loop.
+	var offsets: Array[Vector3]=[Vector3.ZERO,_body_offset(air_basis,0),_body_offset(air_basis,1)]
+	var motion:=to_pos-from_pos
+	if motion.length_squared()>0.000001:
+		var forward:=motion.normalized()
+		for probe in range(2):
+			offsets.append(_body_offset(air_basis,probe)+forward*_body_support(forward,air_basis,probe))
+	for i in range(offsets.size()):
+		var hit: Dictionary=course.call("loop_mesh_sweep",from_pos+offsets[i],to_pos+offsets[i])
+		if hit.is_empty() or float(hit["fraction"])>=earliest:
+			continue
+		var face: Transform3D=hit["frame"]
+		if i>0 and offsets[i].dot(face.basis.y)>0.05:
+			continue
+		earliest=float(hit["fraction"])
+		best=hit
+		best["probe"]=-1 if i==0 else i-1
+	return best

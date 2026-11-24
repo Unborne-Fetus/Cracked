@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Loop clipping and chase camera
+- Match grounded loop contact to the actual emitted triangles and sweep airborne feet/body against both loop faces.
+- Refine loop projection and route metric; preserve a full third-person chase arm at loops.
+- Add actual generated-loop collision and camera regression checks.
+
 ## Lightcycle ground vehicle
 - Dark monocoque with luminous hubless wheels and seated articulated rider; steering lean, suspension, wheel rotation and short-hop pitch.
 - Folding wheel carriers for glider handoff; original gyro and ceiling rig retained. Movement rules unchanged.

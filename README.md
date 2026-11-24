@@ -124,3 +124,6 @@ Drone combat, aiming, firing and pulse controls are removed. Right bumper is aga
 
 ## Lightcycle ground vehicle
 The regular ground and short-hop visual is now a dark hubless-wheel lightcycle with neon cosmetic trim. The articulated rider sits on the saddle, grips handlebars, leans into turns and compresses on landing. Short jumps pitch the bike instead of performing skateboard kickflips. Wheel carriers fold into the existing glider platform on extended flight and unfold as it catches the rider. Gyro and ceiling spider rigs retain their original geometry. This is a visual change only; motion, collision and track generation remain unchanged.
+
+## Loop collision and camera
+Loop riding positions interpolate the actual mesh triangles; airborne contacts sweep those same triangles across both loop arms and both faces. The third-person loop camera uses physical-distance trailing positions and an elevated fallback instead of collapsing onto the rider. The camera's loop sightline tests use the actual loop geometry. Existing loop rewards, safe bypass and momentum rules remain.

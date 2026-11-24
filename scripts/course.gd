@@ -846,7 +846,7 @@ func surface_position(distance: float, across: float) -> Vector3:
 	var kind := section_name(distance)
 	var local_s := _local_s(distance)
 	if kind=="LOOP ROUTE":
-		return _loop_frame(sample(distance),local_s,across,chunk_starts[index+1]-chunk_starts[index]).origin
+		return surface_frame(distance,across,1).origin
 	return _profile_vertex(sample(distance), kind, local_s, across, _ramp_lift(index, kind, local_s, across))
 
 func surface_frame(distance: float, across: float, side: int = 1) -> Transform3D:
@@ -854,7 +854,12 @@ func surface_frame(distance: float, across: float, side: int = 1) -> Transform3D
 	var kind := section_name(distance)
 	if kind=="LOOP ROUTE":
 		var index := chunk_index_at(distance)
-		return _loop_frame(frame,_local_s(distance),across,chunk_starts[index+1]-chunk_starts[index],side)
+		var loop_frame := _loop_frame(frame,_local_s(distance),across,chunk_starts[index+1]-chunk_starts[index],side)
+		if chunks.has(index):
+			var loop_node: Node3D=chunks[index]["node"]
+			if loop_node.has_meta("loop_top"):
+				loop_frame.origin=loop_mesh_point(loop_node,_local_s(distance),across,side)
+		return loop_frame
 	if _special_profile(kind):
 		var local_s := _local_s(distance)
 		var normal := _cross_normal(kind, local_s, across)
@@ -1051,10 +1056,9 @@ func loop_progress(distance: float) -> float:
 
 func loop_metric(distance: float, across: float) -> float:
 	var index := chunk_index_at(distance)
-	var length := chunk_starts[index+1]-chunk_starts[index]
-	var s := _local_s(distance)
-	var derivative := (_loop_offset(s+0.05,across,length)-_loop_offset(s-0.05,across,length))/(0.10*length/CHUNK_LENGTH)
-	return maxf(0.35,(Vector3.FORWARD+derivative).length())
+	var lo:=maxf(chunk_starts[index]+0.001,distance-0.25)
+	var hi:=minf(chunk_starts[index+1]-0.001,distance+0.25)
+	return maxf(0.35,surface_position(hi,across).distance_to(surface_position(lo,across))/maxf(0.001,hi-lo))
 
 func loop_required_speed(distance: float) -> float:
 	var index := chunk_index_at(distance)
@@ -1104,12 +1108,36 @@ func _loop_projection(world_pos: Vector3, guess_s: float) -> Vector3:
 					lane_value = (low+high)*0.5
 				lane_value *= float(branch)
 				var surface := _loop_frame(frame,s,clampf(lane_value,-HALF_WIDTH,HALF_WIDTH),length)
-				var cost := world_pos.distance_squared_to(surface.origin)+pow(at-guess_s,2.0)*0.025
+				var cost := world_pos.distance_squared_to(surface.origin)+pow(at-guess_s,2.0)*0.001
 				if cost<best_cost:
 					best_cost=cost
 					best_s=at
 					best_lane=lane_value
 					best_height=(world_pos-surface.origin).dot(surface.basis.y)
+	# The lateral inverse above is only a starting guess: a camera/feet
+	# offset along the inclined loop normal also changes world X/Z.
+	# Refine progress and lane together on the actual mesh.
+	for iteration in range(5):
+		var at_frame:=surface_frame(best_s,best_lane,1)
+		var lo:=maxf(start+0.001,best_s-0.25)
+		var hi:=minf(start+length-0.001,best_s+0.25)
+		var ds: Vector3=(surface_frame(hi,best_lane,1).origin-surface_frame(lo,best_lane,1).origin)/maxf(0.001,hi-lo)
+		var dl: Vector3=(surface_frame(best_s,best_lane+0.10,1).origin-surface_frame(best_s,best_lane-0.10,1).origin)/0.20
+		var offset:=world_pos-at_frame.origin
+		var aa:=ds.dot(ds)
+		var ab:=ds.dot(dl)
+		var bb:=dl.dot(dl)
+		var det:=aa*bb-ab*ab
+		if det<0.00001:
+			break
+		var step_s:=clampf((bb*offset.dot(ds)-ab*offset.dot(dl))/det,-6.0,6.0)
+		var step_lane:=clampf((aa*offset.dot(dl)-ab*offset.dot(ds))/det,-6.0,6.0)
+		best_s=clampf(best_s+step_s,maxf(start+0.001,guess_s-50.0),minf(start+length-0.001,guess_s+50.0))
+		best_lane=clampf(best_lane+step_lane,-HALF_WIDTH-6.0,HALF_WIDTH+6.0)
+		if absf(step_s)+absf(step_lane)<0.005:
+			break
+	var final_face:=surface_frame(best_s,best_lane,1)
+	best_height=(world_pos-final_face.origin).dot(final_face.basis.y)
 	return Vector3(best_s,best_lane,best_height)
 
 func _profile_vertex(frame: Transform3D, kind: String, local_s: float, lateral: float, lift: float = 0.0) -> Vector3:
@@ -1187,6 +1215,17 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			bottom[vertex] = point - normal3 * THICKNESS
 			grid_top[vertex] = point + normal3 * 0.075
 			grid_bottom[vertex] = point - normal3 * (THICKNESS + 0.075)
+	if kind=="LOOP ROUTE":
+		var row_bounds: Array[AABB] = []
+		for row in range(STEPS):
+			var bounds := AABB(top[row*stride],Vector3.ZERO)
+			for column in range(stride):
+				for vertex_index in [row*stride+column,(row+1)*stride+column]:
+					bounds=bounds.expand(top[vertex_index]).expand(bottom[vertex_index])
+			row_bounds.append(bounds.grow(0.05))
+		node.set_meta("loop_top",top)
+		node.set_meta("loop_bottom",bottom)
+		node.set_meta("loop_bounds",row_bounds)
 	for i in range(STEPS):
 		var s0 := start_s + float(i) * step_length
 		var s1 := s0 + step_length
@@ -1654,3 +1693,103 @@ func nearest_road_point(world_pos: Vector3, projected: Vector3) -> Dictionary:
 func is_curved_enclosure(distance: float) -> bool:
 	var kind := section_name(distance)
 	return kind in ["CORKSCREW TUNNEL","HALFPIPE","STACKED ROUTES","LOOP ROUTE"]
+
+# Interpolate the same diagonal (a,c,b / b,c,d) used by the emitted mesh.
+func loop_mesh_point(node: Node3D, local_s: float, across: float, side: int) -> Vector3:
+	var vertices: PackedVector3Array=node.get_meta("loop_top" if side>0 else "loop_bottom")
+	var row:=clampi(int(floor(local_s)),0,STEPS-1)
+	var column_value:=clampf((across+HALF_WIDTH)/4.0,0.0,float(CROSS_STEPS))
+	var column:=clampi(int(floor(column_value)),0,CROSS_STEPS-1)
+	var u:=clampf(local_s-float(row),0.0,1.0)
+	var v:=clampf(column_value-float(column),0.0,1.0)
+	var stride:=CROSS_STEPS+1
+	var at:=row*stride+column
+	var a:=vertices[at]
+	var b:=vertices[at+1]
+	var c:=vertices[at+stride]
+	var d:=vertices[at+stride+1]
+	var point:=a+(c-a)*u+(b-a)*v if u+v<=1.0 else d+(b-d)*(1.0-u)+(c-d)*(1.0-v)
+	# Extrapolate only for projection; support_at still rejects outer lanes.
+	var excess:=across-clampf(across,-HALF_WIDTH,HALF_WIDTH)
+	var lateral: Vector3=(b-a).lerp(d-c,u)/4.0
+	return node.position+point+lateral*excess
+
+# Sweep both faces of all locally relevant loop chunks. Exact triangle
+# intersection cannot confuse the ascending and descending arms, and works
+# on newly streamed/rebased geometry before the physics server catches up.
+func loop_mesh_sweep(from_pos: Vector3,to_pos: Vector3) -> Dictionary:
+	var delta:=to_pos-from_pos
+	if delta.length_squared()<0.00000001:
+		return {}
+	var best: Dictionary={}
+	var earliest:=1.00001
+	var stride:=CROSS_STEPS+1
+	for key in chunks:
+		var data: Dictionary=chunks[key]
+		if data["kind"]!="LOOP ROUTE":
+			continue
+		var node: Node3D=data["node"]
+		if not node.has_meta("loop_bounds"):
+			continue
+		var a:=from_pos-node.position
+		var b:=to_pos-node.position
+		var query:=AABB(a,Vector3.ZERO).expand(b).grow(0.002)
+		var bounds: Array=node.get_meta("loop_bounds")
+		var top: PackedVector3Array=node.get_meta("loop_top")
+		var bottom: PackedVector3Array=node.get_meta("loop_bottom")
+		for row in range(STEPS):
+			if not query.intersects(bounds[row]):
+				continue
+			for column in range(CROSS_STEPS):
+				var lane0: float=-HALF_WIDTH+float(column)*4.0
+				if not _cell_supported("LOOP ROUTE",float(row)+0.5,lane0+2.0):
+					continue
+				var at:=row*stride+column
+				for side: int in [1,-1]:
+					var verts:=top if side>0 else bottom
+					var p0:=verts[at]
+					var p1:=verts[at+1]
+					var p2:=verts[at+stride]
+					var p3:=verts[at+stride+1]
+					if not query.intersects(AABB(p0,Vector3.ZERO).expand(p1).expand(p2).expand(p3).grow(0.002)):
+						continue
+					for triangle in range(2):
+						var ta:=p0 if triangle==0 else p3
+						var tb:=p1 if triangle==0 else p2
+						var tc:=p2 if triangle==0 else p1
+						var hit: Variant=Geometry3D.segment_intersects_triangle(a,b,ta,tb,tc)
+						if hit==null:
+							continue
+						var hit_point: Vector3=hit
+						var fraction:=clampf((hit_point-a).dot(delta)/delta.length_squared(),0.0,1.0)
+						if fraction>=earliest:
+							continue
+						var edge0:=tb-ta
+						var edge1:=tc-ta
+						var q:=hit_point-ta
+						var aa:=edge0.dot(edge0)
+						var ab:=edge0.dot(edge1)
+						var bb:=edge1.dot(edge1)
+						var denom:=aa*bb-ab*ab
+						if absf(denom)<0.00000001:
+							continue
+						var w0: float=(bb*q.dot(edge0)-ab*q.dot(edge1))/denom
+						var w1: float=(aa*q.dot(edge1)-ab*q.dot(edge0))/denom
+						var u:=clampf(w1 if triangle==0 else 1.0-w1,0.0,1.0)
+						var v:=clampf(w0 if triangle==0 else 1.0-w0,0.0,1.0)
+						var s:=chunk_starts[int(key)]+(float(row)+u)*(chunk_starts[int(key)+1]-chunk_starts[int(key)])/float(STEPS)
+						var across:=lane0+v*4.0
+						var face:=surface_frame(s,across,side)
+						# Only an entering hit. Ignore a foot starting on the
+						# surface and moving outwards after a jump.
+						if delta.dot(face.basis.y)>=-0.00001:
+							continue
+						earliest=fraction
+						best={"fraction":fraction,"s":s,"lane":across,"side":side,"frame":face,"point":node.position+hit_point}
+	return best
+
+func near_loop(distance: float, reach: float = 24.0) -> bool:
+	for at in [maxf(0.0,distance-reach),distance,distance+reach]:
+		if has_distance(at) and section_name(at)=="LOOP ROUTE":
+			return true
+	return false
