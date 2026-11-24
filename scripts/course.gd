@@ -1191,6 +1191,68 @@ func section_name(distance: float) -> String:
 		return "TRACK"
 	return str(chunks[index]["kind"])
 
+func first_obstacle_contact(from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float, player_height: float = 1.7) -> Dictionary:
+	var start := Vector3(from_s, from_lane, from_height)
+	var motion := Vector3(to_s, to_lane, to_height) - start
+	var best: Dictionary = {}
+	var earliest := 2.0
+	for index in range(chunk_index_at(minf(from_s,to_s)-5.0), chunk_index_at(maxf(from_s,to_s)+5.0)+1):
+		if not chunks.has(index):
+			continue
+		for hazard: Dictionary in chunks[index]["hazards"]:
+			var at: float = hazard["s"]
+			var lane: float = hazard["lane"]
+			var bottom: float = hazard["bottom"]
+			var h: float = hazard["height"]
+			var depth: float = hazard["depth"]
+			var radius: float = float(hazard["width"])*0.5
+			# Conservative swept footprint, including the board nose.
+			var lo := Vector3(at-depth*0.5-1.20, lane-radius-0.65, bottom-player_height)
+			var hi := Vector3(at+depth*0.5+1.10, lane+radius+0.65, bottom+h+0.12)
+			var enter := 0.0
+			var exit_time := 1.0
+			var axis := -1
+			var normal_sign := 0.0
+			var valid := true
+			for component in range(3):
+				if absf(motion[component]) < 0.00001:
+					if start[component] < lo[component] or start[component] > hi[component]:
+						valid = false
+						break
+				else:
+					var a := (lo[component]-start[component])/motion[component]
+					var b := (hi[component]-start[component])/motion[component]
+					var near := minf(a,b)
+					if near > enter:
+						enter = near
+						axis = component
+						normal_sign = -signf(motion[component])
+					exit_time = minf(exit_time,maxf(a,b))
+					if enter > exit_time:
+						valid = false
+						break
+			if not valid or enter > 1.0 or exit_time < 0.0 or enter >= earliest:
+				continue
+			# Already overlapping: allow exit instead of trapping the player.
+			if axis < 0:
+				continue
+			var at_contact := start + motion * enter
+			var contact_radius := radius
+			var profile: String = hazard["profile"]
+			if profile == "CONE":
+				contact_radius *= 1.0-clampf((at_contact.z-bottom)/h,0.0,1.0)
+			elif profile == "INVERSE_CONE":
+				contact_radius *= clampf((at_contact.z+player_height-bottom)/h,0.0,1.0)
+			elif profile == "SPHERE":
+				var center_y := bottom+h*0.5
+				var closest_y := clampf(center_y,at_contact.z,at_contact.z+player_height)
+				contact_radius *= sqrt(maxf(0.0,1.0-pow((closest_y-center_y)/(h*0.5),2.0)))
+			if absf(at_contact.y-lane) > contact_radius+0.65:
+				continue
+			earliest = enter
+			best = {"fraction": enter, "axis": axis, "sign": normal_sign, "hazard": hazard}
+	return best
+
 func swept_obstacles(from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float, player_height: float = 1.7) -> int:
 	var count := 0
 	if to_s <= from_s:
@@ -1304,6 +1366,27 @@ func distance_to_rideable_surface(world_pos: Vector3, projected: Vector3) -> flo
 			var face := surface_frame(at, test_lane, side)
 			nearest = minf(nearest, world_pos.distance_to(face.origin))
 	return nearest
+
+func nearest_road_point(world_pos: Vector3, projected: Vector3) -> Dictionary:
+	var nearest := INF
+	var point := Vector3.ZERO
+	for offset: float in [0.0, -8.0, 8.0, -24.0, 24.0, -48.0, 48.0]:
+		var at := maxf(0.0, projected.x + offset)
+		if not has_distance(at):
+			continue
+		var edge := half_width_at(at)
+		var p := project_position(world_pos, at) if offset == 0.0 else projected
+		var across := clampf(p.y, -edge, edge)
+		for test_lane: float in [across, clampf(across-4.0,-edge,edge), clampf(across+4.0,-edge,edge), -edge, edge, -16.0, 16.0, -4.0, 4.0]:
+			if not support_at(at, test_lane):
+				continue
+			for side: int in [1, -1]:
+				var face := surface_frame(at, test_lane, side)
+				var separation := world_pos.distance_squared_to(face.origin)
+				if separation < nearest:
+					nearest = separation
+					point = face.origin
+	return {"distance": sqrt(nearest), "point": point}
 
 func is_curved_enclosure(distance: float) -> bool:
 	var kind := section_name(distance)

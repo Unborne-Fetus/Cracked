@@ -14,7 +14,7 @@ var shadow: StandardMaterial3D
 var deck_mat: StandardMaterial3D
 var edge_mat: StandardMaterial3D
 # Visual dimensions only. The gameplay collision envelope is unchanged.
-const LEG_LENGTH := 0.55
+const LEG_LENGTH := 0.61
 const ARM_LENGTH := 0.34
 
 func _mat(color: Color) -> StandardMaterial3D:
@@ -43,7 +43,7 @@ func _ready() -> void:
 	# Eight cross-sections form a real upturned bobsled nose at -Z.
 	# The dark blue deck and cyan rails separate it from the white rider.
 	var stations := [
-		Vector3(0.40, 0.00, 1.10), Vector3(0.62, 0.00, 0.86),
+		Vector3(0.40, 0.13, 1.10), Vector3(0.62, 0.045, 0.86),
 		Vector3(0.65, 0.00, 0.28), Vector3(0.65, 0.00, -0.44),
 		Vector3(0.61, 0.035, -0.72), Vector3(0.54, 0.12, -0.94),
 		Vector3(0.43, 0.25, -1.12), Vector3(0.26, 0.40, -1.24)]
@@ -80,7 +80,7 @@ func _ready() -> void:
 	board.add_child(outline)
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
-	torso = _block(self, Vector3(0.56, 0.73, 0.34), white)
+	torso = _block(self, Vector3(0.56, 0.78, 0.34), white)
 	head = _block(self, Vector3(0.45, 0.49, 0.43), white)
 	hips = _block(self, Vector3(0.48, 0.24, 0.34), shadow)
 	for i in range(2):
@@ -117,7 +117,8 @@ func _joint(a: Vector3, b: Vector3, bend: Vector3, segment_length: float) -> Vec
 func _pulse(value: float, start: float, peak: float, end: float) -> float:
 	return smoothstep(start, peak, value) * (1.0 - smoothstep(peak, end, value))
 
-func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false) -> void:
+func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float = 0.0, landing: float = 0.0, impact: float = 0.0, dive: bool = false, dive_blend: float = 0.0) -> void:
+	var dive_amount := maxf(dive_blend,1.0 if dive else 0.0) if airborne else 0.0
 	# All phases are derived from recorded simulation time; camera orbit
 	# and render rate never alter the animation or the player's physics.
 	var flipping := airborne and flip < 1.0
@@ -131,24 +132,24 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var balance := sin(phase * 4.2) * 0.035 * (1.0 - bend) if not airborne else 0.0
 	# Taller neutral stance (about 2.2m including the deck). Longer legs
 	# stay visibly bent during the low speed tuck rather than scaling down.
-	var hip := Vector3(lean + balance, lerpf(1.17, 0.76, bend) + tuck * 0.10, lerpf(0.02, 0.23, bend) + recoil * 0.08)
-	var chest := hip + Vector3(lean * 0.38, lerpf(0.51, 0.39, bend), -0.31 * bend - (0.15 if dive else 0.0))
-	var shoulder := chest + Vector3(0, 0.22, -0.05 * bend)
+	var hip := Vector3(lean + balance, lerpf(1.29, 0.80, bend) + tuck * 0.10 + dive_amount * 0.10, lerpf(0.02, 0.23, bend) + recoil * 0.08)
+	var chest := hip + Vector3(lean * 0.38, lerpf(0.55, 0.42, bend)*(1.0-0.64*dive_amount), -0.31*bend-0.40*dive_amount)
+	var shoulder := chest + Vector3(0, 0.22*(1.0-0.75*dive_amount), -0.05*bend-0.24*dive_amount)
 	torso.position = chest
-	torso.rotation.x = -0.52 * bend - (0.23 if dive else 0.0) + recoil * 0.23
+	torso.rotation.x = -0.52*bend-0.85*dive_amount+recoil*0.23
 	torso.rotation.z = -lean * 1.25
 	torso.rotation.y = -steer * 0.12
 	hips.position = hip
 	hips.rotation.z = -lean * 0.5
-	head.position = shoulder + Vector3(0, 0.32, -0.11 * bend)
-	head.rotation.x = -0.12 * bend + recoil * 0.10
+	head.position = shoulder + Vector3(0,0.32*(1.0-0.62*dive_amount),-0.11*bend-0.23*dive_amount)
+	head.rotation.x = -0.12*bend-0.48*dive_amount+recoil*0.10
 	head.rotation.z = -lean * 0.40
 	head.rotation.y = -steer * 0.09
 	# The board leaves the feet, rotates around its longitudinal axis,
 	# then returns to level at the catch. No bank is added to the root.
 	board.position.y = 0.13 - tuck * 0.24
 	board.rotation.z = TAU * smoothstep(0.0, 1.0, flip) if flipping else 0.0
-	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else 0.0
+	board.rotation.x = (-0.18 * _pulse(flip, 0.0, 0.16, 0.40) + 0.10 * catch_pose) if flipping else -0.58*dive_amount
 	for i in range(2):
 		var sign_value := -1.0 if i == 0 else 1.0
 		# Front (left) foot flicks diagonally over the nose. The back
@@ -165,12 +166,14 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 				foot.z += 0.13 * tuck
 				foot.y += 0.09 * tuck
 			foot.y -= 0.07 * catch_pose
+		if dive_amount > 0.0 and not flipping:
+			foot = foot.lerp(board.position + board.basis * Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34),dive_amount)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
 		_segment(thighs[i], hip_joint, knee)
 		_segment(shins[i], knee, foot)
 		boots[i].position = foot
-		boots[i].rotation.x = -0.38 * flick if front else 0.20 * tuck
+		boots[i].rotation.x = (-0.38*flick if front else 0.20*tuck) - 0.58*dive_amount
 		boots[i].rotation.z = -0.38 * flick if front else 0.0
 		boots[i].rotation.y = sign_value * 0.13
 		# Independent balancing arms: outward for carving, raised during
@@ -178,7 +181,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		var arm_start := shoulder + Vector3(sign_value * 0.27, 0, 0)
 		var spread := 0.32 + absf(steer) * 0.14 + tuck * 0.20 + recoil * 0.14
 		var arm_y := -0.43 + 0.27 * tuck + 0.18 * recoil
-		var hand := arm_start + Vector3(sign_value * spread, arm_y + sign_value * steer * 0.12, -0.16 - 0.29 * bend - (0.12 if dive else 0.0) + sign_value * balance)
+		var hand := arm_start + Vector3(sign_value*lerpf(spread,0.12,dive_amount),lerpf(arm_y+sign_value*steer*0.12,-0.10,dive_amount),lerpf(-0.16-0.29*bend+sign_value*balance,0.62,dive_amount))
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)
 		_segment(lower_arms[i], elbow, hand)

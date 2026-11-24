@@ -388,6 +388,18 @@ func _run_tests() -> void:
 		_fail("Slide indication did not clear after standing.")
 		return
 	game.set("first_person", false)
+	# A high jump over the supported ribbon cannot expire on airtime.
+	game.call("_restart")
+	await process_frame
+	var high_frame: Transform3D = course.call("surface_frame",52.0,0.0,1)
+	var high_position := high_frame.origin + Vector3.UP*55.0
+	runner.set("air_time",12.0)
+	runner.set("air_velocity",Vector3(0,-15,0))
+	var high_projection: Vector3 = course.call("project_position",high_position,52.0)
+	runner.call("_check_fall",course,high_position,high_projection,0.5)
+	if bool(runner.get("fallen")):
+		_fail("Long airtime falsely killed a rider above the road.")
+		return
 	# Crossing a road edge must detach instead of clamping the lane.
 	game.call("_restart")
 	await process_frame
@@ -524,6 +536,20 @@ func _run_tests() -> void:
 	runner.call("apply_obstacle_hit")
 	if float(runner.get("speed")) >= 40.0 or bool(game.get("run_finished")):
 		_fail("Obstacle should drain momentum without ending the run.")
+		return
+	# An already-hit obstacle stays solid, and a real collision stops
+	# the board before its front face instead of merely draining speed.
+	var contact_info: Dictionary = course.call("first_obstacle_contact",at-12.0,at+12.0,lane,lane,0.0,0.0,1.7)
+	if contact_info.is_empty():
+		_fail("Previously hit obstacle ceased to be solid.")
+		return
+	runner.set("grounded",true)
+	runner.set("speed",120.0)
+	runner.call("_obstacle_rebound",course,contact_info,at-12.0,at+12.0,lane,lane,0.0,0.0)
+	var rebound_frame: Transform3D = course.call("surface_frame",float(runner.get("distance")),lane,1)
+	var rebound_velocity: Vector3 = runner.get("air_velocity")
+	if bool(runner.get("grounded")) or float(runner.get("distance")) >= at or rebound_velocity.dot(-rebound_frame.basis.z) >= 0.0:
+		_fail("Obstacle contact failed to stop and reflect the rider.")
 		return
 	# Stream the new terrain showcase in order, verifying geometry and width.
 	for index in range(6, 16):

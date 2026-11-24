@@ -49,6 +49,10 @@ var grounded := true
 var surface_side := 1
 var screen_steer_sign := 1.0
 var fallen := false
+var fall_grace := 0.0
+var rider_course: Node3D
+var rider_clearance := 0.0
+var rider_dive := 0.0
 var air_velocity := Vector3.ZERO
 var air_basis := Basis.IDENTITY
 var recover_air_roll := false
@@ -104,7 +108,8 @@ func update_rider_sprite(_camera: Camera3D) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, diving)
+	rider_model.position.y = rider_clearance / maxf(0.05, avatar.scale.y)
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive)
 
 func _update_rider_animation(delta: float) -> void:
 	rider_phase = fposmod(rider_phase + delta * (0.75 + clampf(speed / 100.0, 0.0, 1.5)), TAU * 50.0)
@@ -115,8 +120,25 @@ func _update_rider_animation(delta: float) -> void:
 	rider_steer = lerpf(rider_steer, clampf(lateral_speed / 25.0, -1.0, 1.0), 1.0 - exp(-delta * 10.0))
 	rider_landing = move_toward(rider_landing, 0.0, delta * 3.4)
 	rider_impact = move_toward(rider_impact, 0.0, delta * 3.8)
+	rider_dive = move_toward(rider_dive, 1.0 if diving and not grounded else 0.0, delta * 7.0)
+	# Sample the actual deck footprint, not only the rider's contact
+	# point. Lift the complete visual rig enough to clear crests/banks.
+	rider_clearance = 0.0
+	if grounded and is_instance_valid(rider_course):
+		for corner: Vector3 in [Vector3(-0.48,0.04,0.95), Vector3(0.48,0.04,0.95), Vector3(-0.64,0.02,0.3), Vector3(0.64,0.02,0.3), Vector3(-0.58,0.03,-0.68), Vector3(0.58,0.03,-0.68)]:
+			var world_point := transform * corner
+			var p: Vector3 = rider_course.call("project_position", world_point, distance)
+			if bool(rider_course.call("support_at",p.x,p.y)):
+				var clearance: float = rider_course.call("surface_clearance",p.x,p.y,p.z,surface_side)
+				rider_clearance = maxf(rider_clearance,0.08-clearance)
+		rider_clearance = clampf(rider_clearance,0.0,1.0)
 
 func reset_run(course: Node3D) -> void:
+	rider_course = course
+	fall_grace = 0.0
+	rider_clearance = 0.0
+	rider_dive = 0.0
+	rider_model.position = Vector3.ZERO
 	distance = 8.0
 	speed = START_SPEED
 	lane = 0.0
@@ -385,6 +407,7 @@ func sync_pose(course: Node3D) -> void:
 func _finish_landing(course: Node3D) -> void:
 	rider_landing = 1.0
 	kickflip_progress = 1.0
+	fall_grace = 0.0
 	var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 	landing_from_basis = air_basis
 	# Small differences can still ease the camera, but a sideways or
@@ -504,6 +527,68 @@ func _recover_floor_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3,
 	_finish_landing(course)
 	return true
 
+func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: float) -> void:
+	# Airtime is never grounds for defeat. A high jump over a road,
+	# or a rider on a bank below its spine, is still a valid run.
+	var near: float = course.call("distance_to_rideable_surface",point,projected)
+	if near <= FALL_DEPTH:
+		fall_grace = 0.0
+		return
+	var info: Dictionary = course.call("nearest_road_point",point,projected)
+	if float(info["distance"]) <= FALL_DEPTH:
+		fall_grace = 0.0
+		return
+	var offset: Vector3 = point - Vector3(info["point"])
+	var horizontal := Vector3(offset.x,0.0,offset.z)
+	var escaping := offset.y < -FALL_DEPTH or (horizontal.length() > FALL_SIDE_DISTANCE and air_velocity.dot(horizontal) > 0.0)
+	fall_grace = fall_grace + delta if escaping else 0.0
+	if fall_grace > 0.22:
+		fallen = true
+
+func _obstacle_rebound(course: Node3D, collision: Dictionary, from_s: float, to_s: float, from_lane: float, to_lane: float, from_height: float, to_height: float) -> void:
+	var fraction := maxf(0.0,float(collision["fraction"])-0.001)
+	var hazard: Dictionary = collision["hazard"]
+	var group: Dictionary = hazard["group"]
+	var was_grounded := grounded
+	distance = lerpf(from_s,to_s,fraction)
+	lane = lerpf(from_lane,to_lane,fraction)
+	var frame: Transform3D = course.call("surface_frame",distance,lane,1)
+	var incoming := -frame.basis.z * speed + frame.basis.x * lateral_speed if grounded else air_velocity
+	var axis := int(collision["axis"])
+	var normal := (-frame.basis.z if axis == 0 else frame.basis.x if axis == 1 else frame.basis.y) * float(collision["sign"])
+	var contact_height := maxf(0.0,lerpf(from_height,to_height,fraction))
+	var contact_position := frame.origin + frame.basis.y * contact_height + normal * 0.12
+	# Reflect the inward velocity, cap the reverse rebound, and steer
+	# away from the struck object rather than teleporting through it.
+	var incoming_normal := incoming.dot(normal)
+	var outgoing := incoming - normal * minf(0.0,incoming_normal) * 1.25
+	if axis == 0:
+		var escape_sign := -1.0 if lane < float(hazard["lane"]) else 1.0
+		outgoing = normal * clampf(absf(incoming_normal)*0.20,3.0,12.0) + frame.basis.x * escape_sign * 14.0 + frame.basis.y * 6.0
+	elif axis == 1:
+		outgoing = outgoing * 0.30 + normal * 8.0 + frame.basis.y * 3.0
+	else:
+		outgoing = outgoing * 0.30 + normal * 5.0
+	grounded = false
+	surface_side = 1
+	air_basis = frame.basis
+	recover_air_roll = true
+	air_time = 0.0 if was_grounded else air_time
+	air_velocity = outgoing
+	speed = maxf(MIN_SPEED,speed * OBSTACLE_RETAIN)
+	height = contact_height
+	vertical_speed = outgoing.dot(frame.basis.y)
+	is_sliding = false
+	diving = false
+	kickflip_progress = 1.0
+	landing_blend = 0.0
+	rider_impact = 1.0
+	hit_timer = 0.85
+	if not bool(group["used"]):
+		group["used"] = true
+		hits += 1
+	transform = Transform3D(air_basis,contact_position)
+
 func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	air_time += delta
 	# Launching off a curved wall can leave the rider ninety degrees
@@ -550,6 +635,15 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	var shift := new_origin - old_origin
 	previous_pos -= shift
 	next_pos -= shift
+	# Obstacles stop the motion before surface landing can skip past them.
+	var obstacle_projection: Vector3 = course.call("project_position",next_pos,predicted_s)
+	var obstacle_clear0: float = course.call("surface_clearance",old_projection.x,old_projection.y,old_projection.z,1)
+	var obstacle_clear1: float = course.call("surface_clearance",obstacle_projection.x,obstacle_projection.y,obstacle_projection.z,1)
+	if obstacle_clear0 >= -0.15 or obstacle_clear1 >= -0.15:
+		var obstacle: Dictionary = course.call("first_obstacle_contact",old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1,1.7)
+		if not obstacle.is_empty():
+			_obstacle_rebound(course,obstacle,old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1)
+			return
 	if _recover_floor_contact(course, previous_pos, next_pos, old_s, predicted_s):
 		return
 	var body_contact := _body_sweep(course, previous_pos, next_pos, old_s, predicted_s)
@@ -632,22 +726,10 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	if not grounded:
 		transform = Transform3D(air_basis, next_pos)
 		speed = maxf(0.0, speed - AIR_DRAG * delta)
-		var world_drop := new_frame.origin.y - next_pos.y
-		if bool(course.call("is_curved_enclosure", distance)):
-			# A corkscrew can extend over 38 m below its reference
-			# spine. Being inside it, or close to either curved face,
-			# is not falling out of the world.
-			var separation: float = course.call("distance_to_rideable_surface", next_pos, Vector3(distance, lane, height))
-			if separation > FALL_DEPTH and (world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0):
-				fallen = true
-		elif world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0:
-			fallen = true
+		_check_fall(course,next_pos,Vector3(distance,lane,height),delta)
 	if (grounded and surface_side > 0) or (not grounded and (old_height >= 0.0 or height >= 0.0)):
 		var old_clear: float = course.call("surface_clearance", old_s, old_lane, old_height, 1)
 		var new_clear: float = course.call("surface_clearance", distance, lane, height, 1) if not grounded else 0.0
-		var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, old_clear, new_clear, 1.7)
-		for _i in range(count):
-			apply_obstacle_hit()
 		_reward_gates(course, old_s, old_lane, old_clear, new_clear)
 
 func tick(delta: float, course: Node3D) -> void:
@@ -710,6 +792,11 @@ func tick(delta: float, course: Node3D) -> void:
 			var next_lane := lane + lateral_speed * delta
 			course.call("stream", next_s, speed)
 			var edge: float = course.call("half_width_at", next_s)
+			var obstacle: Dictionary = course.call("first_obstacle_contact",old_s,next_s,old_lane,next_lane,0.0,0.0,0.95 if slide else 1.7) if surface_side > 0 else {}
+			if not obstacle.is_empty():
+				_obstacle_rebound(course,obstacle,old_s,next_s,old_lane,next_lane,0.0,0.0)
+				_update_rider_animation(delta)
+				return
 			if absf(next_lane) > edge or not bool(course.call("support_at", next_s, next_lane)):
 				# No invisible walls. Start flight from the last supported
 				# point, then allow the player to steer back if possible.
@@ -721,9 +808,6 @@ func tick(delta: float, course: Node3D) -> void:
 				height = 0.0
 				vertical_speed = 0.0
 				if surface_side > 0:
-					var count: int = course.call("swept_obstacles", old_s, distance, old_lane, lane, 0.0, 0.0, 0.95 if slide else 1.7)
-					for _i in range(count):
-						apply_obstacle_hit()
 					_reward_gates(course, old_s, old_lane, 0.0, 0.0)
 				sync_pose(course)
 	if not grounded:

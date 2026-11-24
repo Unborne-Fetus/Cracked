@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vector Velocity — TERMINAL VELOCITY. Original industrial-metal / breakcore score.
+"""Vector Velocity — AFTERIMAGE. Original dark industrial drum-and-bass score.
 All instruments and patterns synthesized offline; no borrowed samples.
 Requires numpy and ffmpeg/libvorbis.
 """
@@ -9,9 +9,9 @@ import subprocess, tempfile, wave
 import numpy as np
 
 SR=44100
-BPM=188
+BPM=176
 BEAT=60/BPM
-BARS=96
+BARS=112
 N=round(BARS*4*BEAT*SR)
 TAU=2*np.pi
 OUT=Path(__file__).resolve().parents[1]/"audio"/"generated"
@@ -55,7 +55,7 @@ def hat(open_hat=False):
     noise=rng.normal(0,1,len(t))
     high=np.r_[0,np.diff(noise)]
     metallic=sum(np.sin(TAU*f*t) for f in (3521,4933,6811))/3
-    return (.25*high+.18*metallic)*np.exp(-t*(18 if open_hat else 72))*envelope(t,.0015,.015,dur)
+    return (.12*high+.07*metallic)*np.exp(-t*(18 if open_hat else 72))*envelope(t,.0015,.015,dur)
 
 @lru_cache(maxsize=256)
 def guitar(note,beats,voice=0,muted=True):
@@ -68,11 +68,11 @@ def guitar(note,beats,voice=0,muted=True):
     sig=sum(np.sin(phase*k)/(k**.78) for k in range(1,min(17,int(8500/freq))+1))
     amp=(.38+.62*np.exp(-t*15)) if muted else (.72+.28*np.exp(-t*3))
     # Simulated cabinet: saturate then attenuate sub and high fizz.
-    raw=np.tanh(sig*2.15*amp)
+    raw=np.tanh(sig*1.35*amp)
     spectrum=np.fft.rfft(raw)
     freq_bins=np.fft.rfftfreq(len(raw),1/SR)
-    response=(freq_bins/(freq_bins+95.0))*(1/(1+(freq_bins/4200.0)**4))
-    response*=1+.45*np.exp(-((freq_bins-1450)/850)**2)
+    response=(freq_bins/(freq_bins+95.0))*(1/(1+(freq_bins/2800.0)**4))
+    response*=1+.18*np.exp(-((freq_bins-900)/650)**2)
     raw=np.fft.irfft(spectrum*response,n=len(raw))
     return raw*envelope(t,.004,.022 if muted else .055,dur)
 
@@ -121,7 +121,7 @@ hooks=[
 for bar in range(BARS):
     beat=bar*4
     part=bar//8
-    p=[0,1,2,1,3,4,2,0,4,2,3,4][part]
+    p=[0,1,2,1,3,4,2,0,4,2,3,4,1,2][part]
     root=(bridge_roots if part in (4,7,10) else final_roots if part>=9 else alt if part in (2,5,6,8) else roots)[bar%8]
     ks,ss=patterns[p]
     for k in ks:put(beat+k,kick(),.63 if k in (0,2) else .46)
@@ -130,28 +130,28 @@ for bar in range(BARS):
         put(beat+k,snare(1),.15,(-.25 if k<2 else .25))
     for step in range(16):
         if p==3 and step%2:continue
-        put(beat+step*.25,hat(step%8==6),.082 if step%2==0 else .046,(-.45 if step%2 else .45))
+        put(beat+step*.25,hat(step%8==6),.050 if step%2==0 else .025,(-.45 if step%2 else .45))
     if bar%4==3:
         for k in (3.0,3.25,3.5,3.625,3.75,3.875):
             put(beat+k,snare(1),.13+.035*(k-3))
     phrase = riffs[(p+1)%len(riffs)] if bar%8==7 and p!=3 else riffs[p]
     for offset,interval,length in phrase:
         note=root+interval
-        put(beat+offset,bass(note-12,length,p in (1,2,4)),.29)
+        put(beat+offset,bass(note-12,length,p in (1,2,4)),.34)
         for voice,pan in [(0,-.72),(1,.72)]:
-            put(beat+offset,guitar(note,length,voice,p!=3),.33,pan)
-            put(beat+offset,guitar(note+7,length,voice,p!=3),.16,pan)
+            put(beat+offset,guitar(note,length,voice,p!=3),.14 if part in (0,4,7,10) else .22,pan)
+            put(beat+offset,guitar(note+7,length,voice,p!=3),.065 if part in (0,4,7,10) else .095,pan)
             if part in (3,6,9,11) and offset in (0,2):
                 put(beat+offset,guitar(note+12,length,voice,False),.085,pan)
     # Distinct lead phrases enter and leave without an abrupt silent gap.
-    if part in (1,2,3,5,6,8,9,11):
+    if part in (2,5,8,11,13):
         melody=hooks[(part+bar//4)%4]
         for step in range(4 if p==3 else 8):
             note=melody[(step+bar%4*2)%8]
             offset=step*(1 if p==3 else .5)
             sig=lead(note,.82 if p==3 else .39)
-            put(beat+offset,sig,.15,.12)
-            put(beat+offset+.75,sig,.027,-.45)
+            put(beat+offset,sig,.075,.12)
+            put(beat+offset+.75,sig,.018,-.45)
     if bar%8==7:
         t=time(.65)
         sweep=np.convolve(rng.normal(0,1,len(t)),[.1,.2,.4,.2,.1],mode="same")
@@ -177,4 +177,4 @@ with tempfile.TemporaryDirectory() as tmp:
     subprocess.run(["ffmpeg","-v","error","-y","-i",str(wav),"-c:a","libvorbis","-q:a","5",str(target)],check=True)
     length=float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(target)]))
     assert abs(length-N/SR)<.03 and target.stat().st_size>10000
-    print(f"TERMINAL VELOCITY: {BPM} BPM, {length:.2f}s, RMS {rms:.3f}, {target.stat().st_size:,} bytes")
+    print(f"AFTERIMAGE: {BPM} BPM, {length:.2f}s, RMS {rms:.3f}, {target.stat().st_size:,} bytes")
