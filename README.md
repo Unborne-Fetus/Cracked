@@ -29,7 +29,7 @@ Sliding on flat or downhill track builds momentum rapidly and indefinitely, with
 
 ## Run modes and profile
 
-Pause > Run / Profile / Controls opens daily seeded runs (UTC date, deterministic layout), no-jump, first-person, fast-storm and storm-free practice challenges. Competitive local records are separated by mode and daily date; practice never posts records or unlocks achievements. Eight achievements unlock three extra body palettes. The post-run summary records top speed, airtime, sliding time and momentum loss. Keyboard and gamepad button bindings can be changed and reset in the same menu. Analog steering and trigger slide remain available. Original procedural music intensifies with speed; speed streaks and controller impact/landing vibration can be disabled.
+Pause > Run / Profile / Controls opens daily seeded runs (UTC date, deterministic layout), no-jump, first-person, fast-storm and storm-free practice challenges. Competitive local records are separated by mode and daily date; practice never posts records or unlocks achievements. Eight achievements unlock three extra body palettes. The post-run summary records top speed, airtime, sliding time and momentum loss. Keyboard and gamepad button bindings can be changed and reset in the same menu. Analog steering and trigger slide remain available. The original 64-bar drum-and-bass score intensifies with speed through synchronized arrangement layers; speed streaks and controller impact/landing vibration can be disabled.
 
 Online daily score submission is supported through a configured `velocity/leaderboard_url` project setting. The server implementation is provided separately and must be deployed before public ranking works. Client scores are unverified; never treat them as cheat-proof.
 
@@ -64,6 +64,10 @@ Major climbs have a sculpted side bypass with a gentler central grade. Green rec
 ## Versions
 
 Browser releases display a readable version number, `V. 0.x`, in the game and browser title. The minor number follows the GitHub Actions workflow run number; failed builds may leave gaps. Unique internal release paths still prevent stale cached engine files.
+
+## Soundtrack
+
+"Through the Neon" is an original 160 BPM drum-and-bass racing score, with a 96-second arrangement, three synchronized stereo stems, contrasting breakdowns, chord changes and a melodic hook. Speed smoothly brings in the harmonic and high-energy layers while the beat stays steady. All sounds are synthesized offline from the included composition; no third-party recordings are used. CI renders and checks the Vorbis assets before importing Godot. For a local editor build, install NumPy and FFmpeg and run `python tools/render_soundtrack.py` before opening the project. The existing soundtrack toggle still works.
 
 ## Development
 

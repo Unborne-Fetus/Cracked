@@ -7,8 +7,13 @@ var vibration_enabled := true
 var speed := 0.0
 var paused := false
 var audio: AudioStreamPlayer
-var phase := 0.0
-var beat := 0.0
+var soundtrack: AudioStreamSynchronized
+var music_intensity := 0.0
+const MUSIC_PATHS: Array[String] = [
+	"res://audio/generated/foundation.ogg",
+	"res://audio/generated/harmony.ogg",
+	"res://audio/generated/velocity.ogg"
+]
 var clock := 0.0
 var streaks: Control
 
@@ -49,12 +54,29 @@ func activate_audio() -> void:
 	if not music_enabled or DisplayServer.get_name() == "headless":
 		return
 	if not is_instance_valid(audio):
+		# Build-time rendered stereo stems share an identical sample count.
+		# Synchronized playback avoids beat drift, pitch changes and runtime
+		# sample generation stalls in the Web export.
+		var synced := AudioStreamSynchronized.new()
+		synced.stream_count = MUSIC_PATHS.size()
+		for index in range(MUSIC_PATHS.size()):
+			if not ResourceLoader.exists(MUSIC_PATHS[index]):
+				push_warning("Soundtrack assets missing: run tools/render_soundtrack.py")
+				return
+			var clip := load(MUSIC_PATHS[index]) as AudioStreamOggVorbis
+			if clip == null:
+				return
+			clip.loop = true
+			clip.loop_offset = 0.0
+			synced.set_sync_stream(index, clip)
+		synced.set_sync_stream_volume(0, 0.0)
+		synced.set_sync_stream_volume(1, -8.0)
+		synced.set_sync_stream_volume(2, -45.0)
+		soundtrack = synced
 		audio = AudioStreamPlayer.new()
-		var synth := AudioStreamGenerator.new()
-		synth.mix_rate = 22050.0
-		synth.buffer_length = 0.2
-		audio.stream = synth
-		audio.volume_db = -18.0
+		audio.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
+		audio.stream = soundtrack
+		audio.volume_db = -7.0
 		add_child(audio)
 		audio.play()
 	audio.stream_paused = paused
@@ -73,22 +95,13 @@ func _process(delta: float) -> void:
 		streaks.queue_redraw()
 	if not is_instance_valid(audio):
 		return
-	audio.volume_db = -18.0 if music_enabled else -80.0
-	if not music_enabled:
+	# Smooth gain changes instead of accelerating the BPM, so the score
+	# remains musically coherent even after sudden collisions.
+	audio.volume_db = move_toward(audio.volume_db, -7.0 if music_enabled else -80.0, delta * 95.0)
+	if soundtrack == null:
 		return
-	var playback := audio.get_stream_playback() as AudioStreamGeneratorPlayback
-	if playback == null:
-		return
-	var intensity := smoothstep(20.0, 150.0, speed)
-	var rate := lerpf(1.7, 3.4, intensity)
-	var notes: Array[float] = [55.0, 65.406, 73.416, 82.407, 55.0, 65.406, 49.0, 73.416]
-	for i in range(mini(playback.get_frames_available(), 2048)):
-		beat += rate / 22050.0
-		var fraction := fposmod(beat, 1.0)
-		var note := notes[posmod(int(floor(beat)), notes.size())]
-		phase = fposmod(phase + note / 22050.0, 1.0)
-		var bass := (sin(TAU * phase) + 0.28 * sin(TAU * phase * 2.0)) * exp(-fraction * 3.0) * 0.45
-		var lead := sin(TAU * phase * 4.0) * exp(-fposmod(beat * 2.0, 1.0) * 6.0) * intensity * 0.19
-		var kick := sin(TAU * fraction * (24.0 - 10.0 * fraction)) * exp(-fraction * 15.0) * 0.22
-		var sample_value := clampf(bass + lead + kick, -0.9, 0.9)
-		playback.push_frame(Vector2(sample_value, sample_value))
+	var target := smoothstep(25.0, 155.0, speed)
+	music_intensity = lerpf(music_intensity, target, 1.0 - exp(-delta * 1.65))
+	soundtrack.set_sync_stream_volume(0, 0.0)
+	soundtrack.set_sync_stream_volume(1, lerpf(-9.0, 0.0, music_intensity))
+	soundtrack.set_sync_stream_volume(2, linear_to_db(maxf(0.006, smoothstep(0.15, 0.88, music_intensity))))
