@@ -12,6 +12,9 @@ var combat_label: Label
 var crosshair: Label
 var pulse_button: Button
 var aim_cursor: ImageTexture
+var reactive_sky: ShaderMaterial
+var sky_level := -1
+var sky_clock := 0.0
 var aim_cursor_active := false
 var mouse_aim_active := true
 var replay
@@ -115,8 +118,9 @@ func _ready() -> void:
 	var sky := Sky.new()
 	var sky_mat := ShaderMaterial.new()
 	sky_mat.shader = preload("res://shaders/neon_sky.gdshader")
-	sky.process_mode = Sky.PROCESS_MODE_QUALITY
-	sky.radiance_size = Sky.RADIANCE_SIZE_128
+	reactive_sky=sky_mat
+	sky.process_mode=Sky.PROCESS_MODE_INCREMENTAL
+	sky.radiance_size=Sky.RADIANCE_SIZE_32
 	sky.sky_material = sky_mat
 	env.sky = sky
 	world.environment = env
@@ -230,6 +234,13 @@ func _physics_process(delta: float) -> void:
 	replay.record(run_time, delta, runner, course, storm)
 
 func _process(delta: float) -> void:
+	sky_clock-=delta
+	if sky_clock<=0.0 and is_instance_valid(reactive_sky):
+		sky_clock=0.25
+		var level:=clampi(int(floor(float(runner.speed)/35.0)),0,12)
+		if level!=sky_level:
+			sky_level=level
+			reactive_sky.set_shader_parameter("intensity",float(level)/12.0)
 	if not paused and (not run_finished or replay_active):
 		_poll_camera_stick(delta)
 	if replay_active:
@@ -248,8 +259,9 @@ func _process(delta: float) -> void:
 func _camera_line_clear(a: Vector3, b: Vector3, from_s: float, to_s: float) -> bool:
 	# Check the actual bank frame along the sightline, not world-up.
 	# This also works during origin rebases and before physics colliders sync.
-	for i in range(1, 16):
-		var t := float(i) / 16.0
+	var sample_count:=16 if course.is_extreme_bank(course.section_name(to_s)) or course.is_curved_enclosure(to_s) else 8
+	for i in range(1,sample_count):
+		var t:=float(i)/float(sample_count)
 		var s := lerpf(from_s, to_s, t)
 		var projection: Vector3 = course.project_position(a.lerp(b, t), s)
 		var clearance: float = course.surface_clearance(projection.x, projection.y, projection.z, int(runner.surface_side))
@@ -421,6 +433,10 @@ func _update_hud() -> void:
 	pulse_button.visible=combat_visible
 	if combat_visible:
 		combat_label.text="SHIELD %d%%  //  DRONES %d" % [int(combat.shield),int(combat.score)]
+		if combat.reward_timer>0.0:
+			combat_label.text+="  //  MOMENTUM REWARD"
+		elif combat.attack_timer>0.0:
+			combat_label.text+="  //  MOMENTUM HIT"
 	slide_indicator.visible = first_person and runner.is_grounded() and runner.is_sliding and not run_finished
 	reserve_meter.value = runner.momentum_reserve
 	reserve_label.text = "MOMENTUM RESERVE  %d%%" % int(round(runner.momentum_reserve / runner.RESERVE_MAX * 100.0))
@@ -1406,6 +1422,7 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.steering_heading = float(state.get("steering_heading",0.0))
 	runner.rider_ground_idle = float(state.get("rider_ground_idle",0.0))
 	runner.rider_inverted = float(state.get("rider_inverted",0.0))
+	runner.rider_glider=float(state.get("rider_glider",0.0))
 	runner.drift_amount = float(state.get("drift_amount",0.0))
 	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
 	runner.momentum_reserve = float(state["reserve"])

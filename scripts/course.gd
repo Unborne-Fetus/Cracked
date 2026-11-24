@@ -42,6 +42,7 @@ var fixed_daily_layout := false
 var showcase_layout := false
 var recent_kinds: Array[String] = []
 var sections_since_split := 0
+var sections_since_roll := 0
 # Archive the exact generated geometry, not merely the seed: endless
 # generation is adaptive to the player's speed and storm gap.
 const REPLAY_CHUNK_LIMIT := 768
@@ -79,6 +80,7 @@ func reset_course(seed_value: int) -> void:
 	terrain_bag.clear()
 	recent_kinds.clear()
 	sections_since_split = 0
+	sections_since_roll = 0
 	last_kind = ""
 	sustained_roll_queue.clear()
 	sustained_roll_sign = 1.0
@@ -161,6 +163,13 @@ func _kind(index: int) -> String:
 		var recovery: Array[String] = ["RECOVERY RUN", "LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"]
 		recovery.erase(last_kind)
 		return recovery[rng.randi_range(0, recovery.size() - 1)]
+	# Wall and ceiling sequences recur much more often than the random bag.
+	if not showcase_layout and index>=2 and (sections_since_roll>=4 or (sections_since_roll>=2 and rng.randf()<0.42)):
+		if rng.randf()<0.52:
+			sustained_roll_queue.assign(["WALL RUN","WALL EXIT"])
+			return "WALL ENTRY"
+		sustained_roll_queue.assign(["CEILING RUN","CEILING EXIT"])
+		return "CEILING ENTRY"
 	# A branching stretch roughly every 3–5 ordinary sections, rather
 	# than one appearance per 23-profile bag. Stacked decks count too.
 	if not showcase_layout and index >= 2 and (sections_since_split >= 4 or (sections_since_split >= 2 and rng.randf() < 0.40)):
@@ -306,7 +315,10 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 	if not showcase_layout:
 		# Independent, seeded longitudinal variation. Stretch technical
 		# sections, rather than squeezing banks below the safe base length.
-		length *= rng.randf_range(1.0, 1.45)
+		length *= rng.randf_range(1.0,1.45)
+		# Avoid rebuilding short chunks several times per second at extreme
+		# speed. Keep normalized samples and exact mesh/collision agreement.
+		length=maxf(length,clampf(planned_speed*1.65,CHUNK_LENGTH,2400.0))
 		if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 			length = maxf(length,maxf(560.0,planned_speed*6.0))
 	var step_length := length / float(STEPS)
@@ -372,6 +384,10 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 				points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
 				forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 	last_kind = kind
+	if is_sustained_roll(kind) or kind in ["180 BANK","360 BANK","CORKSCREW TUNNEL","HALFPIPE"]:
+		sections_since_roll=0
+	else:
+		sections_since_roll+=1
 	if kind in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 		sections_since_split = 0
 	else:
@@ -887,7 +903,7 @@ func _cross_xy(kind: String, local_s: float, across: float) -> Vector2:
 		var channel := -28.0 + 10.0 * sin(TAU * u) + bowl + 0.18 * (across - 34.0) * cos(TAU * u)
 		return Vector2(across * (1.0 + 0.10 * e) + 48.0 * e * weight, e * weight * channel)
 	if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
-		var angle := (PI * 0.975 if kind == "CORKSCREW TUNNEL" else PI * 0.48) * envelope
+		var angle := (PI if kind == "CORKSCREW TUNNEL" else PI * 0.48) * envelope
 		if angle > 0.0001:
 			var radius := HALF_WIDTH / angle
 			var theta := across / radius
@@ -918,7 +934,7 @@ func _cross_normal(kind: String, local_s: float, across: float) -> Vector2:
 		if tangent.length_squared() > 0.000001:
 			return Vector2(-tangent.y, tangent.x).normalized()
 	if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
-		var angle := (PI * 0.975 if kind == "CORKSCREW TUNNEL" else PI * 0.48) * _profile_envelope(local_s)
+		var angle := (PI if kind == "CORKSCREW TUNNEL" else PI * 0.48) * _profile_envelope(local_s)
 		var theta := across / HALF_WIDTH * angle
 		return Vector2(-sin(theta), cos(theta))
 	return Vector2.UP * -1.0
@@ -975,7 +991,16 @@ func fork_gap_recoverable(world_pos: Vector3, projected: Vector3) -> bool:
 	# genuinely fallen well beneath it. Do not kill due to lateral gap.
 	return world_pos.y >= minf(left.origin.y,right.origin.y)-30.0
 
+func is_closed_pipe(distance: float) -> bool:
+	return has_distance(distance) and section_name(distance)=="CORKSCREW TUNNEL" and _profile_envelope(_local_s(distance))>=0.999999
+
+func wrap_pipe_lane(distance: float, across: float) -> float:
+	if is_closed_pipe(distance):
+		return wrapf(across,-HALF_WIDTH,HALF_WIDTH)
+	return across
+
 func support_at(distance: float, across: float) -> bool:
+	across=wrap_pipe_lane(distance,across)
 	if not has_distance(distance) or absf(across) > half_width_at(distance):
 		return false
 	var kind := section_name(distance)
@@ -1332,7 +1357,7 @@ func project_position(world_pos: Vector3, guess_s: float) -> Vector3:
 	if _special_profile(kind):
 		var local_s := _local_s(s)
 		if kind in ["CORKSCREW TUNNEL", "HALFPIPE"]:
-			var angle := (PI * 0.975 if kind == "CORKSCREW TUNNEL" else PI * 0.48) * _profile_envelope(local_s)
+			var angle := (PI if kind == "CORKSCREW TUNNEL" else PI * 0.48) * _profile_envelope(local_s)
 			if angle > 0.0001:
 				var radius := HALF_WIDTH / angle
 				across = atan2(across, radius - raw_y) * radius

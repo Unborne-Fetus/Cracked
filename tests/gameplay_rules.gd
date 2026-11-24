@@ -22,7 +22,7 @@ func _run_tests() -> void:
 	# The avatar is articulated geometry, with a separate curved deck.
 	var model: Node3D = runner.get("rider_model")
 	var flip_board: Node3D = runner.get("board_pivot")
-	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 3:
+	if model == null or flip_board == null or model.get_child_count() < 10 or flip_board.get_child_count() != 4:
 		_fail("Block rider or curved board geometry is missing.")
 		return
 	var sprite_camera: Camera3D = game.get("view_camera")
@@ -88,6 +88,11 @@ func _run_tests() -> void:
 	if model_head.position.y >= neutral_head-0.12:
 		_fail("Inverted rider does not lower into the hanging pose.")
 		return
+	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
+	var glider_rig:Node3D=model.get("wings")
+	if not glider_rig.visible or glider_rig.scale.x<0.9:
+		_fail("High-altitude glider pose does not deploy wings.")
+		return
 	var handle_rig: Node3D = model.get("handles")
 	if not handle_rig.visible or handle_rig.scale.y<0.9:
 		_fail("Inverted rider did not deploy handles.")
@@ -138,6 +143,20 @@ func _run_tests() -> void:
 	if int(combat_probe.get("score"))!=1:
 		_fail("Combat energy pulses did not tag and remove a drone.")
 		return
+	var before_reward:float=runner.get("speed")
+	combat_probe.call("tick",0.0,course,runner)
+	if float(runner.get("speed"))<=before_reward:
+		_fail("Drone elimination did not reward momentum.")
+		return
+	combat_probe.call("reset",true,4)
+	combat_probe.call("_spawn",course,runner)
+	var chase_drones:Array=combat_probe.get("drones")
+	if not chase_drones.is_empty():
+		chase_drones[0]["s"]=float(runner.get("distance"))-30.0
+		combat_probe.call("tick",0.0,course,runner)
+		if float(chase_drones[0]["s"])<=float(runner.get("distance")):
+			_fail("Drone could be passed instead of pursuing.")
+			return
 	combat_probe.call("reset",false)
 	sprite_camera.transform=saved_camera_pose
 	# Stalling on an uphill track must not permanently stop progress.
@@ -916,7 +935,12 @@ func _run_tests() -> void:
 		return
 	var tunnel_s := 25.0 * 192.0 + 96.0
 	var tunnel_mid: Transform3D = course.call("surface_frame", tunnel_s, 0.0, 1)
-	var tunnel_wall: Transform3D = course.call("surface_frame", tunnel_s, 54.0, 1)
+	var tunnel_wall: Transform3D = course.call("surface_frame",tunnel_s,54.0,1)
+	var seam_left:Transform3D=course.call("surface_frame",tunnel_s,-60.0,1)
+	var seam_right:Transform3D=course.call("surface_frame",tunnel_s,60.0,1)
+	if seam_left.origin.distance_to(seam_right.origin)>0.001 or absf(float(course.call("wrap_pipe_lane",tunnel_s,61.0))+59.0)>0.001:
+		_fail("Fullpipe seam is not closed and wrapping.")
+		return
 	if tunnel_wall.basis.y.dot(tunnel_mid.basis.y) > -0.7:
 		_fail("Corkscrew tunnel does not wrap around the runner.")
 		return

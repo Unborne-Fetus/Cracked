@@ -57,6 +57,9 @@ var active_loop := -1
 var rewarded_loops: Dictionary = {}
 var loop_reward_timer := 0.0
 var combat_enabled := false
+var rider_glider := 0.0
+var glide_height := 0.0
+var clearance_clock := 0.0
 var height := 0.0
 var vertical_speed := 0.0
 var grounded := true
@@ -127,7 +130,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot: float = rider_model.get("visual_pivot")
 	var lift: float = rider_model.get("visual_lift")
 	var correction := Vector3.UP*pivot - Basis.from_euler(rider_model.rotation)*Vector3.UP*pivot
@@ -149,7 +152,14 @@ func _update_rider_animation(delta: float) -> void:
 	var brace_target := 1.0 if not grounded and air_time > 0.25 and air_velocity.y < -10.0 else 0.0
 	rider_brace = move_toward(rider_brace, brace_target, delta*4.0)
 	rider_inverted=move_toward(rider_inverted,smoothstep(0.15,0.85,-transform.basis.y.y) if grounded else 0.0,delta*3.0)
-	var idle_trick := not grounded and not diving and air_time > 0.45 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
+	if not grounded and is_instance_valid(rider_course):
+		var road_frame: Transform3D=rider_course.call("sample",distance)
+		glide_height=position.y-road_frame.origin.y
+	else:
+		glide_height=0.0
+	var glider_target:=smoothstep(32.0,50.0,glide_height) if not grounded and not diving else 0.0
+	rider_glider=move_toward(rider_glider,glider_target,delta*2.8)
+	var idle_trick := not grounded and not diving and rider_glider<0.1 and air_time > 0.45 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
 	rider_trick_mix = move_toward(rider_trick_mix,1.0 if idle_trick else 0.0,delta*5.0)
 	if idle_trick:
 		rider_trick_clock += delta
@@ -169,9 +179,13 @@ func _update_rider_animation(delta: float) -> void:
 		rider_ground_idle = 0.0
 	# Sample the actual deck footprint, not only the rider's contact
 	# point. Lift the complete visual rig enough to clear crests/banks.
-	rider_clearance = 0.0
-	if grounded and is_instance_valid(rider_course):
-		for corner: Vector3 in [Vector3(-0.48,0.04,0.95), Vector3(0.48,0.04,0.95), Vector3(-0.64,0.02,0.3), Vector3(0.64,0.02,0.3), Vector3(-0.58,0.03,-0.68), Vector3(0.58,0.03,-0.68)]:
+	clearance_clock-=delta
+	if not grounded:
+		rider_clearance=0.0
+	elif clearance_clock<=0.0 and is_instance_valid(rider_course):
+		clearance_clock=0.05
+		rider_clearance=0.0
+		for corner: Vector3 in [Vector3(-0.48,0.04,0.95),Vector3(0.48,0.04,0.95),Vector3(-0.58,0.03,-0.68),Vector3(0.58,0.03,-0.68)]:
 			var world_point := transform * corner
 			var p: Vector3 = rider_course.call("project_position", world_point, distance)
 			if bool(rider_course.call("support_at",p.x,p.y)):
@@ -182,6 +196,9 @@ func _update_rider_animation(delta: float) -> void:
 func reset_run(course: Node3D) -> void:
 	rider_course = course
 	fall_grace = 0.0
+	rider_glider=0.0
+	glide_height=0.0
+	clearance_clock=0.0
 	rider_clearance = 0.0
 	rider_dive = 0.0
 	rider_flourish = 0.0
@@ -288,6 +305,20 @@ func _double_jump() -> bool:
 	var impulse := jump_impulse_for_speed(speed) * 0.75
 	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
 	return true
+
+func combat_momentum(bonus: float, retain: float) -> void:
+	# Apply to actual forward flight as well as the speed display.
+	var previous:=speed
+	speed=maxf(0.0,speed*retain+bonus)
+	if not grounded:
+		var horizontal:=Vector3(air_velocity.x,0.0,air_velocity.z)
+		if horizontal.length()>0.01:
+			var adjusted:=horizontal.normalized()*maxf(0.0,horizontal.length()*retain+bonus)
+			air_velocity.x=adjusted.x
+			air_velocity.z=adjusted.z
+	if speed<previous:
+		rider_impact=1.0
+		hit_timer=maxf(hit_timer,0.45)
 
 func _banked_slide(grade: float, delta: float) -> void:
 	var next_speed := slide_speed_step(speed, grade, delta)
@@ -631,6 +662,10 @@ func _recover_bank_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, 
 	return true
 
 func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: float) -> void:
+	var spine: Transform3D=course.call("sample",projected.x)
+	if point.y>=spine.origin.y or air_velocity.y>=0.0:
+		fall_grace=0.0
+		return
 	# Airtime is never grounds for defeat. A high jump over a road,
 	# or a rider on a bank below its spine, is still a valid run.
 	if bool(course.call("fork_gap_recoverable",point,projected)):
@@ -768,7 +803,7 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 			return
 	if _recover_floor_contact(course,previous_pos,next_pos,old_s,predicted_s):
 		return
-	if _recover_bank_contact(course,previous_pos,next_pos,predicted_s):
+	if absf(obstacle_projection.z)<3.5 and _recover_bank_contact(course,previous_pos,next_pos,predicted_s):
 		return
 	var body_contact := _body_sweep(course, previous_pos, next_pos, old_s, predicted_s)
 	if not body_contact.is_empty():
@@ -904,7 +939,13 @@ func tick(delta: float, course: Node3D) -> void:
 				active_loop=-1
 		else:
 			active_loop=-1
-		var normal_accel := relative_normal_acceleration(course, distance, lane, speed, lateral_speed)
+		# At a stall, the board's traction takes priority over wall drift.
+		# Start moving along the track before lateral forces can push it off.
+		if speed<MIN_SPEED:
+			lateral_speed=0.0
+			steering_heading=0.0
+			drift_amount=0.0
+		var normal_accel := relative_normal_acceleration(course,distance,lane,speed,lateral_speed)
 		var natural_lift := natural_lift_impulse(normal_accel, speed)
 		if landing_timer <= 0.0 and (queued_jump or natural_lift > 0.0):
 			var impulse := jump_impulse_for_speed(speed) if queued_jump else natural_lift
@@ -929,11 +970,12 @@ func tick(delta: float, course: Node3D) -> void:
 				screen_steer_sign = signf(screen_alignment)
 			# A small gravity-driven drift makes vertical walls meaningfully
 			# different from flat ground, while steering can counter it.
-			var wall_drift := -frame.basis.x.y * float(surface_side) * 5.0
+			var traction:=smoothstep(MIN_SPEED,MIN_SPEED+10.0,speed)
+			var wall_drift: float=-frame.basis.x.y*float(surface_side)*5.0*traction
 			# Input changes heading; the board and rider turn with it.
 			# At high speed limit lateral travel, not the steering response.
 			var max_angle := minf(0.83,asin(clampf(65.0/maxf(speed,MIN_SPEED),0.0,1.0)))
-			var desired := steer*screen_steer_sign*max_angle*steering_factor
+			var desired := steer*screen_steer_sign*max_angle*steering_factor*traction
 			var ahead := distance + maxf(12.0,speed*0.65)
 			var guided_ahead: float = course.call("guided_fork_lane",ahead,lane,lane,steer*screen_steer_sign)
 			if absf(guided_ahead-lane) > 0.01:
@@ -942,13 +984,14 @@ func tick(delta: float, course: Node3D) -> void:
 					desired = guide_angle
 			var initial_heading := steering_heading if absf(drift_amount)>0.01 else asin(clampf(lateral_speed/maxf(speed,MIN_SPEED),-0.95,0.95))
 			steering_heading = move_toward(initial_heading,desired,delta*5.8)
-			var drift_velocity := drift_amount*screen_steer_sign*minf(38.0,speed*0.70)
+			var drift_velocity := drift_amount*screen_steer_sign*minf(38.0,speed*0.70)*traction
 			lateral_speed = clampf(speed*sin(steering_heading)+drift_velocity,-speed*0.90,speed*0.90)+wall_drift
 			var forward_speed := sqrt(maxf(0.0,speed*speed-pow(lateral_speed-wall_drift,2.0)))
 			var route_metric: float=course.call("loop_metric",distance,lane) if section=="LOOP ROUTE" else 1.0
 			var next_s := distance + forward_speed*delta/route_metric
-			var next_lane := lane + lateral_speed*delta
-			course.call("stream", next_s, speed)
+			var next_lane := lane+lateral_speed*delta
+			course.call("stream",next_s,speed)
+			next_lane=float(course.call("wrap_pipe_lane",next_s,next_lane))
 			# The gold-marked inside rail gently catches missed fork entries
 			# or an inward carve. It never catches the outer track edge.
 			var guided_lane: float = course.call("guided_fork_lane",next_s,lane,next_lane,steer*screen_steer_sign)
@@ -956,7 +999,9 @@ func tick(delta: float, course: Node3D) -> void:
 				next_lane = guided_lane
 				lateral_speed = 0.0
 				steering_heading = 0.0
-			var edge: float = course.call("half_width_at", next_s)
+			var edge: float = course.call("half_width_at",next_s)
+			if speed<MIN_SPEED+1.0 and not bool(course.call("is_closed_pipe",next_s)):
+				next_lane=clampf(next_lane,-edge+0.10,edge-0.10)
 			var obstacle: Dictionary = course.call("first_obstacle_contact",old_s,next_s,old_lane,next_lane,0.0,0.0,0.95 if slide else 1.7) if surface_side > 0 else {}
 			if not obstacle.is_empty():
 				_obstacle_rebound(course,obstacle,old_s,next_s,old_lane,next_lane,0.0,0.0)

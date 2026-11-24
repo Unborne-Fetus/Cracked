@@ -16,6 +16,7 @@ var edge_mat: StandardMaterial3D
 var visual_lift := 0.0
 var visual_pivot := 0.0
 var handles: Node3D
+var wings: Node3D
 var sideways_amount := 0.0
 var first_person_view := false
 # Visual dimensions only. The gameplay collision envelope is unchanged.
@@ -93,6 +94,30 @@ func _ready() -> void:
 			var post := _block(handles,Vector3(0.10,0.36,0.10),deck_mat)
 			post.position=Vector3(side*0.37,0.18,z)
 	handles.visible=false
+	wings=Node3D.new()
+	wings.name="GliderWings"
+	board.add_child(wings)
+	for wing_side: float in [-1.0,1.0]:
+		var wing:=SurfaceTool.new()
+		wing.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var root_a:=Vector3(wing_side*0.48,0.09,-0.60)
+		var tip_a:=Vector3(wing_side*3.0,0.17,0.30)
+		var tip_b:=Vector3(wing_side*2.85,0.17,0.58)
+		var root_b:=Vector3(wing_side*0.48,0.09,0.72)
+		_quad(wing,root_a,root_b,tip_a,tip_b)
+		var panel:=MeshInstance3D.new()
+		panel.mesh=wing.commit()
+		panel.material_override=deck_mat
+		wings.add_child(panel)
+		var line:=SurfaceTool.new()
+		line.begin(Mesh.PRIMITIVE_LINES)
+		for vertex: Vector3 in [root_a,tip_a,tip_a,tip_b,tip_b,root_b,root_b,root_a,root_a,tip_b]:
+			line.add_vertex(vertex+Vector3.UP*0.012)
+		var trim:=MeshInstance3D.new()
+		trim.mesh=line.commit()
+		trim.material_override=edge_mat
+		wings.add_child(trim)
+	wings.visible=false
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
 	torso = _block(self, Vector3(0.56, 0.78, 0.34), white)
@@ -190,9 +215,12 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
 	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
 	var inverted := clampf(float(extra.get("inverted",0.0)),0.0,1.0)
-	var hang := inverted
+	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
+	var hang:=maxf(inverted,glide)
+	wings.visible=glide>0.015
+	wings.scale.x=maxf(0.01,glide)
 	var side_ride := clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang)
-	var sideways := absf(side_ride)
+	var sideways:=smoothstep(0.42,0.90,absf(side_ride))
 	handles.visible=hang>0.015
 	if first_person_view:
 		for part in lower_arms:
@@ -230,6 +258,12 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 				visual_lift = ground_hop*0.30
 			5:
 				visual_lift = 0.0
+	if glide>0.01:
+		# Flip the *visual* hanging rig overhead. The actual board physics,
+		# collision basis, velocity and camera direction remain unchanged.
+		rotation=Vector3(0.0,0.0,PI*glide)
+		visual_pivot=0.95
+		visual_lift=glide*0.55
 	var cheer := clampf(flourish,0.0,1.0) * (1.0-clampf(crouch,0.0,1.0)*0.6) if not airborne else 0.0
 	var compression := clampf(landing, 0.0, 1.0)
 	var recoil := clampf(impact, 0.0, 1.0)
@@ -241,6 +275,11 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var hip := Vector3(lean+balance-side_ride*0.13, lerpf(1.29, 0.80, bend) + tuck*0.10+dive_amount*0.10+rocket*0.16-superman*0.14, lerpf(0.02, 0.23, bend) + recoil * 0.08)
 	var chest := hip + Vector3(lean * 0.38, lerpf(0.55, 0.42, bend)*(1.0-0.64*dive_amount), -0.31*bend-0.40*dive_amount)
 	var shoulder := chest + Vector3(0, 0.22*(1.0-0.75*dive_amount), -0.05*bend-0.24*dive_amount)
+	# Sidewall stance: low surfer crouch, one hand on the deck, wide
+	# stabilizing foot stance and the opposite arm extended away.
+	hip=hip.lerp(Vector3(-signf(side_ride)*0.25,0.72,0.15),sideways)
+	chest=chest.lerp(Vector3(-signf(side_ride)*0.34,1.05,-0.13),sideways)
+	shoulder=shoulder.lerp(Vector3(-signf(side_ride)*0.36,1.23,-0.14),sideways)
 	hip=hip.lerp(Vector3(0.0,1.65,0.10),hang)
 	chest=chest.lerp(Vector3(0.0,1.13,0.04),hang)
 	shoulder=shoulder.lerp(Vector3(0.0,0.89,0.0),hang)
@@ -321,6 +360,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		if ground_idle>0.0 and ground_variant in [1,2,3]:
 			foot = board.position+board.basis*Vector3(sign_value*0.30,0.075,-0.34 if front else 0.34)
 		foot += Vector3(side_ride*0.12,sideways*0.10*(1.0 if sign_value*side_ride>0.0 else 0.0),-side_ride*sign_value*0.12)
+		foot=foot.lerp(Vector3(sign_value*0.47,0.205,sign_value*0.44),sideways)
 		foot=foot.lerp(Vector3(sign_value*0.22,2.27,0.20+sign_value*0.09),hang)
 		var hip_joint := hip + Vector3(sign_value * 0.16, 0, 0)
 		var knee := _joint(hip_joint, foot, Vector3(sign_value * 0.30, 0.0, -1.0), LEG_LENGTH)
@@ -359,6 +399,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		hand.y += rocket*0.22+tuck_spin*0.16
 		hand.z -= superman*0.48
 		hand += Vector3(side_ride*0.20,side_ride*sign_value*0.26,sideways*0.10)
+		if sign_value==signf(side_ride):
+			hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.54,0.09,-0.38),sideways)
+		else:
+			hand=hand.lerp(Vector3(-signf(side_ride)*0.94,1.40,0.20),sideways)
 		hand=hand.lerp(board.position+board.basis*Vector3(sign_value*0.37,0.36,0.0),hang)
 		var elbow := _joint(arm_start, hand, Vector3(sign_value * 0.7, 0, 0.65), ARM_LENGTH)
 		_segment(upper_arms[i], arm_start, elbow)

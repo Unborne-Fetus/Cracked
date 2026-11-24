@@ -1,5 +1,13 @@
 # Vector Velocity changelog
 
+## 2026-11-23 — Pursuit drones, fullpipe seam, synthwave sky and glider
+- Drones match pace and stay ahead; telegraphed hits remove 40% momentum and reserve, eliminations restore speed and reserve.
+- More frequent sustained wall and ceiling segments, unique sidewall grip pose.
+- Low-speed traction suppresses sideways drift until forward speed recovers.
+- Closed fullpipe crown with continuous wrapped steering.
+- Longer high-speed chunks, cheaper board clearance and bank-contact probes, reduced ordinary camera sightline samples.
+- Speed-reactive striped sunset, neon mountains and perspective grid; cosmetic high-altitude hanging glider with folding wings.
+
 ## 2026-11-23 — Default combat, restart traction and first-person corrections
 - Robotic enemies and pulse controls are enabled automatically in every run; Practice does not end from shield depletion.
 - Mouse cursor becomes a precise crosshair during play and returns to normal in menus, replays and defeat screens.
