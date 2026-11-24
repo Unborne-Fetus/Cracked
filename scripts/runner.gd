@@ -78,6 +78,7 @@ var fallen := false
 var fall_grace := 0.0
 var rider_course: Node3D
 var cycle_fall := 0.0
+var cycle_antigrav := 0.0
 var loop_flight_guard := false
 var rider_clearance := 0.0
 var rider_dive := 0.0
@@ -144,7 +145,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"loop_cycle":on_loop_surface(),"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"lightcycle":true,"cycle_distance":distance,"cycle_fall":cycle_fall,"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"loop_cycle":on_loop_surface(),"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"lightcycle":true,"cycle_distance":distance,"cycle_fall":cycle_fall,"cycle_antigrav":cycle_antigrav,"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot:float=rider_model.get("visual_pivot")
 	var lift:float=rider_model.get("visual_lift")
 	# Correct the inherited bank roll in a separate visual parent.
@@ -181,6 +182,8 @@ func _update_rider_animation(delta: float) -> void:
 	rider_dive = move_toward(rider_dive, 1.0 if diving and not grounded else 0.0, delta * 7.0)
 	rider_flourish = move_toward(rider_flourish, maxf(gate_timer, landing_reward_timer * 0.5), delta * 5.0)
 	var loop_cycle:=on_loop_surface()
+	var hover_target:=maxf(smoothstep(0.40,0.86,absf(transform.basis.x.y)),smoothstep(0.15,0.85,-transform.basis.y.y)) if grounded and not loop_cycle else 0.0
+	cycle_antigrav=0.0 if loop_cycle else move_toward(cycle_antigrav,hover_target,delta*3.4)
 	var bank_target := clampf(transform.basis.x.y, -1.0, 1.0) if grounded and not loop_cycle else 0.0
 	rider_bank = lerpf(rider_bank, bank_target, 1.0-exp(-delta*7.0))
 	var brace_target := 1.0 if not grounded and air_time > 0.25 and air_velocity.y < -10.0 else 0.0
@@ -196,19 +199,11 @@ func _update_rider_animation(delta: float) -> void:
 		glide_height=position.y-road_frame.origin.y
 	else:
 		glide_height=0.0
-	# Surface-specific handoff takes priority over airborne sequences.
-	var wall_contact:=grounded and not loop_cycle and absf(transform.basis.x.y)>0.65 and transform.basis.y.y> -0.55
-	if wall_contact and rider_glider>0.01 and rider_glider_gyro<0.0:
-		rider_glider_gyro=0.0
-		rider_glider_entry=-1.0
-		rider_glider_return=-1.0
-		rider_glider_spin=1.0
+	# All surfaces now use the same glider-to-cycle catch.
 	if rider_glider_gyro>=0.0:
-		rider_glider_gyro=minf(1.0,rider_glider_gyro+delta/0.78)
-		if rider_glider_gyro>=1.0:
-			rider_glider_gyro=-1.0
-			rider_glider=0.0
-	elif rider_glider_return>=0.0:
+		rider_glider_return=lerpf(0.60,1.0,rider_glider_gyro)
+		rider_glider_gyro=-1.0
+	if rider_glider_return>=0.0:
 		if grounded:
 			rider_glider_return=maxf(rider_glider_return,0.74)
 		rider_glider_return=minf(1.0,rider_glider_return+delta/GLIDER_RETURN_TIME)
@@ -285,6 +280,7 @@ func _update_rider_animation(delta: float) -> void:
 func reset_run(course: Node3D) -> void:
 	rider_course = course
 	cycle_fall=0.0
+	cycle_antigrav=0.0
 	loop_flight_guard=false
 	fall_grace = 0.0
 	rider_glider=0.0

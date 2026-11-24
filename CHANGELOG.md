@@ -1,5 +1,9 @@
 # Vector Velocity changelog
 
+## Three-wheel anti-gravity lightcycle
+- One front wheel and a rear pair, animated rigid ninety-degree wheel swivels and glowing hover pads on walls and ceilings.
+- Remove spider and gyro geometry; preserve normal wheel orientation in loops and the glider catch.
+
 ## Smooth loop chase and adaptive rock
 - Continuous loop-relative chase arm, obstruction-aware selection, stable roll axis and exit hysteresis.
 - Original hard-rock score with synchronized adaptive stems; browser-local audio picker with speed-dependent filter and gain.

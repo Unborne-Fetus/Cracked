@@ -10,6 +10,9 @@ var cycle_body_mat: StandardMaterial3D
 var cycle_tire_mat: StandardMaterial3D
 var cycle_amount := 0.0
 var cycle_fold := 0.0
+var cycle_antigrav := 0.0
+var cycle_hover_discs: Array[MeshInstance3D]=[]
+var cycle_hover_mat: StandardMaterial3D
 var torso: MeshInstance3D
 var head: MeshInstance3D
 var hips: MeshInstance3D
@@ -166,60 +169,17 @@ func _ready() -> void:
 		exhaust.position.z=0.98
 		exhausts.append(exhaust)
 	wings.visible=false
+	# Empty compatibility anchors: the old spider and gyro meshes are removed.
 	treads=Node3D.new()
-	treads.name="CeilingSpiderLegs"
 	board.add_child(treads)
-	for leg_index in range(8):
-		spider_upper.append(_block(treads,Vector3(0.25,1.0,0.30),deck_mat))
-		spider_lower.append(_block(treads,Vector3(0.20,1.0,0.25),shadow))
-		spider_feet.append(_block(treads,Vector3(0.42,0.13,0.52),edge_mat))
-	treads.visible=false
+	treads.hide()
 	gyro=Node3D.new()
-	gyro.name="SidewallGyro"
 	add_child(gyro)
 	gyro_rotor=Node3D.new()
 	gyro.add_child(gyro_rotor)
-	# Two rows of rigid curved segments are stowed against the board
-	# rails. Each segment carries its own tread shoe; no scaled torus.
-	for wheel_side:float in [-1.0,1.0]:
-		for segment_index in range(GYRO_SEGMENTS):
-			var panel:=Node3D.new()
-			gyro_rotor.add_child(panel)
-			gyro_panels.append(panel)
-			# Build a curved rail segment in local coordinates about its
-			# midpoint. At deployment the ends meet the next segment.
-			var tool:=SurfaceTool.new()
-			tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-			for step in range(4):
-				var theta_a:=lerpf(-PI/float(GYRO_SEGMENTS),PI/float(GYRO_SEGMENTS),float(step)/4.0)
-				var theta_b:=lerpf(-PI/float(GYRO_SEGMENTS),PI/float(GYRO_SEGMENTS),float(step+1)/4.0)
-				var vertices:Array[Vector3]=[]
-				for theta:float in [theta_a,theta_b]:
-					for radial:float in [GYRO_RADIUS-0.085,GYRO_RADIUS+0.085]:
-						for x:float in [-0.105,0.105]:
-							vertices.append(Vector3(x,cos(theta)*radial-GYRO_RADIUS,sin(theta)*radial))
-				_quad(tool,vertices[0],vertices[1],vertices[4],vertices[5])
-				_quad(tool,vertices[2],vertices[3],vertices[6],vertices[7])
-				_quad(tool,vertices[0],vertices[2],vertices[4],vertices[6])
-				_quad(tool,vertices[1],vertices[3],vertices[5],vertices[7])
-				if step==0:
-					_quad(tool,vertices[0],vertices[1],vertices[2],vertices[3])
-				if step==3:
-					_quad(tool,vertices[4],vertices[5],vertices[6],vertices[7])
-			var rim:=MeshInstance3D.new()
-			rim.mesh=tool.commit()
-			rim.material_override=deck_mat
-			panel.add_child(rim)
-			var shoe:=_block(panel,Vector3(0.24,0.08,0.30),edge_mat)
-			shoe.position.y=0.09
 	gyro_axle=Node3D.new()
 	gyro.add_child(gyro_axle)
-	for axle_side:float in [-1.0,1.0]:
-		var brace_part:=_block(gyro_axle,Vector3(0.13,0.78,0.13),shadow)
-		brace_part.position=Vector3(axle_side*0.34,-0.32,0)
-		var hub:=_block(gyro_axle,Vector3(0.28,0.28,0.28),edge_mat)
-		hub.position.x=axle_side*0.34
-	gyro.visible=false
+	gyro.hide()
 	# Solid rectangular segmented limbs, not a flat sprite. Side and
 	# rear views show the same model and actual depth.
 	torso = _block(self, Vector3(0.56, 0.78, 0.34), white)
@@ -243,6 +203,8 @@ func apply_cosmetic(index: int) -> void:
 	shadow.albedo_color=Color(0.70,0.79,0.86).lerp(accent,0.42 if cosmetic_index!=0 else 0.0)
 	jet_mat.albedo_color=Color(0.35,0.92,1.0) if cosmetic_index==0 else accent.lerp(Color.WHITE,0.32)
 	cycle_body_mat.albedo_color=Color(0.035,0.055,0.085).lerp(accent,0.09)
+	cycle_hover_mat.albedo_color=accent
+	cycle_hover_mat.emission=accent
 
 func set_first_person(enabled: bool) -> void:
 	first_person_view=enabled
@@ -261,6 +223,10 @@ func _build_lightcycle() -> void:
 	add_child(lightcycle)
 	cycle_body_mat=_mat(Color(0.035,0.055,0.085))
 	cycle_tire_mat=_mat(Color(0.012,0.018,0.027))
+	cycle_hover_mat=_mat(Color(0.16,0.93,1.0))
+	cycle_hover_mat.emission_enabled=true
+	cycle_hover_mat.emission=Color(0.12,0.75,1.0)
+	cycle_hover_mat.emission_energy_multiplier=1.8
 	cycle_frame=Node3D.new()
 	lightcycle.add_child(cycle_frame)
 	# Sleek monocoque, sloped nose/tail and narrow saddle.
@@ -282,8 +248,14 @@ func _build_lightcycle() -> void:
 		bar.position=Vector3.ZERO
 		var tip:=_block(grip,Vector3(0.055,0.10,0.13),edge_mat)
 		tip.position.x=side*0.12
-	for index in range(2):
+	var rear_axle:=_block(cycle_frame,Vector3(1.40,0.18,0.25),cycle_body_mat)
+	rear_axle.position=Vector3(0,0.53,1.08)
+	for side: float in [-1.0,1.0]:
+		var rear_trim:=_block(cycle_frame,Vector3(0.39,0.07,0.44),edge_mat)
+		rear_trim.position=Vector3(side*0.47,0.65,0.98)
+	for index in range(3):
 		var fork:=Node3D.new()
+		fork.name=["FrontWheel","RearLeftWheel","RearRightWheel"][index]
 		lightcycle.add_child(fork)
 		cycle_forks.append(fork)
 		var wheel:=Node3D.new()
@@ -321,6 +293,19 @@ func _build_lightcycle() -> void:
 				mark.rotation.x=angle
 		var axle:=_block(fork,Vector3(0.36,0.13,0.13),cycle_body_mat)
 		axle.position=Vector3.ZERO
+		var disc_mesh:=CylinderMesh.new()
+		disc_mesh.top_radius=0.30
+		disc_mesh.bottom_radius=0.30
+		disc_mesh.height=0.045
+		disc_mesh.radial_segments=24
+		var disc:=MeshInstance3D.new()
+		disc.mesh=disc_mesh
+		disc.material_override=cycle_hover_mat
+		disc.rotation.z=PI*0.5
+		disc.position.x=0.16 if index==1 else -0.16
+		wheel.add_child(disc)
+		disc.hide()
+		cycle_hover_discs.append(disc)
 	lightcycle.hide()
 
 func _cycle_shell(parent: Node3D, material: StandardMaterial3D) -> void:
@@ -361,9 +346,10 @@ func _cycle_shell(parent: Node3D, material: StandardMaterial3D) -> void:
 
 # The old board remains the glider/gyro/ceiling platform. The cycle
 # folds its wheel carriers into that platform at a surface/flight handoff.
-func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, traveled: float, fall_amount: float) -> void:
+func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, traveled: float, fall_amount: float, anti_amount: float) -> void:
 	cycle_amount=amount
 	cycle_fold=1.0-amount
+	cycle_antigrav=clampf(anti_amount,0.0,1.0)
 	lightcycle.visible=amount>0.015
 	if amount<=0.015:
 		return
@@ -372,7 +358,7 @@ func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, fli
 	var drift_float:=falling*sin(phase*3.5)
 	var idle:=sin(PI*idle_phase) if not airborne else 0.0
 	var turn:=clampf(steer+drift*0.65,-1.0,1.0)
-	var lean:=-turn*(0.15+0.30*speed_mix)
+	var lean:=-turn*(0.15+0.30*speed_mix)*lerpf(1.0,0.24,cycle_antigrav)
 	var jump_pitch:=0.0
 	if airborne:
 		jump_pitch=lerpf(0.25*sin(PI*clampf(flip,0.0,1.0)),-0.32+0.08*drift_float,falling)-0.40*dive_amount
@@ -383,17 +369,24 @@ func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, fli
 	var compression:=clampf(landing*0.16+impact*0.08+crouch*0.10,0.0,0.26)*(1.0-falling*0.85)
 	# Lean about the tire contact plane; keep the tire off the track.
 	var target_rotation:=Vector3(jump_pitch,turn*0.055,lean)
-	var lift:=0.52*(1.0-cos(lean))+absf(sin(jump_pitch))*1.08+0.025
+	var lift:=0.52*(1.0-cos(lean))+absf(sin(jump_pitch))*1.08+0.025+0.13*cycle_antigrav
 	lightcycle.position=Vector3(0,lift+bounce-falling*0.15,falling*0.10)
 	lightcycle.rotation=target_rotation
 	cycle_frame.position=Vector3(0,-compression+falling*0.06,0)
 	cycle_frame.scale=Vector3(1.0,lerpf(0.24,1.0,amount),lerpf(0.74,1.0,amount))
-	for i in range(2):
+	for i in range(3):
 		var fork:=cycle_forks[i]
 		var z:float=-1.08 if i==0 else 1.08
-		fork.position=Vector3(0,lerpf(0.17,0.52,amount),z*lerpf(0.46,1.0,amount))
-		fork.rotation=Vector3(0,turn*0.18 if i==0 else 0.0,(1.0 if i==0 else -1.0)*PI*0.5*cycle_fold)
+		var side:float=0.0 if i==0 else (-1.0 if i==1 else 1.0)
+		var swivel_sign:float=-1.0 if i==1 else 1.0
+		var swivel:=lerpf(cycle_antigrav,1.0,cycle_fold)
+		var spread:=side*lerpf(0.51,0.90,cycle_antigrav)*lerpf(0.28,1.0,amount)
+		var wheel_y:=lerpf(0.52,0.30,cycle_antigrav)
+		fork.position=Vector3(spread,lerpf(0.17,wheel_y,amount),z*lerpf(0.46,1.0,amount))
+		fork.rotation=Vector3(0,turn*0.18*(1.0-cycle_antigrav) if i==0 else 0.0,swivel_sign*PI*0.5*swivel)
 		cycle_wheels[i].rotation.x=fposmod(-traveled/0.52,TAU)
+		cycle_hover_discs[i].visible=cycle_antigrav>0.45 and amount>0.50
+		cycle_hover_discs[i].scale=Vector3.ONE*lerpf(0.3,1.0,smoothstep(0.45,1.0,cycle_antigrav))
 	# Fade from the former rig pose to a real seated pose; hands and feet
 	# are solved against the bike's current steering/compression transforms.
 	var strength:=smoothstep(0.12,0.85,amount)
@@ -505,7 +498,10 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
 	var return_progress:=float(extra.get("glider_return",-1.0))
 	var entry_progress:=float(extra.get("glider_entry",-1.0))
-	var gyro_transfer:=float(extra.get("glider_gyro",-1.0))
+	var legacy_transfer:=float(extra.get("glider_gyro",-1.0))
+	if legacy_transfer>=0.0:
+		return_progress=lerpf(0.60,1.0,legacy_transfer)
+	var gyro_transfer:=-1.0
 	if entry_progress>=0.0:
 		return_progress=1.0-entry_progress
 	var returning:=return_progress>=0.0
@@ -564,12 +560,16 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var drift := clampf(float(extra.get("drift",0.0)),-1.0,1.0)
 	var ground_variant := posmod(int(extra.get("ground_variant",0)),6)
 	var loop_cycle:=bool(extra.get("loop_cycle",false)) and not airborne
-	var inverted := 0.0 if loop_cycle else clampf(float(extra.get("inverted",0.0)),0.0,1.0)
+	var raw_inverted:=clampf(float(extra.get("inverted",0.0)),0.0,1.0)
+	var raw_side:=absf(float(extra.get("sideways",0.0)))
+	var anti_target:=maxf(raw_inverted,smoothstep(0.40,0.86,raw_side)) if not airborne and not loop_cycle else 0.0
+	var anti_amount:=0.0 if loop_cycle else clampf(float(extra.get("cycle_antigrav",anti_target)),0.0,1.0)
+	var inverted:=0.0
 	var hang:=maxf(inverted if not airborne else 0.0,glide*(1.0-release)*(1.0-transfer_settle))
 	var wing_span:=glide*(1.0-wing_fold)*(1.0-smoothstep(0.10,0.48,gyro_transfer) if transferring else 1.0)
 	wings.visible=wing_span>0.015
 	wings.scale.x=maxf(0.01,wing_span)
-	var side_ride:=clampf(float(extra.get("sideways",0.0)),-1.0,1.0)*(1.0-hang) if not airborne and not gliding else 0.0
+	var side_ride:=0.0
 	var sideways:=0.0 if loop_cycle else smoothstep(0.50,0.90,absf(side_ride))
 	if loop_cycle:
 		side_ride=0.0
@@ -578,7 +578,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	# Hardware is tied to contact, not the hanging animation. Airborne
 	# gliders never show ceiling treads, even during a blended pose.
 	tread_deploy=lerpf(tread_deploy,inverted if not airborne else 0.0,blend)
-	treads.visible=not airborne and inverted>0.025
+	treads.hide()
 	# Eight long articulated legs spread out to the contact plane.
 	# Feet stride in alternating groups; the body/board physics stays
 	# fixed, with the enlarged legs wrapping out along the ceiling.
@@ -607,7 +607,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		exhaust.scale.z=jet_length
 		exhaust.position.z=0.52+0.43*jet_length
 	gyro_deploy=0.0 if loop_cycle else lerpf(gyro_deploy,sideways,blend)
-	gyro.visible=gyro_deploy>0.015 and not first_person_view
+	gyro.hide()
 	_pose_gyro_panels(gyro_deploy,phase,gyro_trick,gyro_cycle,gyro_progress)
 	# The hoverboard remains full-size as the pilot's inner platform.
 	# Its rails become the wheel, not a disappearing scaled copy.
@@ -903,7 +903,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var use_cycle:=bool(extra.get("lightcycle",false))
 	var cycle_target:=0.0
 	if use_cycle:
-		cycle_target=(1.0-smoothstep(0.12,0.65,inverted))*(1.0-smoothstep(0.12,0.72,gyro_deploy))
+		cycle_target=1.0
 		if gliding:
 			if entry_progress>=0.0:
 				cycle_target*=1.0-smoothstep(0.0,0.34,entry_progress)
@@ -925,7 +925,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		rotation=Vector3.ZERO
 		visual_lift=0.0
 		visual_pivot=0.0
-	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,float(extra.get("cycle_distance",phase*4.0)),float(extra.get("cycle_fall",0.0)))
+	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,float(extra.get("cycle_distance",phase*4.0)),float(extra.get("cycle_fall",0.0)),anti_amount)
 	if cycle_target>0.5:
 		for mesh_index in range(2):
 			(board.get_child(mesh_index) as Node3D).visible=false

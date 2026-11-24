@@ -116,37 +116,10 @@ func _run_tests() -> void:
 	if absf(absf(model.rotation.y)-PI)>0.05 or float(model.get("visual_lift"))<0.3:
 		_fail("Ground idle hop/spin missing.")
 		return
-	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"inverted":1.0})
-	if model_head.position.y >= neutral_head-0.12:
-		_fail("Inverted rider does not lower into the hanging pose.")
-		return
-	var ceiling_treads:Node3D=model.get("treads")
-	var spider_segments:Array=model.get("spider_upper")
-	var long_feet:Array=model.get("spider_feet")
-	if absf((long_feet[0] as Node3D).position.x)<4.0 or float(model.get("visual_lift"))<2.4:
-		_fail("Spider legs lack the extended contact span.")
-		return
-	if not (spider_segments[0] as Node3D).transform.is_finite():
-		_fail("Spider leg deployment generated an invalid transform.")
-		return
-	if not ceiling_treads.visible or ceiling_treads.get_child_count()!=24:
-		_fail("Grounded inverted riding is missing spider legs.")
-		return
-	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":1.0})
-	var gyro_probe:Node3D=model.get("gyro")
-	var gyro_panels:Array=model.get("gyro_panels")
-	if gyro_panels.size()!=24:
-		_fail("Gyro is missing independent rigid rim segments.")
-		return
-	var locked_panel:Node3D=gyro_panels[0]
-	var locked_pose:Transform3D=locked_panel.transform
-	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":0.70})
-	if not gyro_probe.visible or not gyro_probe.scale.is_equal_approx(Vector3.ONE) or not locked_panel.scale.is_equal_approx(Vector3.ONE) or locked_panel.position.distance_to(locked_pose.origin)<0.2:
-		_fail("Gyro transition scales the wheel instead of articulating rigid panels.")
-		return
-	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"sideways":1.0})
-	if not gyro_probe.visible or gyro_probe.scale.x<0.9 or ceiling_treads.visible:
-		_fail("Sidewall gyro did not replace ceiling treads.")
+	var ceiling_treads: Node3D=model.get("treads")
+	var gyro_probe: Node3D=model.get("gyro")
+	if ceiling_treads.get_child_count()!=0 or gyro_probe.get_child_count()!=2:
+		_fail("Obsolete surface vehicle geometry still exists.")
 		return
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
 	var glider_rig:Node3D=model.get("wings")
@@ -189,8 +162,8 @@ func _run_tests() -> void:
 		_fail("Glider dive did not pitch the full wing rig.")
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_gyro":0.80,"sideways":1.0})
-	if not gyro_probe.visible or glider_rig.visible:
-		_fail("Glider-to-gyro handoff did not fold wings and assemble wheel.")
+	if gyro_probe.visible or ceiling_treads.visible:
+		_fail("Legacy replay deployed a removed vehicle.")
 		return
 	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_entry":0.70})
 	if flip_board.position.x<3.0 or not glider_rig.visible:
@@ -238,7 +211,7 @@ func _run_tests() -> void:
 	var cycle_body: Node3D = model.get("cycle_frame")
 	var cycle_opt := {"lightcycle":true,"speed_factor":0.8}
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,cycle_opt)
-	if not cycle_rig.visible or wheels.size()!=2 or (flip_board.get_child(0) as Node3D).visible:
+	if not cycle_rig.visible or wheels.size()!=3 or (flip_board.get_child(0) as Node3D).visible:
 		_fail("Regular ground does not display the lightcycle instead of the deck.")
 		return
 	var seated_hip: Vector3 = (model.get("hips") as Node3D).position
@@ -267,12 +240,24 @@ func _run_tests() -> void:
 		_fail("Glider return fails to unfold cycle before landing.")
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"sideways":1.0})
-	if cycle_rig.visible or not gyro_probe.visible:
-		_fail("Sidewall gyro is obstructed by the cycle.")
+	if not cycle_rig.visible or gyro_probe.visible or absf(float(model.get("cycle_antigrav"))-1.0)>0.001:
+		_fail("Sidewall lightcycle did not enter anti-gravity mode.")
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"inverted":1.0})
-	if cycle_rig.visible or not ceiling_treads.visible:
-		_fail("Ceiling spider rig is obstructed by the cycle.")
+	if not cycle_rig.visible or ceiling_treads.visible or absf(float(model.get("cycle_antigrav"))-1.0)>0.001:
+		_fail("Ceiling lightcycle did not enter anti-gravity mode.")
+		return
+	var wheel_carriers: Array=model.get("cycle_forks")
+	for carrier in wheel_carriers:
+		if absf(absf((carrier as Node3D).rotation.z)-PI*0.5)>0.01:
+			_fail("Anti-gravity wheels did not swivel ninety degrees.")
+			return
+	if (wheel_carriers[1] as Node3D).position.x>=-0.5 or (wheel_carriers[2] as Node3D).position.x<=0.5:
+		_fail("Rear anti-gravity wheel pair did not spread.")
+		return
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"inverted":1.0,"loop_cycle":true})
+	if absf(float(model.get("cycle_antigrav")))>0.01 or absf((wheel_carriers[0] as Node3D).rotation.z)>0.01:
+		_fail("Ordinary rolling wheels must stay active in loops.")
 		return
 	# Combat must not exist in the active scene or run mode selector.
 	for child in game.get_children():

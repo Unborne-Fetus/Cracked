@@ -383,9 +383,8 @@ func _update_camera(delta: float) -> void:
 		view_camera.position = pos + takeoff_camera_offset.lerp(view_camera.position - pos, blend)
 	elif first_person:
 		camera_track_s = player_s
-		var hang_eye: float=lerpf(slide_eye_height+0.30,1.08,float(runner.rider_inverted))
-		var gyro_view:=smoothstep(0.50,0.90,absf(frame.basis.x.y))*(1.0-float(runner.rider_inverted))
-		view_camera.position=pos+up*lerpf(hang_eye,1.22,gyro_view)+forward*lerpf(0.68,1.15,gyro_view)
+		var seated_eye: float=lerpf(slide_eye_height+0.30,1.65,float(runner.cycle_antigrav))
+		view_camera.position=pos+up*seated_eye+forward*0.68
 		_aim_camera(view_camera.position+(forward-up*0.34)*25.0,up)
 	else:
 		var focus := pos + up * 1.35
@@ -1444,6 +1443,7 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.drift_amount = float(state.get("drift_amount",0.0))
 	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
 	runner.cycle_fall=float(state.get("cycle_fall",0.0))
+	runner.cycle_antigrav=float(state.get("cycle_antigrav",maxf(float(state.get("rider_inverted",0.0)),smoothstep(0.40,0.86,absf(pose.basis.x.y))) if runner.grounded else 0.0))
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0

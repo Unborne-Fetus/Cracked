@@ -135,3 +135,6 @@ The mountain ring now starts 1,900 units from the rider (previously 380), with a
 
 ## Continuous loop chase and adaptive rock
 The third-person loop camera uses a damped local arm, stable loop-relative roll axis and a short exit hold; it aims at the rider without switching to world-up at the crest. The original REDLINE RIOT hard-rock score is generated as two synchronized stems; speed fades in the heavier guitar and percussion layer. Browser audio settings offer USE LOCAL MUSIC FILE for a personally supplied audio file, with local speed-dependent filtering and volume (not a separated multitrack arrangement). Local files are decoded in the browser, not uploaded or committed; restore the original score using the neighboring option.
+
+## Three-wheel anti-gravity lightcycle
+One front wheel and two side-by-side rear wheels replace the old two-wheel cycle. Wall and ceiling riding now smoothly swivels all three wheels ninety degrees into glowing hover pads; rear wheels spread outward. The spider and gyro geometry is removed, with empty compatibility anchors for older replay state. Vertical loops retain ordinary rolling wheels. Glider handoffs, flight animations and collision physics are preserved.
