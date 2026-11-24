@@ -1793,3 +1793,96 @@ func near_loop(distance: float, reach: float = 24.0) -> bool:
 		if has_distance(at) and section_name(at)=="LOOP ROUTE":
 			return true
 	return false
+
+# Query physical loop geometry without trusting a potentially incorrect
+# route progress value. Return the nearest supported face within radius.
+func nearest_loop_surface(world_pos: Vector3, radius: float) -> Dictionary:
+	var best: Dictionary={}
+	var best_sq:=radius*radius
+	var stride:=CROSS_STEPS+1
+	for key in chunks:
+		var data: Dictionary=chunks[key]
+		if data["kind"]!="LOOP ROUTE":
+			continue
+		var node: Node3D=data["node"]
+		if not node.has_meta("loop_bounds"):
+			continue
+		var p:=world_pos-node.position
+		var bounds: Array=node.get_meta("loop_bounds")
+		var top: PackedVector3Array=node.get_meta("loop_top")
+		for row in range(STEPS):
+			var box: AABB=bounds[row]
+			if not box.grow(sqrt(best_sq)).has_point(p):
+				continue
+			for column in range(CROSS_STEPS):
+				var lane0: float=-HALF_WIDTH+float(column)*4.0
+				if not _cell_supported("LOOP ROUTE",float(row)+0.5,lane0+2.0):
+					continue
+				var vertex:=row*stride+column
+				var a:=top[vertex]
+				var b:=top[vertex+1]
+				var c:=top[vertex+stride]
+				var d:=top[vertex+stride+1]
+				if not AABB(a,Vector3.ZERO).expand(b).expand(c).expand(d).grow(sqrt(best_sq)).has_point(p):
+					continue
+				for tri in range(2):
+					var ta:=a if tri==0 else d
+					var tb:=b if tri==0 else c
+					var tc:=c if tri==0 else b
+					var closest:=_nearest_triangle(p,ta,tb,tc)
+					var dist_sq:=p.distance_squared_to(closest)
+					if dist_sq>=best_sq:
+						continue
+					var ab:=tb-ta
+					var ac:=tc-ta
+					var q:=closest-ta
+					var aa:=ab.dot(ab)
+					var bb:=ac.dot(ac)
+					var cross_value:=ab.dot(ac)
+					var det:=aa*bb-cross_value*cross_value
+					if det<=0.00000001:
+						continue
+					var w0: float=(bb*q.dot(ab)-cross_value*q.dot(ac))/det
+					var w1: float=(aa*q.dot(ac)-cross_value*q.dot(ab))/det
+					var u:=clampf(w1 if tri==0 else 1.0-w1,0.0,1.0)
+					var v:=clampf(w0 if tri==0 else 1.0-w0,0.0,1.0)
+					var s:=chunk_starts[int(key)]+(float(row)+u)*(chunk_starts[int(key)+1]-chunk_starts[int(key)])/float(STEPS)
+					best_sq=dist_sq
+					best={"s":s,"lane":lane0+v*4.0,"distance":sqrt(dist_sq),"point":closest+node.position}
+	return best
+
+func _nearest_triangle(p: Vector3,a: Vector3,b: Vector3,c: Vector3) -> Vector3:
+	var ab:=b-a
+	var ac:=c-a
+	var normal:=ab.cross(ac)
+	if normal.length_squared()>0.00000001:
+		var plane:=p-normal*(p-a).dot(normal)/normal.length_squared()
+		var q:=plane-a
+		var aa:=ab.dot(ab)
+		var bb:=ac.dot(ac)
+		var cross_value:=ab.dot(ac)
+		var det:=aa*bb-cross_value*cross_value
+		if det>0.00000001:
+			var u: float=(bb*q.dot(ab)-cross_value*q.dot(ac))/det
+			var v: float=(aa*q.dot(ac)-cross_value*q.dot(ab))/det
+			if u>=0.0 and v>=0.0 and u+v<=1.0:
+				return plane
+	var best:=Geometry3D.get_closest_point_to_segment(p,a,b)
+	for candidate: Vector3 in [Geometry3D.get_closest_point_to_segment(p,b,c),Geometry3D.get_closest_point_to_segment(p,c,a)]:
+		if p.distance_squared_to(candidate)<p.distance_squared_to(best):
+			best=candidate
+	return best
+
+func loop_world_near(a: Vector3,b: Vector3,radius: float) -> bool:
+	for data in chunks.values():
+		if data["kind"]!="LOOP ROUTE":
+			continue
+		var node: Node3D=data["node"]
+		if not node.has_meta("loop_bounds"):
+			continue
+		var query:=AABB(a-node.position,Vector3.ZERO).expand(b-node.position).grow(radius)
+		var bounds: Array=node.get_meta("loop_bounds")
+		for box: AABB in bounds:
+			if query.intersects(box):
+				return true
+	return false

@@ -1320,6 +1320,18 @@ func _run_tests() -> void:
 			if loop_hit.is_empty() or absf(float(loop_hit["s"])-loop_at)>3.0 or absf(float(loop_hit["lane"])-loop_across)>2.0:
 				_fail("Swept loop collision missed or chose a different arm.")
 				return
+			var physical_near: Dictionary=course.call("nearest_loop_surface",loop_face.origin+loop_face.basis.y*2.0,5.0)
+			if physical_near.is_empty() or float(physical_near["distance"])>2.1:
+				_fail("Loop world-space proximity failed.")
+				return
+			runner.set("grounded",false)
+			runner.set("fallen",false)
+			runner.set("fall_grace",0.44)
+			runner.set("air_velocity",Vector3.DOWN*8.0)
+			runner.call("_check_fall",course,loop_face.origin+loop_face.basis.y*2.0,Vector3(10.0,0.0,-100.0),0.06)
+			if bool(runner.get("fallen")):
+				_fail("False death near physical loop with incorrect progress.")
+				return
 			runner.set("distance",loop_at)
 			runner.set("lane",loop_across)
 			runner.set("grounded",true)

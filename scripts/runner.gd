@@ -825,6 +825,11 @@ func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: floa
 		var contact: Dictionary=course.call("nearby_contact",point,projected.x,surface_side)
 		if not contact.is_empty() and float(contact["distance"])<FALL_DEPTH+5.0:
 			escaping=false
+	if escaping and bool(course.call("loop_world_near",point,point,FALL_DEPTH+5.0)):
+		var real_road: Dictionary=course.call("nearest_loop_surface",point,FALL_DEPTH+5.0)
+		if not real_road.is_empty():
+			fall_grace=0.0
+			return
 	fall_grace=fall_grace+delta if escaping else 0.0
 	if fall_grace>0.45:
 		fallen = true
@@ -918,12 +923,14 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	var predicted_s := maxf(0.0,distance+air_velocity.dot(-old_frame.basis.z)*delta)
 	if str(course.call("section_name",distance))=="LOOP ROUTE":
 		var loop_tangent: Transform3D = course.call("surface_frame",distance,lane,surface_side)
-		predicted_s=maxf(0.0,distance+air_velocity.dot(-loop_tangent.basis.z)*delta)
+		var loop_scale: float=course.call("loop_metric",distance,lane)
+		predicted_s=maxf(0.0,distance+air_velocity.dot(-loop_tangent.basis.z)*delta/maxf(0.35,loop_scale))
 	course.call("stream", maxf(distance, predicted_s), speed)
 	var new_origin: Vector3 = course.get("origin_shift")
 	var shift := new_origin - old_origin
 	previous_pos -= shift
 	next_pos -= shift
+	position=previous_pos
 	# Obstacles stop the motion before surface landing can skip past them.
 	var obstacle_projection: Vector3 = course.call("project_position",next_pos,predicted_s)
 	var obstacle_clear0: float = course.call("surface_clearance",old_projection.x,old_projection.y,old_projection.z,1)
@@ -933,7 +940,7 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		if not obstacle.is_empty():
 			_obstacle_rebound(course,obstacle,old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1)
 			return
-	if bool(course.call("near_loop",old_s,60.0)) or bool(course.call("near_loop",predicted_s,60.0)):
+	if bool(course.call("loop_world_near",previous_pos,next_pos,4.0)):
 		var loop_hit:=_loop_flight_contact(course,previous_pos,next_pos)
 		if not loop_hit.is_empty():
 			var loop_face: Transform3D=loop_hit["frame"]
@@ -1010,6 +1017,13 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		else:
 			air_velocity += normal * 0.5
 	var projected: Vector3 = course.call("project_position", next_pos, predicted_s)
+	if bool(course.call("loop_world_near",next_pos,next_pos,12.0)):
+		var projected_face: Transform3D=course.call("surface_frame",projected.x,projected.y,1)
+		if not bool(course.call("support_at",projected.x,projected.y)) or next_pos.distance_to(projected_face.origin)>12.0:
+			var actual: Dictionary=course.call("nearest_loop_surface",next_pos,12.0)
+			if not actual.is_empty():
+				var actual_face: Transform3D=course.call("surface_frame",float(actual["s"]),float(actual["lane"]),1)
+				projected=Vector3(float(actual["s"]),float(actual["lane"]),(next_pos-actual_face.origin).dot(actual_face.basis.y))
 	distance = projected.x
 	lane = projected.y
 	height = projected.z
