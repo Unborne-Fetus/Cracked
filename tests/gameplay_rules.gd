@@ -12,6 +12,8 @@ func _run_tests() -> void:
 	var runner: Node3D = game.get("runner")
 	var storm: Node3D = game.get("storm")
 	var course: Node3D = game.get("course")
+	course.set("showcase_layout", true)
+	game.call("_restart")
 	if not bool(runner.call("can_slide_on_grade", 0.25)):
 		_fail("Uphill sliding must be available.")
 		return
@@ -619,6 +621,26 @@ func _run_tests() -> void:
 	if tunnel_wall.basis.y.dot(tunnel_mid.basis.y) > -0.7:
 		_fail("Corkscrew tunnel does not wrap around the runner.")
 		return
+	# The inverted curled wall extends far below the centerline.
+	# A player only two meters off that wall must not falsely lose.
+	runner.set("distance", tunnel_s)
+	runner.set("lane", 54.0)
+	runner.set("surface_side", 1)
+	runner.set("grounded", false)
+	runner.set("fallen", false)
+	runner.set("air_time", 0.0)
+	runner.set("air_basis", tunnel_wall.basis)
+	runner.set("speed", 40.0)
+	runner.set("air_velocity", -tunnel_wall.basis.z * 40.0)
+	runner.transform = Transform3D(tunnel_wall.basis, tunnel_wall.origin + tunnel_wall.basis.y * 2.0)
+	var tunnel_projection: Vector3 = course.call("project_position", runner.position, tunnel_s)
+	if float(course.call("distance_to_rideable_surface", runner.position, tunnel_projection)) > 3.0:
+		_fail("Tunnel proximity uses the centerline instead of its curved wall.")
+		return
+	runner.call("_advance_flight", 1.0 / 60.0, course, 0.0)
+	if bool(runner.get("fallen")):
+		_fail("Corkscrew falsely reports a fall near its rideable wall.")
+		return
 	var pipe_s := 26.0 * 192.0 + 96.0
 	var pipe_center: Transform3D = course.call("surface_frame", pipe_s, 0.0, 1)
 	var pipe_edge: Transform3D = course.call("surface_frame", pipe_s, 50.0, 1)
@@ -701,6 +723,28 @@ func _run_tests() -> void:
 	game.call("_restart")
 	if bool(game.get("replay_active")) or bool(course.get("replay_layout")):
 		_fail("Replay exit did not restore normal generation.")
+		return
+	# Live runs use seeded varied terrain from the beginning, rather
+	# than the old fixed regression sequence.
+	course.set("showcase_layout", false)
+	course.set("fixed_daily_layout", true)
+	var signatures: Dictionary = {}
+	var first_signature := ""
+	for seed_value: int in [4731, 9127, 18304, 28419, 4731]:
+		course.call("reset_course", seed_value)
+		var recipes: Array = course.get("replay_recipes")
+		var signature := ""
+		for recipe in recipes:
+			signature += str(recipe["kind"]) + ":" + str(snappedf(float(recipe["length"]), 0.01)) + "|"
+		if seed_value == 4731:
+			if first_signature.is_empty():
+				first_signature = signature
+			elif signature != first_signature:
+				_fail("Same daily seed did not reproduce the generated route.")
+				return
+		signatures[signature] = true
+	if signatures.size() < 4:
+		_fail("Different seeds generate repeating opening courses.")
 		return
 	print("PASS: slide-only acceleration, unlimited speed, hazards, and advancing storm")
 	print("PASS: wide tessellated banks, continuous distance colors, ten obstacle shapes, seamless streaming")

@@ -12,6 +12,11 @@ func _run_test() -> void:
 	game.set_physics_process(false)
 	var course: Node3D = game.get("course")
 	var runner: Node3D = game.get("runner")
+	course.set("showcase_layout", true)
+	game.call("_restart")
+	# Wait for newly instantiated collision geometry to enter the physics space.
+	await physics_frame
+	await physics_frame
 	var frame: Transform3D = course.call("sample", float(runner.get("distance")))
 	var ray := PhysicsRayQueryParameters3D.create(frame.origin + frame.basis.y * 8.0, frame.origin - frame.basis.y * 8.0, 1)
 	ray.hit_back_faces = true

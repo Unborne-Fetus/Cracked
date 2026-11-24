@@ -575,7 +575,14 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		transform = Transform3D(air_basis, next_pos)
 		speed = maxf(0.0, speed - AIR_DRAG * delta)
 		var world_drop := new_frame.origin.y - next_pos.y
-		if world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0:
+		if bool(course.call("is_curved_enclosure", distance)):
+			# A corkscrew can extend over 38 m below its reference
+			# spine. Being inside it, or close to either curved face,
+			# is not falling out of the world.
+			var separation: float = course.call("distance_to_rideable_surface", next_pos, Vector3(distance, lane, height))
+			if separation > FALL_DEPTH and (world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0):
+				fallen = true
+		elif world_drop > FALL_DEPTH or absf(lane) > limit + FALL_SIDE_DISTANCE or air_time > 8.0:
 			fallen = true
 	if (grounded and surface_side > 0) or (not grounded and (old_height >= 0.0 or height >= 0.0)):
 		var old_clear: float = course.call("surface_clearance", old_s, old_lane, old_height, 1)

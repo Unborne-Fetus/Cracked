@@ -37,6 +37,9 @@ var demanding_sections := 0
 var recovery_sections := 0
 var rejected_layouts := 0
 var fixed_daily_layout := false
+# Fixed sequence is a test fixture only, never the default live course.
+var showcase_layout := false
+var recent_kinds: Array[String] = []
 # Archive the exact generated geometry, not merely the seed: endless
 # generation is adaptive to the player's speed and storm gap.
 const REPLAY_CHUNK_LIMIT := 768
@@ -72,6 +75,7 @@ func reset_course(seed_value: int) -> void:
 	origin_shift = Vector3.ZERO
 	rng.seed = seed_value
 	terrain_bag.clear()
+	recent_kinds.clear()
 	last_kind = ""
 	sustained_roll_queue.clear()
 	sustained_roll_sign = 1.0
@@ -82,8 +86,8 @@ func reset_course(seed_value: int) -> void:
 	rejected_layouts = 0
 	stream(0.0)
 
-func _kind(index: int) -> String:
-	# Opening sequence introduces each mechanic; thereafter seeded variety.
+func _showcase_kind(index: int) -> String:
+	# Deterministic geometry fixture for headless regression tests only.
 	if index == 0:
 		return "HILLS"
 	if index == 1:
@@ -132,15 +136,44 @@ func _kind(index: int) -> String:
 	# Showcase new route mechanics after the original introductory sequence.
 	if index >= 23 and index <= 28:
 		return SPECIAL_TRACKS[index - 23]
+	return ""
+
+func _kind(index: int) -> String:
+	if not sustained_roll_queue.is_empty():
+		return sustained_roll_queue.pop_front()
+	if showcase_layout:
+		var fixture := _showcase_kind(index)
+		if not fixture.is_empty():
+			return fixture
+	if index == 0:
+		# Start with a forgiving accelerating section, but not the same
+		# section or longitudinal profile every run.
+		var opening: Array[String] = ["HILLS", "LONG DESCENT", "WIDE BASIN", "SLIPSTREAM", "BANKED DESCENT"]
+		return opening[rng.randi_range(0, opening.size() - 1)]
 	# Never interrupt a committed wall/ceiling sequence. Insert a full
 	# recovery section after repeated demanding terrain or a poor forecast.
 	if demanding_sections >= 2 or (last_kind != "RECOVERY RUN" and float(route_forecast.get("gap", 92.0)) < 38.0 and float(route_forecast.get("speed", 22.0)) < float(route_forecast.get("storm_speed", 14.0)) + 12.0):
-		return "RECOVERY RUN"
+		if showcase_layout:
+			return "RECOVERY RUN"
+		var recovery: Array[String] = ["RECOVERY RUN", "LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"]
+		recovery.erase(last_kind)
+		return recovery[rng.randi_range(0, recovery.size() - 1)]
 	if terrain_bag.is_empty():
 		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY", "SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"])
-	var choice := rng.randi_range(0, terrain_bag.size() - 1)
-	if terrain_bag.size() > 1 and terrain_bag[choice] == last_kind:
-		choice = (choice + 1) % terrain_bag.size()
+	var candidates: Array[int] = []
+	for i in range(terrain_bag.size()):
+		var candidate := terrain_bag[i]
+		if candidate == last_kind or recent_kinds.has(candidate):
+			continue
+		# Give the player an acceleration runway before difficult geometry.
+		if index < 2 and (is_extreme_bank(candidate) or candidate in ["SPLIT ROUTE", "GAP CROSSING", "STACKED ROUTES", "STEEP CLIMB", "NARROW BRIDGE"]):
+			continue
+		candidates.append(i)
+	if candidates.is_empty():
+		for i in range(terrain_bag.size()):
+			if terrain_bag[i] != last_kind and (index >= 2 or not is_extreme_bank(terrain_bag[i])):
+				candidates.append(i)
+	var choice := rng.randi_range(0, terrain_bag.size() - 1) if candidates.is_empty() else candidates[rng.randi_range(0, candidates.size() - 1)]
 	var result: String = terrain_bag[choice]
 	terrain_bag.remove_at(choice)
 	if result == "WALL ENTRY":
@@ -261,8 +294,12 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 	var kind := _kind(index)
 	var start_s := chunk_starts[index]
 	var length := bank_length(kind, planned_speed)
+	if not showcase_layout:
+		# Independent, seeded longitudinal variation. Stretch technical
+		# sections, rather than squeezing banks below the safe base length.
+		length *= rng.randf_range(1.0, 1.45)
 	var step_length := length / float(STEPS)
-	var strength := 1.0 if index < 6 else rng.randf_range(0.78, 1.16)
+	var strength := 1.0 if showcase_layout and index < 6 else rng.randf_range(0.72, 1.22)
 	var start_yaw := yaw
 	var target_yaw := yaw
 	var bank_sign := -1.0 if rng.randf() < 0.5 else 1.0
@@ -279,23 +316,48 @@ func _build_chunk(index: int, planned_speed: float = 22.0) -> void:
 	var points := _make_points(kind, start_yaw, target_yaw, bank_sign, strength, step_length)
 	var layout := _plan_obstacles(index, kind, points, step_length, planned_speed)
 	var forecast := _validate_routes(index, kind, points, step_length, layout, route_forecast)
-	if index >= 29 and not is_extreme_bank(kind) and kind != "RECOVERY RUN" and (not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0):
+	if (not showcase_layout or index >= 29) and not is_extreme_bank(kind) and kind != "RECOVERY RUN" and (not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0):
 		rejected_layouts += 1
 		# First remove optional obstacles; if terrain itself remains risky,
 		# replace it with a clear downhill recovery stretch.
 		layout.clear()
 		forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 		if not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0:
-			kind = "RECOVERY RUN"
-			target_yaw = start_yaw
-			length = bank_length(kind, planned_speed)
-			step_length = length / float(STEPS)
-			points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
-			forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
+			# Try different obstacle-free downhill profiles before falling
+			# back to a recovery run; avoid making every rejected section identical.
+			var alternatives: Array[String] = ["LONG DESCENT", "SLIPSTREAM", "BANKED DESCENT"] if not showcase_layout else []
+			while not alternatives.is_empty():
+				var pick := rng.randi_range(0, alternatives.size() - 1)
+				var alternate := alternatives[pick]
+				alternatives.remove_at(pick)
+				if alternate == last_kind:
+					continue
+				var alternative_length := maxf(length, bank_length(alternate, planned_speed))
+				var alternative_step := alternative_length / float(STEPS)
+				var alternative_points := _make_points(alternate, start_yaw, start_yaw, bank_sign, strength, alternative_step)
+				var alternative_forecast := _validate_routes(index, alternate, alternative_points, alternative_step, layout, route_forecast)
+				if bool(alternative_forecast["valid"]) and float(alternative_forecast["min_gap"]) >= 14.0:
+					kind = alternate
+					length = alternative_length
+					step_length = alternative_step
+					points = alternative_points
+					forecast = alternative_forecast
+					target_yaw = start_yaw
+					break
+			if not bool(forecast["valid"]) or float(forecast["min_gap"]) < 14.0:
+				kind = "RECOVERY RUN"
+				target_yaw = start_yaw
+				length = bank_length(kind, planned_speed)
+				step_length = length / float(STEPS)
+				points = _make_points(kind, start_yaw, target_yaw, bank_sign, 1.0, step_length)
+				forecast = _validate_routes(index, kind, points, step_length, layout, route_forecast)
 	last_kind = kind
+	recent_kinds.append(kind)
+	if recent_kinds.size() > 4:
+		recent_kinds.pop_front()
 	route_forecast = forecast
 	chunk_starts.append(start_s + length)
-	if kind == "RECOVERY RUN" or kind == "LONG DESCENT" or kind == "BANKED DESCENT":
+	if kind in ["RECOVERY RUN", "LONG DESCENT", "BANKED DESCENT", "SLIPSTREAM"]:
 		demanding_sections = 0
 		recovery_sections += 1
 	elif kind in ["HILLS", "STEEP CLIMB", "ROLLING RIDGES", "DROP AND RECOVERY", "NARROW BRIDGE"] or is_extreme_bank(kind):
@@ -346,7 +408,15 @@ func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_
 	if kind in SPECIAL_TRACKS or kind in ["RECOVERY RUN", "STEEP CLIMB", "LONG DESCENT", "NARROW BRIDGE", "ROLLING RIDGES", "DROP AND RECOVERY", "CHICANE"] or is_sustained_roll(kind):
 		return layout
 	var positions: Array[float] = []
-	if index == 0:
+	if not showcase_layout:
+		if index == 0:
+			positions.assign([rng.randf_range(100.0, 150.0)])
+		else:
+			var at := rng.randf_range(24.0, 54.0)
+			while at < 170.0:
+				positions.append(at)
+				at += rng.randf_range(38.0, 76.0)
+	elif index == 0:
 		positions.assign([82.0, 137.0])
 	elif index == 1:
 		positions.assign([35.0, 72.0, 108.0, 144.0, 174.0])
@@ -358,14 +428,16 @@ func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_
 		positions.assign([32.0, 100.0, 156.0])
 	var previous := -100000.0
 	var reaction_spacing := maxf(28.0, planned_speed * 1.15)
-	var gate := index >= 2 and index < 6 and not is_extreme_bank(kind)
+	var gate := (index >= 2 and index < 6 if showcase_layout else index >= 2 and rng.randf() < 0.17 and planned_speed < 100.0 and kind in ["TURN", "BANKED TURN", "WIDE BASIN"]) and not is_extreme_bank(kind)
 	var gate_lane := shortcut_center(index) if has_shortcut(kind) else (-14.0 if index % 2 == 0 else 14.0)
 	for i in range(positions.size()):
 		var at: float = positions[i]
-		var shape_id := (index * 5 + i) % 10 if index < 6 else rng.randi_range(0, 9)
+		var shape_id := (index * 5 + i) % 10 if showcase_layout and index < 6 else rng.randi_range(0, 9)
 		# Intro retains its shape showcase. Later layouts enforce a full
 		# reaction interval, and exclude blind crests, hard slopes and edges.
-		if index >= 6:
+		if not showcase_layout or index >= 6:
+			if gate and absf(at - 94.0) * step_length < reaction_spacing:
+				continue
 			if (at - previous) * step_length < reaction_spacing:
 				continue
 			var before_i := maxi(0, int(at) - 14)
@@ -385,7 +457,7 @@ func _plan_obstacles(index: int, kind: String, points: Array[Transform3D], step_
 			if gate:
 				lane = -42.0 if gate_lane >= 0.0 else 42.0
 			lane = clampf(lane, -bound, bound)
-		if index >= 6 and (absf(lane - safe_lane) < 14.0 or absf(lane) < 15.0):
+		if (not showcase_layout or index >= 6) and (absf(lane - safe_lane) < 14.0 or absf(lane) < 15.0):
 			continue
 		if has_shortcut(kind) and absf(lane - shortcut_center(index)) < 15.0:
 			lane = clampf(-shortcut_center(index), -bound, bound)
@@ -1065,3 +1137,22 @@ func replay_stream(distance: float, shift: Vector3) -> void:
 		layout.assign(recipe["layout"])
 		var absolute_origin: Vector3 = recipe["origin"]
 		_instantiate_chunk(index, str(recipe["kind"]), points, float(recipe["start"]), float(recipe["length"]) / float(STEPS), absolute_origin - origin_shift, layout)
+
+func distance_to_rideable_surface(world_pos: Vector3, projected: Vector3) -> float:
+	# For curled cross-sections the centerline is not the road. Measure to
+	# both actual faces, including the nearest edge at the tunnel's slit.
+	var at := projected.x
+	var edge := half_width_at(at)
+	var across := clampf(projected.y, -edge, edge)
+	var nearest := INF
+	for test_lane: float in [across, -edge, edge]:
+		if not support_at(at, test_lane):
+			continue
+		for side: int in [1, -1]:
+			var face := surface_frame(at, test_lane, side)
+			nearest = minf(nearest, world_pos.distance_to(face.origin))
+	return nearest
+
+func is_curved_enclosure(distance: float) -> bool:
+	var kind := section_name(distance)
+	return kind == "CORKSCREW TUNNEL" or kind == "HALFPIPE" or kind == "STACKED ROUTES"
