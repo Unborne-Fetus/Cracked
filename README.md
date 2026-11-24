@@ -130,3 +130,5 @@ Loop riding positions interpolate the actual mesh triangles; airborne contacts s
 
 ## Loop vehicle and terrain variety
 The lightcycle stays active throughout a grounded vertical loop, including its crown; ceiling and wall hardware are reserved for actual ceiling/wall routes. Loop landings require exact swept foot contact, while body impacts deflect at the impact position. New speed-scaled track profiles include grand turns, descending sweeps, double bends, wave runs, crest runs, wide slaloms and banked bowls. Recovery and loop scheduling remain in place.
+
+The mountain ring now starts 1,900 units from the rider (previously 380), with an extended camera horizon. Motorcycle freefall has a distinct eased nose-down pose, floating rider stance and extended suspension, recorded in replays. Airborne movement near loops uses an exclusive swept-mesh collision corridor covering the adjoining road as well; approximate landing/obstacle recovery is not used there. Fall and storm checks consult physical geometry rather than trusting a wrong-arm progress estimate.

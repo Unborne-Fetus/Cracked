@@ -72,6 +72,11 @@ func confirms_catch(delta: float, runner: Node3D, course: Node3D) -> bool:
 	# High-altitude projection is only an estimate. Never use it alone
 	# to kill a rider who is visibly far from the track/storm.
 	if not bool(runner.get("grounded")):
+		if bool(runner.get("loop_flight_guard")) or bool(course.call("loop_world_near",runner.position,runner.position,65.0)):
+			var actual: Dictionary=course.call("nearest_loop_surface",runner.position,10.0,true)
+			if actual.is_empty() or absf(float(actual["s"])-at)>12.0 or gap_to(float(actual["s"]))>1.0:
+				catch_time=0.0
+				return false
 		var p:=Vector3(at,float(runner.get("lane")),float(runner.get("height")))
 		var nearby:float=course.call("distance_to_rideable_surface",runner.position,p)
 		if nearby>16.0 or not bool(course.call("has_distance",at)):

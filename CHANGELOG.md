@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Distant mountains, motorcycle freefall and loop flight
+- Move the background ring five times farther from the rider and extend the camera horizon.
+- Add freefall pitch, suspension and articulated body poses, including replay.
+- Exclusive real-mesh loop flight collision, including adjoining roads; local impact response and physically validated loss checks.
+
 ## Loop motorcycle and broader terrain
 - Keep lightcycle through the entire loop; exact-contact landings and trajectory-preserving impacts.
 - Keep chase camera aimed at the player during loops, including replay.

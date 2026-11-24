@@ -361,29 +361,32 @@ func _cycle_shell(parent: Node3D, material: StandardMaterial3D) -> void:
 
 # The old board remains the glider/gyro/ceiling platform. The cycle
 # folds its wheel carriers into that platform at a surface/flight handoff.
-func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, traveled: float) -> void:
+func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, flip: float, phase: float, landing: float, impact: float, dive_amount: float, speed_factor: float, idle_phase: float, idle_variant: int, drift: float, traveled: float, fall_amount: float) -> void:
 	cycle_amount=amount
 	cycle_fold=1.0-amount
 	lightcycle.visible=amount>0.015
 	if amount<=0.015:
 		return
 	var speed_mix:=clampf(speed_factor,0.0,1.0)
+	var falling:=clampf(fall_amount,0.0,1.0) if airborne else 0.0
+	var drift_float:=falling*sin(phase*3.5)
 	var idle:=sin(PI*idle_phase) if not airborne else 0.0
 	var turn:=clampf(steer+drift*0.65,-1.0,1.0)
 	var lean:=-turn*(0.15+0.30*speed_mix)
 	var jump_pitch:=0.0
 	if airborne:
-		jump_pitch=0.25*sin(PI*clampf(flip,0.0,1.0))-0.36*dive_amount
+		jump_pitch=lerpf(0.25*sin(PI*clampf(flip,0.0,1.0)),-0.32+0.08*drift_float,falling)-0.40*dive_amount
+		lean+=drift_float*0.13
 	elif idle_variant in [1,2]:
 		jump_pitch=idle*(0.10 if idle_variant==1 else -0.10)
 	var bounce:=idle*0.045+0.012*sin(phase*7.0)*(1.0-speed_mix)
-	var compression:=clampf(landing*0.16+impact*0.08+crouch*0.10,0.0,0.26)
+	var compression:=clampf(landing*0.16+impact*0.08+crouch*0.10,0.0,0.26)*(1.0-falling*0.85)
 	# Lean about the tire contact plane; keep the tire off the track.
 	var target_rotation:=Vector3(jump_pitch,turn*0.055,lean)
 	var lift:=0.52*(1.0-cos(lean))+absf(sin(jump_pitch))*1.08+0.025
-	lightcycle.position=Vector3(0,lift+bounce,0)
+	lightcycle.position=Vector3(0,lift+bounce-falling*0.15,falling*0.10)
 	lightcycle.rotation=target_rotation
-	cycle_frame.position=Vector3(0,-compression,0)
+	cycle_frame.position=Vector3(0,-compression+falling*0.06,0)
 	cycle_frame.scale=Vector3(1.0,lerpf(0.24,1.0,amount),lerpf(0.74,1.0,amount))
 	for i in range(2):
 		var fork:=cycle_forks[i]
@@ -394,8 +397,8 @@ func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, fli
 	# Fade from the former rig pose to a real seated pose; hands and feet
 	# are solved against the bike's current steering/compression transforms.
 	var strength:=smoothstep(0.12,0.85,amount)
-	var hip_target:=lightcycle.transform*(cycle_frame.transform*Vector3(0,0.98,0.32))
-	var chest_target:=lightcycle.transform*(cycle_frame.transform*Vector3(0,1.29-speed_mix*0.15-crouch*0.12,-0.08-speed_mix*0.18))
+	var hip_target:=lightcycle.transform*(cycle_frame.transform*Vector3(0,0.98+falling*0.20,0.32+falling*0.08))
+	var chest_target:=lightcycle.transform*(cycle_frame.transform*Vector3(0,1.29-speed_mix*0.15-crouch*0.12+falling*0.24,-0.08-speed_mix*0.18+falling*0.12))
 	var shoulder_target:=chest_target+lightcycle.basis*Vector3(0,0.13,-0.06)
 	var head_target:=shoulder_target+lightcycle.basis*Vector3(0,0.25,-0.10)
 	var hip_value:=hips.position.lerp(hip_target,strength)
@@ -403,12 +406,12 @@ func _cycle_pose(amount: float, steer: float, crouch: float, airborne: bool, fli
 	hips.position=hip_value
 	hips.rotation=hips.rotation.lerp(target_rotation,strength)
 	torso.position=torso.position.lerp(chest_target,strength)
-	torso.rotation=torso.rotation.lerp(Vector3(-0.65-speed_mix*0.30-crouch*0.20,turn*0.06,lean),strength)
+	torso.rotation=torso.rotation.lerp(Vector3(-0.65-speed_mix*0.30-crouch*0.20+falling*0.34,turn*0.06,lean),strength)
 	head.position=head.position.lerp(head_target,strength)
 	head.rotation=head.rotation.lerp(Vector3(-0.12-dive_amount*0.20,-turn*0.17,lean*0.65),strength)
 	for i in range(2):
 		var side:float=-1.0 if i==0 else 1.0
-		var foot_target:=lightcycle.transform*(cycle_frame.transform*Vector3(side*0.43,0.43,0.43))
+		var foot_target:=lightcycle.transform*(cycle_frame.transform*Vector3(side*(0.43+falling*0.18),0.43+falling*0.10,0.43+falling*0.17))
 		var foot:=boots[i].position.lerp(foot_target,strength)
 		var hip_joint:=hip_value+lightcycle.basis*Vector3(side*0.16,0,0)
 		var knee:=_joint(hip_joint,foot,lightcycle.basis*Vector3(side*0.52,0,-1),LEG_LENGTH)
@@ -922,7 +925,7 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 		rotation=Vector3.ZERO
 		visual_lift=0.0
 		visual_pivot=0.0
-	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,float(extra.get("cycle_distance",phase*4.0)))
+	_cycle_pose(cycle_target,steer,crouch,airborne,flip,phase,landing,impact,dive_amount,float(extra.get("speed_factor",0.0)),ground_idle,ground_variant,drift,float(extra.get("cycle_distance",phase*4.0)),float(extra.get("cycle_fall",0.0)))
 	if cycle_target>0.5:
 		for mesh_index in range(2):
 			(board.get_child(mesh_index) as Node3D).visible=false

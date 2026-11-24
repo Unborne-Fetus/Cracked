@@ -77,6 +77,8 @@ var screen_steer_sign := 1.0
 var fallen := false
 var fall_grace := 0.0
 var rider_course: Node3D
+var cycle_fall := 0.0
+var loop_flight_guard := false
 var rider_clearance := 0.0
 var rider_dive := 0.0
 var rider_flourish := 0.0
@@ -142,7 +144,7 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 		return
 	# Legacy collision scale stays independent of the articulated model.
 	rider_model.scale.y = 1.0 / maxf(0.05, avatar.scale.y)
-	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"loop_cycle":on_loop_surface(),"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"lightcycle":true,"cycle_distance":distance,"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
+	rider_model.call("pose", rider_crouch, rider_steer, not grounded, kickflip_progress, rider_phase, rider_landing, rider_impact, rider_dive > 0.5, rider_dive, rider_trick_clock, rider_trick_mix, rider_flourish, rider_bank, rider_brace, {"ground_idle":rider_ground_idle,"loop_cycle":on_loop_surface(),"inverted":rider_inverted,"flip_clear":absf(height)>3.0,"ground_variant":rider_ground_variant,"drift":drift_amount,"sideways":clampf(transform.basis.x.y,-1.0,1.0),"glider":rider_glider,"glider_return":rider_glider_return,"glider_entry":rider_glider_entry,"glider_gyro":rider_glider_gyro,"glider_spin":rider_glider_spin,"glider_clock":glider_trick_clock,"gyro_clock":gyro_trick_clock,"speed_factor":clampf(speed/300.0,0.0,1.0),"lightcycle":true,"cycle_distance":distance,"cycle_fall":cycle_fall,"fp":rider_model.get("first_person_view"),"pose_blend":1.0-exp(-maxf(0.0,delta)*16.0)})
 	var pivot:float=rider_model.get("visual_pivot")
 	var lift:float=rider_model.get("visual_lift")
 	# Correct the inherited bank roll in a separate visual parent.
@@ -166,6 +168,8 @@ func update_rider_sprite(_camera: Camera3D, delta: float = 1.0) -> void:
 	rider_model.position=Vector3(correction.x,(rider_clearance+lift+correction.y)/maxf(0.05,avatar.scale.y),correction.z)
 
 func _update_rider_animation(delta: float) -> void:
+	var fall_target:=smoothstep(0.0,22.0,-air_velocity.y)*smoothstep(0.12,0.45,air_time) if not grounded else 0.0
+	cycle_fall=lerpf(cycle_fall,fall_target,1.0-exp(-delta*8.0))
 	rider_phase = fposmod(rider_phase + delta * (0.75 + clampf(speed / 100.0, 0.0, 1.5)), TAU * 50.0)
 	var target := 0.88 if is_sliding else (0.60 if not grounded else 0.12 * smoothstep(30.0, 120.0, speed))
 	if diving:
@@ -280,6 +284,8 @@ func _update_rider_animation(delta: float) -> void:
 
 func reset_run(course: Node3D) -> void:
 	rider_course = course
+	cycle_fall=0.0
+	loop_flight_guard=false
 	fall_grace = 0.0
 	rider_glider=0.0
 	rider_glider_return=-1.0
@@ -605,6 +611,7 @@ func _finish_landing(course: Node3D) -> void:
 	vertical_speed = 0.0
 	air_time = 0.0
 	grounded = true
+	loop_flight_guard=false
 	double_jump_available = true
 	diving = false
 	landing_timer = LANDING_RECOVERY
@@ -808,6 +815,16 @@ func _recover_bank_contact(course: Node3D, old_pos: Vector3, next_pos: Vector3, 
 	return true
 
 func _check_fall(course: Node3D, point: Vector3, projected: Vector3, delta: float) -> void:
+	if loop_flight_guard or bool(course.call("loop_world_near",point,point,65.0)):
+		if air_velocity.y>=-0.1 or bool(course.call("loop_world_near",point,point,FALL_DEPTH+6.0)):
+			fall_grace=0.0
+			return
+		# Protect any adjacent real road, even when progress is on the
+		# wrong arm. Do not grant protection after falling into the void.
+		var nearby_road: Dictionary=course.call("nearest_loop_surface",point,FALL_DEPTH+6.0,true)
+		if not nearby_road.is_empty():
+			fall_grace=0.0
+			return
 	var spine: Transform3D=course.call("sample",projected.x)
 	if point.y>=spine.origin.y or air_velocity.y>=0.0:
 		fall_grace=0.0
@@ -945,6 +962,16 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 	previous_pos -= shift
 	next_pos -= shift
 	position=previous_pos
+	# In the loop corridor use only world-space mesh intersections.
+	# Do not fall through to any of the approximate projection-based
+	# collision, magnetic contact or obstacle recovery paths.
+	var physical_loop: bool=course.call("loop_world_near",previous_pos,next_pos,32.0)
+	var route_loop: bool=course.call("near_loop",old_s,30.0)
+	if physical_loop or route_loop or (loop_flight_guard and bool(course.call("loop_world_near",previous_pos,next_pos,65.0))):
+		loop_flight_guard=true
+		_resolve_loop_flight(course,previous_pos,next_pos,old_s,predicted_s,delta)
+		return
+	loop_flight_guard=false
 	# Obstacles stop the motion before surface landing can skip past them.
 	var obstacle_projection: Vector3 = course.call("project_position",next_pos,predicted_s)
 	var obstacle_clear0: float = course.call("surface_clearance",old_projection.x,old_projection.y,old_projection.z,1)
@@ -953,35 +980,6 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		var obstacle: Dictionary = course.call("first_obstacle_contact",old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1,1.7)
 		if not obstacle.is_empty():
 			_obstacle_rebound(course,obstacle,old_projection.x,obstacle_projection.x,old_projection.y,obstacle_projection.y,obstacle_clear0,obstacle_clear1)
-			return
-	var loop_near: bool=course.call("loop_world_near",previous_pos,next_pos,4.0)
-	if loop_near:
-		var loop_hit:=_loop_flight_contact(course,previous_pos,next_pos)
-		if not loop_hit.is_empty():
-			var loop_face: Transform3D=loop_hit["frame"]
-			var loop_normal:=loop_face.basis.y
-			var loop_s: float=loop_hit["s"]
-			var loop_lane: float=loop_hit["lane"]
-			var loop_side: int=loop_hit["side"]
-			var loop_probe: int=loop_hit["probe"]
-			if loop_probe<0 and air_basis.y.dot(loop_normal)>0.25 and air_velocity.dot(loop_normal)<0.0:
-				_attach_magnetic_face(course,loop_s,loop_lane,loop_side,loop_face)
-				return
-			# No snap to the opposite arm or through the slab on a head hit.
-			var loop_push:=0.10
-			for probe in range(2):
-				loop_push=maxf(loop_push,_body_support(loop_normal,air_basis,probe)-_body_offset(air_basis,probe).dot(loop_normal)+0.10)
-			# Stop along the physical swept trajectory, not at a reconstructed
-			# track coordinate. Push only as far as the body actually needs.
-			var collision_pos:=previous_pos.lerp(next_pos,float(loop_hit["fraction"]))
-			var normal_gap: float=(collision_pos-loop_face.origin).dot(loop_normal)
-			position=collision_pos+loop_normal*maxf(0.08,loop_push-normal_gap)
-			air_velocity-=loop_normal*minf(0.0,air_velocity.dot(loop_normal))*1.25
-			distance=loop_s
-			lane=loop_lane
-			var top_face: Transform3D=course.call("surface_frame",loop_s,loop_lane,1)
-			height=(position-top_face.origin).dot(top_face.basis.y)
-			transform=Transform3D(air_basis,position)
 			return
 	var stacked_contact:bool=str(course.call("section_name",old_projection.x))=="STACKED ROUTES" or str(course.call("section_name",obstacle_projection.x))=="STACKED ROUTES"
 	if stacked_contact:
@@ -1038,13 +1036,6 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 		else:
 			air_velocity += normal * 0.5
 	var projected: Vector3 = course.call("project_position", next_pos, predicted_s)
-	if bool(course.call("loop_world_near",next_pos,next_pos,12.0)):
-		var projected_face: Transform3D=course.call("surface_frame",projected.x,projected.y,1)
-		if not bool(course.call("support_at",projected.x,projected.y)) or next_pos.distance_to(projected_face.origin)>12.0:
-			var actual: Dictionary=course.call("nearest_loop_surface",next_pos,12.0)
-			if not actual.is_empty() and (absf(float(actual["s"])-old_s)<maxf(20.0,air_velocity.length()*delta*4.0) or not bool(course.call("has_distance",old_s))):
-				var actual_face: Transform3D=course.call("surface_frame",float(actual["s"]),float(actual["lane"]),1)
-				projected=Vector3(float(actual["s"]),float(actual["lane"]),(next_pos-actual_face.origin).dot(actual_face.basis.y))
 	distance = projected.x
 	lane = projected.y
 	height = projected.z
@@ -1263,11 +1254,8 @@ func _loop_flight_contact(course: Node3D, from_pos: Vector3, to_pos: Vector3) ->
 		for probe in range(2):
 			offsets.append(_body_offset(air_basis,probe)+forward*_body_support(forward,air_basis,probe))
 	for i in range(offsets.size()):
-		var hit: Dictionary=course.call("loop_mesh_sweep",from_pos+offsets[i],to_pos+offsets[i])
+		var hit: Dictionary=course.call("loop_mesh_sweep",from_pos+offsets[i],to_pos+offsets[i],true)
 		if hit.is_empty() or float(hit["fraction"])>=earliest:
-			continue
-		var face: Transform3D=hit["frame"]
-		if i>0 and offsets[i].dot(face.basis.y)>0.05:
 			continue
 		earliest=float(hit["fraction"])
 		best=hit
@@ -1276,3 +1264,50 @@ func _loop_flight_contact(course: Node3D, from_pos: Vector3, to_pos: Vector3) ->
 
 func on_loop_surface() -> bool:
 	return grounded and is_instance_valid(rider_course) and str(rider_course.call("section_name",distance))=="LOOP ROUTE"
+
+# Exact mesh-only collision corridor. A miss always continues ballistic
+# motion; a physical hit is the only way to attach to a different arm.
+func _resolve_loop_flight(course: Node3D, previous: Vector3, next: Vector3, old_s: float, predicted_s: float, delta: float) -> void:
+	var hit:=_loop_flight_contact(course,previous,next)
+	if not hit.is_empty():
+		var face: Transform3D=hit["frame"]
+		var normal:=face.basis.y
+		var at: float=hit["s"]
+		var across: float=hit["lane"]
+		var side: int=hit["side"]
+		var collision_pos:=previous.lerp(next,float(hit["fraction"]))
+		var alignment:=air_basis.y.dot(normal)
+		var incoming:=air_velocity.dot(normal)
+		var attachment: Transform3D=course.call("surface_frame",at,across,side)
+		# A supported, wheel-first hit can settle onto the exact same
+		# face. Reject mesh/analytic disagreements or reverse-facing hits.
+		if int(hit["probe"])<0 and alignment>0.25 and incoming<0.0 and collision_pos.distance_to(attachment.origin)<0.85 and bool(course.call("support_at",at,across)):
+			_attach_magnetic_face(course,at,across,side,attachment)
+			return
+		var push:=0.055
+		for probe in range(2):
+			push=maxf(push,_body_support(normal,air_basis,probe)-_body_offset(air_basis,probe).dot(normal)+0.055)
+		var gap: float=(collision_pos-face.origin).dot(normal)
+		# Resolve locally at the swept center, never at another track point.
+		next=collision_pos+normal*clampf(push-gap,0.055,2.4)
+		air_velocity-=normal*minf(0.0,incoming)*1.12
+		fall_grace=0.0
+	# Progress can move only by the distance the rider physically travels.
+	# Do not use an ambiguous nearby arm to rewind or skip a whole loop.
+	var projected: Vector3=course.call("project_position",next,predicted_s)
+	var travel_limit:=maxf(0.35,previous.distance_to(next)*2.5+0.15)
+	distance=clampf(projected.x,maxf(0.0,old_s-travel_limit),old_s+travel_limit)
+	if not bool(course.call("has_distance",distance)):
+		distance=old_s
+	var frame: Transform3D=course.call("sample",distance)
+	var local:=next-frame.origin
+	lane=local.dot(frame.basis.x)
+	if str(course.call("section_name",distance))=="LOOP ROUTE":
+		# Preserve the local lane estimate on the known arm; its position
+		# must never be used to move an airborne rider.
+		lane=clampf(projected.y,-float(course.call("half_width_at",distance))-20.0,float(course.call("half_width_at",distance))+20.0)
+	height=local.dot(frame.basis.y)
+	vertical_speed=air_velocity.dot(frame.basis.y)
+	transform=Transform3D(air_basis,next)
+	speed=maxf(0.0,speed-AIR_DRAG*delta)
+	_check_fall(course,next,Vector3(distance,lane,height),delta)

@@ -1258,17 +1258,18 @@ func _build_mesh(node: Node3D, points: Array[Transform3D], start_s: float, kind:
 			bottom[vertex] = point - normal3 * THICKNESS
 			grid_top[vertex] = point + normal3 * 0.075
 			grid_bottom[vertex] = point - normal3 * (THICKNESS + 0.075)
-	if kind=="LOOP ROUTE":
-		var row_bounds: Array[AABB] = []
-		for row in range(STEPS):
-			var bounds := AABB(top[row*stride],Vector3.ZERO)
-			for column in range(stride):
-				for vertex_index in [row*stride+column,(row+1)*stride+column]:
-					bounds=bounds.expand(top[vertex_index]).expand(bottom[vertex_index])
-			row_bounds.append(bounds.grow(0.05))
-		node.set_meta("loop_top",top)
-		node.set_meta("loop_bottom",bottom)
-		node.set_meta("loop_bounds",row_bounds)
+	# Retain the same vertices for exact near-loop flight collision on
+	# both the loop and the adjoining ordinary road.
+	var row_bounds: Array[AABB] = []
+	for row in range(STEPS):
+		var bounds := AABB(top[row*stride],Vector3.ZERO)
+		for column in range(stride):
+			for vertex_index in [row*stride+column,(row+1)*stride+column]:
+				bounds=bounds.expand(top[vertex_index]).expand(bottom[vertex_index])
+		row_bounds.append(bounds.grow(0.05))
+	node.set_meta("loop_top",top)
+	node.set_meta("loop_bottom",bottom)
+	node.set_meta("loop_bounds",row_bounds)
 	for i in range(STEPS):
 		var s0 := start_s + float(i) * step_length
 		var s1 := s0 + step_length
@@ -1760,7 +1761,7 @@ func loop_mesh_point(node: Node3D, local_s: float, across: float, side: int) -> 
 # Sweep both faces of all locally relevant loop chunks. Exact triangle
 # intersection cannot confuse the ascending and descending arms, and works
 # on newly streamed/rebased geometry before the physics server catches up.
-func loop_mesh_sweep(from_pos: Vector3,to_pos: Vector3) -> Dictionary:
+func loop_mesh_sweep(from_pos: Vector3,to_pos: Vector3,all_roads: bool=false) -> Dictionary:
 	var delta:=to_pos-from_pos
 	if delta.length_squared()<0.00000001:
 		return {}
@@ -1769,7 +1770,8 @@ func loop_mesh_sweep(from_pos: Vector3,to_pos: Vector3) -> Dictionary:
 	var stride:=CROSS_STEPS+1
 	for key in chunks:
 		var data: Dictionary=chunks[key]
-		if data["kind"]!="LOOP ROUTE":
+		var kind: String=data["kind"]
+		if not all_roads and kind!="LOOP ROUTE":
 			continue
 		var node: Node3D=data["node"]
 		if not node.has_meta("loop_bounds"):
@@ -1784,8 +1786,10 @@ func loop_mesh_sweep(from_pos: Vector3,to_pos: Vector3) -> Dictionary:
 			if not query.intersects(bounds[row]):
 				continue
 			for column in range(CROSS_STEPS):
-				var lane0: float=-HALF_WIDTH+float(column)*4.0
-				if not _cell_supported("LOOP ROUTE",float(row)+0.5,lane0+2.0):
+				var width:=width_for_kind(kind,float(row)/float(STEPS))
+				var cell_width:=2.0*width/float(CROSS_STEPS)
+				var lane0: float=-width+float(column)*cell_width
+				if not _cell_supported(kind,float(row)+0.5,lane0+cell_width*0.5):
 					continue
 				var at:=row*stride+column
 				for side: int in [1,-1]:
@@ -1821,8 +1825,17 @@ func loop_mesh_sweep(from_pos: Vector3,to_pos: Vector3) -> Dictionary:
 						var u:=clampf(w1 if triangle==0 else 1.0-w1,0.0,1.0)
 						var v:=clampf(w0 if triangle==0 else 1.0-w0,0.0,1.0)
 						var s:=chunk_starts[int(key)]+(float(row)+u)*(chunk_starts[int(key)+1]-chunk_starts[int(key)])/float(STEPS)
-						var across:=lane0+v*4.0
+						var hit_width:=width_for_kind(kind,(float(row)+u)/float(STEPS))
+						var across:=lerpf(-hit_width,hit_width,(float(column)+v)/float(CROSS_STEPS))
 						var face:=surface_frame(s,across,side)
+						var geometric_normal:=edge0.cross(edge1).normalized()
+						if geometric_normal.dot(face.basis.y)<0.0:
+							geometric_normal=-geometric_normal
+						if geometric_normal.length_squared()>0.5:
+							var forward:=(-face.basis.z).slide(geometric_normal).normalized()
+							if forward.length_squared()>0.5:
+								face.basis=Basis(forward.cross(geometric_normal).normalized(),geometric_normal,-forward)
+						face.origin=node.position+hit_point
 						# Only an entering hit. Ignore a foot starting on the
 						# surface and moving outwards after a jump.
 						if delta.dot(face.basis.y)>=-0.00001:
@@ -1839,13 +1852,14 @@ func near_loop(distance: float, reach: float = 24.0) -> bool:
 
 # Query physical loop geometry without trusting a potentially incorrect
 # route progress value. Return the nearest supported face within radius.
-func nearest_loop_surface(world_pos: Vector3, radius: float) -> Dictionary:
+func nearest_loop_surface(world_pos: Vector3, radius: float, all_roads: bool=false) -> Dictionary:
 	var best: Dictionary={}
 	var best_sq:=radius*radius
 	var stride:=CROSS_STEPS+1
 	for key in chunks:
 		var data: Dictionary=chunks[key]
-		if data["kind"]!="LOOP ROUTE":
+		var kind: String=data["kind"]
+		if not all_roads and kind!="LOOP ROUTE":
 			continue
 		var node: Node3D=data["node"]
 		if not node.has_meta("loop_bounds"):
@@ -1858,8 +1872,10 @@ func nearest_loop_surface(world_pos: Vector3, radius: float) -> Dictionary:
 			if not box.grow(sqrt(best_sq)).has_point(p):
 				continue
 			for column in range(CROSS_STEPS):
-				var lane0: float=-HALF_WIDTH+float(column)*4.0
-				if not _cell_supported("LOOP ROUTE",float(row)+0.5,lane0+2.0):
+				var width:=width_for_kind(kind,float(row)/float(STEPS))
+				var cell_width:=2.0*width/float(CROSS_STEPS)
+				var lane0: float=-width+float(column)*cell_width
+				if not _cell_supported(kind,float(row)+0.5,lane0+cell_width*0.5):
 					continue
 				var vertex:=row*stride+column
 				var a:=top[vertex]
@@ -1891,7 +1907,8 @@ func nearest_loop_surface(world_pos: Vector3, radius: float) -> Dictionary:
 					var v:=clampf(w0 if tri==0 else 1.0-w0,0.0,1.0)
 					var s:=chunk_starts[int(key)]+(float(row)+u)*(chunk_starts[int(key)+1]-chunk_starts[int(key)])/float(STEPS)
 					best_sq=dist_sq
-					best={"s":s,"lane":lane0+v*4.0,"distance":sqrt(dist_sq),"point":closest+node.position}
+					var hit_width:=width_for_kind(kind,(float(row)+u)/float(STEPS))
+					best={"s":s,"lane":lerpf(-hit_width,hit_width,(float(column)+v)/float(CROSS_STEPS)),"distance":sqrt(dist_sq),"point":closest+node.position}
 	return best
 
 func _nearest_triangle(p: Vector3,a: Vector3,b: Vector3,c: Vector3) -> Vector3:

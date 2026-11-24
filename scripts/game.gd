@@ -131,7 +131,7 @@ func _ready() -> void:
 	view_camera.current = true
 	view_camera.fov = 82.0
 	view_camera.near = 0.075
-	view_camera.far = 1600.0
+	view_camera.far = 5200.0
 	add_child(view_camera)
 	extras = ExtrasScript.new()
 	add_child(extras)
@@ -233,14 +233,14 @@ func _create_mountains() -> void:
 			for corner:Vector2 in [Vector2(0,0),Vector2(1,0),Vector2(0,1),Vector2(0,1),Vector2(1,0),Vector2(1,1)]:
 				var u:float=(float(sector)+corner.x)/128.0
 				var v:float=(float(ring)+corner.y)/18.0
-				var radius:=lerpf(380.0,1120.0,v)
+				var radius:=lerpf(1900.0,3900.0,v)
 				st.set_uv(Vector2(u,v))
 				st.add_vertex(Vector3(cos(TAU*u)*radius,0,sin(TAU*u)*radius))
 	mountain_mesh=MeshInstance3D.new()
 	mountain_mesh.mesh=st.commit()
 	mountain_mesh.material_override=mountain_material
 	mountain_mesh.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mountain_mesh.custom_aabb=AABB(Vector3(-1200,-600,-1200),Vector3(2400,1800,2400))
+	mountain_mesh.custom_aabb=AABB(Vector3(-4000,-1000,-4000),Vector3(8000,2200,8000))
 	add_child(mountain_mesh)
 
 func _process(delta: float) -> void:
@@ -249,7 +249,7 @@ func _process(delta: float) -> void:
 		# Work in absolute altitude so floating-origin shifts cannot jerk the horizon.
 		var floor_frame: Transform3D = course.surface_frame(float(runner.distance),0.0,1)
 		var world_shift: Vector3 = course.origin_shift
-		var target_altitude: float = floor_frame.origin.y+world_shift.y-90.0
+		var target_altitude: float = floor_frame.origin.y+world_shift.y-180.0
 		var target_velocity: float = clampf(float(runner.speed)/300.0,0.0,2.0)
 		if not mountain_pose_ready:
 			mountain_altitude=target_altitude
@@ -1440,6 +1440,7 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.gyro_trick_clock=float(state.get("gyro_trick_clock",0.0))
 	runner.drift_amount = float(state.get("drift_amount",0.0))
 	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
+	runner.cycle_fall=float(state.get("cycle_fall",0.0))
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = bool(state["double_jump"])
 	runner.landing_blend = 0.0

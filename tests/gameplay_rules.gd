@@ -1370,6 +1370,28 @@ func _run_tests() -> void:
 	if bool(runner.get("grounded")) or runner.position.distance_to(air_before)>1.0:
 		_fail("Airborne near miss teleported onto loop.")
 		return
+	var fall_cycle: Node3D=runner.get("rider_model")
+	fall_cycle.call("pose",0.6,0.0,true,1.0,0.4,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"cycle_fall":1.0,"speed_factor":0.6})
+	var falling_bike: Node3D=fall_cycle.get("lightcycle")
+	if not falling_bike.visible or falling_bike.rotation.x>=-0.2:
+		_fail("Motorcycle freefall pose is missing.")
+		return
+	# Adjacent ordinary road uses the exact same collision path.
+	var approach_face: Transform3D=course.call("surface_frame",fixture_length-12.0,24.0,1)
+	var road_sweep: Dictionary=course.call("loop_mesh_sweep",approach_face.origin+approach_face.basis.y*3.0,approach_face.origin-approach_face.basis.y*3.0,true)
+	if road_sweep.is_empty() or absf(float(road_sweep["s"])-(fixture_length-12.0))>2.0:
+		_fail("Loop approach road is absent from exact collision.")
+		return
+	# A stale progress estimate cannot produce a storm loss near the loop.
+	var storm_probe: Node3D=game.get("storm")
+	storm_probe.set("front_s",60.0)
+	runner.set("distance",8.0)
+	runner.set("grounded",false)
+	runner.set("loop_flight_guard",true)
+	runner.position=air_face.origin+air_face.basis.y*7.0
+	if bool(storm_probe.call("confirms_catch",0.6,runner,course)):
+		_fail("Incorrect loop progress triggered storm death.")
+		return
 	var sweep_basis: Basis=course.call("_orientation","GRAND TURN",1.0,-1.0,1.0,1.0,1.0)
 	var sweep_start: Basis=course.call("_orientation","GRAND TURN",0.0,-1.0,1.0,1.0,1.0)
 	if (-sweep_start.z).angle_to(-sweep_basis.z)<1.8 or float(course.call("bank_length","GRAND TURN",180.0))<900.0:
