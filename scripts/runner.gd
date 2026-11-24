@@ -35,6 +35,14 @@ var gait := 0.0
 var model: Node3D
 var arms: Array[Node3D] = []
 var legs: Array[Node3D] = []
+var knees: Array[Node3D] = []
+var elbows: Array[Node3D] = []
+var landing_marker: MeshInstance3D
+var landing_mat: StandardMaterial3D
+var marker_clock := 0.0
+var last_landing := ""
+var landing_serial := 0
+var flow_chain := 0
 
 func _ready() -> void:
 	model = Node3D.new()
@@ -56,13 +64,23 @@ func _ready() -> void:
 		var arm := Node3D.new()
 		arm.position = Vector3(side * 0.33, 1.29, 0.0)
 		model.add_child(arm)
-		_part(arm, Vector3(0.0, -0.22, 0.0), Vector3(0.16, 0.48, 0.17), suit)
+		_part(arm, Vector3(0.0, -0.13, 0.0), Vector3(0.17, 0.29, 0.19), suit)
+		var elbow := Node3D.new()
+		elbow.position.y = -0.26
+		arm.add_child(elbow)
+		_part(elbow, Vector3(0.0, -0.13, 0.0), Vector3(0.14, 0.28, 0.15), dark)
+		elbows.append(elbow)
 		arms.append(arm)
 		var leg := Node3D.new()
 		leg.position = Vector3(side * 0.14, 0.75, 0.0)
 		model.add_child(leg)
-		_part(leg, Vector3(0.0, -0.30, 0.0), Vector3(0.20, 0.64, 0.20), dark)
-		_part(leg, Vector3(0.0, -0.65, -0.065), Vector3(0.22, 0.14, 0.35), accent)
+		_part(leg, Vector3(0.0, -0.17, 0.0), Vector3(0.22, 0.37, 0.23), dark)
+		var knee := Node3D.new()
+		knee.position.y = -0.34
+		leg.add_child(knee)
+		_part(knee, Vector3(0.0, -0.13, 0.0), Vector3(0.18, 0.29, 0.18), suit)
+		_part(knee, Vector3(0.0, -0.31, -0.075), Vector3(0.22, 0.15, 0.37), accent)
+		knees.append(knee)
 		legs.append(leg)
 	# Original scarf silhouette, with a world-space speed ribbon.
 	scarf = Node3D.new()
@@ -78,6 +96,21 @@ func _ready() -> void:
 	trail_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	trail_material.vertex_color_use_as_albedo = true
 	add_child(trail)
+	landing_marker = MeshInstance3D.new()
+	var ring := TorusMesh.new()
+	ring.inner_radius = 1.3
+	ring.outer_radius = 1.58
+	ring.rings = 24
+	ring.ring_segments = 8
+	landing_marker.mesh = ring
+	landing_marker.top_level = true
+	landing_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	landing_mat = StandardMaterial3D.new()
+	landing_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	landing_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	landing_marker.material_override = landing_mat
+	add_child(landing_marker)
+	landing_marker.hide()
 
 func _material(color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -110,6 +143,11 @@ func reset(course: Node3D) -> void:
 	bad_landings = 0
 	aim_steer = 0.0
 	landing_compression = 0.0
+	last_landing = ""
+	landing_serial = 0
+	flow_chain = 0
+	marker_clock = 0.0
+	landing_marker.hide()
 	trail_samples.clear()
 	trail_mesh.clear_surfaces()
 	trail_clock = 0.0
@@ -121,6 +159,7 @@ func reset(course: Node3D) -> void:
 	gait = 0.0
 	position = Vector3(0.0, float(course.call("elevation", 0.0, 0.0)) + FOOT, 0.0)
 	model.rotation = Vector3.ZERO
+	model.scale = Vector3.ONE
 
 func progress() -> float:
 	return -position.z
@@ -206,13 +245,17 @@ func tick(dt: float, course: Node3D) -> void:
 			break
 	_pose(dt, course)
 	_update_trail(dt)
+	marker_clock -= dt
+	if marker_clock <= 0.0:
+		marker_clock = 0.075
+		_update_landing_marker(course, dive)
 
 func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 	land_lock = maxf(0.0, land_lock - dt)
 	var old := position
 	var s := -position.z
 	var g: Vector2 = course.call("grade", position.x, s)
-	var target_lateral := steer * minf(72.0, speed * 0.74)
+	var target_lateral := steer * minf(68.0, speed * 0.66)
 	lateral = lerpf(lateral, target_lateral, 1.0 - exp(-dt * (8.0 if grounded else 4.0)))
 	if boost_queued:
 		_activate_boost()
@@ -229,11 +272,17 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 			air_time = 0.0
 			land_lock = 0.075
 	if grounded:
-		position.x += lateral * dt
-		position.z -= speed * dt
-		position.y = float(course.call("elevation", position.x, -position.z)) + FOOT
-		diving = false
-	else:
+		var next_ground := position + Vector3(lateral, 0.0, -speed) * dt
+		if not bool(course.call("has_ground", next_ground.x, -next_ground.z)):
+			grounded = false
+			vy = g.y * speed + g.x * lateral
+			air_time = 0.0
+			land_lock = 0.0
+		else:
+			position = next_ground
+			position.y = float(course.call("elevation", position.x, -position.z)) + FOOT
+			diving = false
+	if not grounded:
 		air_time += dt
 		diving = dive
 		# Hold to descend, release to preserve airtime. Boost briefly floats.
@@ -241,14 +290,21 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 		speed = maxf(22.0, speed - 0.14 * dt)
 		var next := position + Vector3(lateral, vy, -speed) * dt
 		var next_floor := float(course.call("elevation", next.x, -next.z)) + FOOT
+		var support: bool = course.call("has_ground", next.x, -next.z)
+		if support and not bool(course.call("has_ground", old.x, -old.z)) and next.y < next_floor - 0.5:
+			fallen = true
+			return
+		if next.y < next_floor - 32.0:
+			fallen = true
+			return
 		# Substeps and a bracketed crossing prevent tunneling at high speed.
-		if next.y <= next_floor and (land_lock <= 0.0 or vy < 0.0):
+		if support and next.y <= next_floor and (land_lock <= 0.0 or vy < 0.0):
 			var low := 0.0
 			var high := 1.0
 			for i in range(9):
 				var mid := (low + high) * 0.5
 				var p := old.lerp(next, mid)
-				if p.y > float(course.call("elevation", p.x, -p.z)) + FOOT:
+				if not bool(course.call("has_ground", p.x, -p.z)) or p.y > float(course.call("elevation", p.x, -p.z)) + FOOT:
 					low = mid
 				else:
 					high = mid
@@ -259,10 +315,13 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 			var quality := landing_quality(velocity, normal, slope.y)
 			if air_time >= 0.10:
 				speed = landing_speed(velocity, normal, slope.y, diving)
+				last_landing = quality
+				landing_serial += 1
+				flow_chain = flow_chain + 1 if quality == "PERFECT" or quality == "GOOD" else 0
 				match quality:
 					"PERFECT":
 						perfect_landings += 1
-						energy = minf(100.0, energy + 22.0 + minf(10.0, air_time * 4.0))
+						energy = minf(100.0, energy + 22.0 + minf(10.0, air_time * 4.0) + minf(8.0, float(flow_chain) * 2.0))
 					"GOOD":
 						good_landings += 1
 						energy = minf(100.0, energy + 12.0)
@@ -275,16 +334,19 @@ func _step(dt: float, course: Node3D, steer: float, dive: bool) -> void:
 				landing_compression = 1.0
 			position.y = float(course.call("elevation", position.x, -position.z)) + FOOT
 			vy = 0.0
+			landing_marker.hide()
 			grounded = true
 			land_lock = 0.14
 			air_time = 0.0
 		else:
 			position = next
-	if absf(position.x) > 110.0:
+	if absf(position.x) > 125.0:
 		fallen = true
+		landing_marker.hide()
 		return
 	if bool(course.call("obstacle_hit", old, position)):
-		speed = maxf(14.0, speed * 0.60)
+		speed = maxf(22.0, speed * 0.60)
+		flow_chain = 0
 		cue = "MOMENTUM LOST"
 		cue_time = 0.65
 
@@ -303,6 +365,8 @@ func _pose(dt: float, course: Node3D) -> void:
 		var stride := sin(gait) * sign_value * 0.85 if grounded else (-0.45 if diving else sign_value * 0.25)
 		legs[i].rotation.x = lerpf(legs[i].rotation.x, stride, 1.0 - exp(-dt * 18.0))
 		arms[i].rotation.x = lerpf(arms[i].rotation.x, -stride if grounded else (1.0 if diving else -0.7), 1.0 - exp(-dt * 18.0))
+		knees[i].rotation.x = lerpf(knees[i].rotation.x, (0.18 + maxf(0.0, -stride) * 1.15) if grounded else (0.95 if diving else 0.65), 1.0 - exp(-dt * 17.0))
+		elbows[i].rotation.x = lerpf(elbows[i].rotation.x, -1.25 if grounded else (-0.5 if diving else -0.85), 1.0 - exp(-dt * 16.0))
 
 func _update_trail(dt: float) -> void:
 	trail_clock += dt
@@ -327,3 +391,46 @@ func _update_trail(dt: float) -> void:
 		trail_mesh.surface_set_color(tint)
 		trail_mesh.surface_add_vertex(local + Vector3.RIGHT * width)
 	trail_mesh.surface_end()
+
+# Predict the landing using the same acceleration, horizontal drag and support
+# test as flight. The marker is deliberately absent on ground and over void.
+func predict_landing(course: Node3D, dive: bool) -> Dictionary:
+	if grounded or fallen:
+		return {}
+	var p := position
+	var vertical := vy
+	var forward := speed
+	var remaining_boost := boost_time
+	var step := 1.0 / 60.0
+	for i in range(180):
+		var was_boosting := remaining_boost > 0.0
+		if was_boosting:
+			forward = minf(MAX_SPEED, forward + 31.0 * step)
+			remaining_boost = maxf(0.0, remaining_boost - step)
+		vertical -= GRAVITY * (2.5 if dive else (0.45 if remaining_boost > 0.0 else 1.0)) * step
+		forward = maxf(22.0, forward - 0.14 * step)
+		var next := p + Vector3(lateral, vertical, -forward) * step
+		var floor_y: float = course.call("elevation", next.x, -next.z)
+		var supported: bool = course.call("has_ground", next.x, -next.z)
+		if supported and next.y <= floor_y + FOOT:
+			if not bool(course.call("has_ground", p.x, -p.z)) and next.y < floor_y - 0.5:
+				return {}
+			var n: Vector3 = course.call("normal_at", next.x, -next.z)
+			var slope: Vector2 = course.call("grade", next.x, -next.z)
+			return {"point": Vector3(next.x, floor_y, next.z), "normal": n, "quality": landing_quality(Vector3(lateral, vertical, -forward), n, slope.y)}
+		if next.y < floor_y - 32.0 or absf(next.x) > 125.0:
+			return {}
+		p = next
+	return {}
+
+func _update_landing_marker(course: Node3D, dive: bool) -> void:
+	var prediction := predict_landing(course, dive)
+	if prediction.is_empty():
+		landing_marker.hide()
+		return
+	var normal: Vector3 = prediction["normal"]
+	var right := Vector3.RIGHT.slide(normal).normalized()
+	landing_marker.global_transform = Transform3D(Basis(right, normal, right.cross(normal).normalized()), (prediction["point"] as Vector3) + normal * 0.22)
+	var quality: String = prediction["quality"]
+	landing_mat.albedo_color = Color(0.45, 1.0, 0.70, 0.88) if quality == "PERFECT" else (Color(0.98, 0.83, 0.32, 0.85) if quality == "GOOD" or quality == "OK" else Color(1.0, 0.34, 0.34, 0.85))
+	landing_marker.show()

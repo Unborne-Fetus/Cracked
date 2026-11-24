@@ -16,3 +16,5 @@ Development: Godot 4.7.2, Web export preset. Generate the original soundtrack us
 Prior momentum version: 8de9f3d399cf39e72a358b9536435e6603918ff8. Rhythm-action experiment: 36fce16eb0447bdcc243344e38b84398b1c073be. Both remain in Git history. This is a movement prototype, not a full recreation of Haste.
 
 Three attempts per expedition, deterministic retry terrain, completion grades and consecutive worlds. Original music and art; controls and values are independently implemented.
+
+Flow expansion: true procedural ravines with alternate corridors, support-aware flight, a colored landing prediction ring, articulated knees and elbows, landing-chain rewards, speed-sensitive camera, floating spires and two seeded route choices between stages. Terrain and route visuals use original procedural assets.

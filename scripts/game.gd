@@ -37,6 +37,14 @@ var world_seed := 0
 var camera_initialized := false
 var pad_pause := false
 var touch_mode := false
+var last_landing_serial := 0
+var camera_impact := 0.0
+var finish_marker: MeshInstance3D
+var sky_environment: Environment
+var world_choice: HBoxContainer
+var next_route := 0
+var route_name := "Meadow"
+var route_buttons: Array[Button] = []
 
 func _ready() -> void:
 	var world := WorldEnvironment.new()
@@ -50,6 +58,7 @@ func _ready() -> void:
 	env.fog_light_color = Color(0.62, 0.75, 0.85)
 	env.fog_density = 0.0017
 	world.environment = env
+	sky_environment = env
 	add_child(world)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
@@ -114,10 +123,15 @@ func _reset_stage() -> void:
 	storm_s = -130.0
 	storm_speed = 17.0 + float(stage - 1) * 0.8
 	caught = 0.0
-	course.call("reset", world_seed + stage * 7919, stage)
+	course.call("reset", world_seed + stage * 7919 + next_route * 104729, stage)
 	runner.call("reset", course)
 	var length: float = course.get("length")
 	gate.position = Vector3(0.0, float(course.call("elevation", 0.0, length)), -length)
+	last_landing_serial = 0
+	camera_impact = 0.0
+	var skies: Array[Color] = [Color(0.51, 0.71, 0.86), Color(0.88, 0.61, 0.53), Color(0.43, 0.53, 0.78)]
+	sky_environment.background_color = skies[(stage - 1 + next_route) % skies.size()]
+	sky_environment.fog_light_color = sky_environment.background_color.lerp(Color.WHITE, 0.18)
 	camera_ready = false
 	camera_initialized = false
 	collapse.position = Vector3(0.0, float(course.call("elevation", 0.0, storm_s)) + 25.0, -storm_s)
@@ -189,6 +203,11 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	if status == "running":
+		var serial: int = runner.get("landing_serial")
+		if serial != last_landing_serial:
+			last_landing_serial = serial
+			camera_impact = 0.32 if str(runner.get("last_landing")) == "BAD" else 0.12
+		camera_impact = move_toward(camera_impact, 0.0, delta * 1.6)
 		_update_camera(delta)
 		_update_hud()
 
@@ -201,17 +220,21 @@ func _update_camera(delta: float) -> void:
 	var target_arm := -forward * pullback + Vector3.UP * lerpf(3.5, 5.8, smoothstep(25.0, 145.0, v))
 	camera_arm = camera_arm.lerp(target_arm, 1.0 - exp(-delta * 5.0)) if camera_ready else target_arm
 	camera_ready = true
-	camera.position = p + camera_arm
+	camera.position = p + camera_arm + Vector3.DOWN * camera_impact
 	camera.position.y = maxf(camera.position.y, float(course.call("elevation", camera.position.x, -camera.position.z)) + 2.4)
 	var look_ahead := lerpf(10.0, 24.0, smoothstep(30.0, 150.0, v))
 	var target := p + forward * look_ahead + Vector3.UP * 1.1
+	if not bool(runner.get("grounded")):
+		look_ahead += minf(v * 0.16, 19.0)
+		target = p + forward * look_ahead + Vector3.UP * 0.8
 	var ground_ahead: float = course.call("elevation", target.x, -target.z)
 	target.y = lerpf(target.y, ground_ahead + 2.0, 0.25 if bool(runner.get("grounded")) else 0.48)
 	var direction := (target - camera.position).normalized()
 	var desired := Basis.looking_at(direction, Vector3.UP)
 	camera.basis = camera.basis.slerp(desired, 1.0 - exp(-delta * 8.0)).orthonormalized() if camera_initialized else desired
 	camera_initialized = true
-	camera.fov = lerpf(camera.fov, lerpf(76.0, 104.0, smoothstep(20.0, 155.0, v)), 1.0 - exp(-delta * 3.0))
+	var boost_fov := 5.0 if float(runner.get("boost_time")) > 0.0 else 0.0
+	camera.fov = lerpf(camera.fov, lerpf(76.0, 107.0, smoothstep(20.0, 155.0, v)) + boost_fov, 1.0 - exp(-delta * 4.0))
 
 func _label(text_value: String, size_value: int) -> Label:
 	var l := Label.new()
@@ -310,6 +333,14 @@ func _make_ui() -> void:
 	action_button = _button("START")
 	stack.add_child(action_button)
 	action_button.pressed.connect(_primary)
+	world_choice = HBoxContainer.new()
+	stack.add_child(world_choice)
+	for i in range(2):
+		var choice := _button("RIDGE ROUTE" if i == 0 else "VALLEY ROUTE")
+		choice.pressed.connect(func() -> void: next_route = i; _primary())
+		world_choice.add_child(choice)
+		route_buttons.append(choice)
+	world_choice.hide()
 	menu_button = _button("RESTART RUN")
 	stack.add_child(menu_button)
 	menu_button.pressed.connect(func() -> void: _new_expedition(); _start())
@@ -338,10 +369,15 @@ func _show(value: String, title: String, detail: String, action: String) -> void
 	heading.text = title
 	subtitle.text = detail
 	action_button.text = action
+	world_choice.visible = value == "complete"
+	action_button.visible = value != "complete"
 	menu_button.visible = value != "ready"
 	touch_controls.hide()
 	cue_label.hide()
-	action_button.grab_focus()
+	if value == "complete":
+		route_buttons[0].grab_focus()
+	else:
+		action_button.grab_focus()
 
 func _start() -> void:
 	status = "running"
@@ -369,6 +405,7 @@ func _new_expedition() -> void:
 	stage = 1
 	lives = 3
 	world_seed = randi()
+	next_route = 0
 	_reset_stage()
 
 func _toggle_pause() -> void:
@@ -393,6 +430,10 @@ func _input(event: InputEvent) -> void:
 				if status != "running":
 					_primary()
 				get_viewport().set_input_as_handled()
+			KEY_LEFT, KEY_RIGHT:
+				if status == "complete":
+					next_route = 0 if event.physical_keycode == KEY_LEFT else 1
+					route_buttons[next_route].grab_focus()
 			KEY_F:
 				if status == "running":
 					runner.call("request_boost")

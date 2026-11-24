@@ -4,6 +4,9 @@ const CHUNK := 160.0
 const HALF_WIDTH := 110.0
 const CELL := 4.0
 var phase := 0.0
+var seed_value_saved := 0
+var ridge_material: StandardMaterial3D
+var ridge_mesh: CylinderMesh
 var stage := 1
 var length := 2400.0
 var chunks: Dictionary = {}
@@ -24,6 +27,14 @@ func _ready() -> void:
 	rock_mesh.height = 2.0
 	rock_mesh.radial_segments = 7
 	rock_mesh.rings = 4
+	ridge_material = StandardMaterial3D.new()
+	ridge_material.albedo_color = Color(0.39, 0.39, 0.54)
+	ridge_material.roughness = 1.0
+	ridge_mesh = CylinderMesh.new()
+	ridge_mesh.top_radius = 0.18
+	ridge_mesh.bottom_radius = 1.0
+	ridge_mesh.height = 2.0
+	ridge_mesh.radial_segments = 5
 
 func reset(seed_value: int, stage_value: int) -> void:
 	for data in chunks.values():
@@ -32,6 +43,7 @@ func reset(seed_value: int, stage_value: int) -> void:
 		node.queue_free()
 	chunks.clear()
 	stage = stage_value
+	seed_value_saved = seed_value
 	length = 2400.0 + float(mini(stage - 1, 6)) * 300.0
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
@@ -39,16 +51,33 @@ func reset(seed_value: int, stage_value: int) -> void:
 	stream(0.0)
 
 func elevation(x: float, s: float) -> float:
-	# First hill is consistent: accelerating approach, valley, then crest.
-	# Seeded variation blends in smoothly beyond the opening.
-	var blend := smoothstep(80.0, 240.0, s)
-	var local_phase := phase * blend
-	var a := 15.0 * cos(s * 0.038 + local_phase)
-	var b := 5.0 * sin(s * 0.069 + local_phase * 0.61)
-	var c := 8.5 * sin(s * 0.018 + x * 0.042 + local_phase)
-	var d := 4.0 * cos(x * 0.072 - s * 0.012)
-	var hill_scale := 1.0 + minf(float(stage - 1) * 0.045, 0.30)
-	return -s * 0.09 + (a + b + c + d) * hill_scale
+	# Smoothly vary wavelength and phase so there is no repeating single sine hill.
+	var blend := smoothstep(75.0, 250.0, s)
+	var phase_offset := phase * blend
+	var wavelength := 0.034 + 0.004 * sin(s * 0.0019 + phase)
+	var a := 17.0 * cos(s * 0.036 + phase_offset + 0.40 * sin(s * 0.009))
+	var b := 4.5 * sin(s * 0.067 + phase_offset * 0.61)
+	var c := 10.0 * sin(s * 0.019 + x * 0.037 + phase_offset)
+	var d := 4.5 * cos(x * 0.065 - s * 0.011)
+	var rolling := 3.2 * sin(s * wavelength + x * 0.012)
+	var hill_scale := 1.0 + minf(float(stage - 1) * 0.042, 0.28)
+	return -s * 0.105 + (a + b + c + d + rolling) * hill_scale
+
+# Each ravine is a real rectangular hole. An alternate corridor always exists.
+func gap_rect(index: int) -> Rect2:
+	if index < 3 or posmod(index - 3, 4 if stage == 1 else 3) != 0 or float(index) * CHUNK > length - 250.0:
+		return Rect2()
+	var direction := posmod(seed_value_saved + index, 2)
+	var start_x := -HALF_WIDTH if direction == 0 else -18.0
+	var width := 128.0
+	var start_s := float(index) * CHUNK + 64.0
+	return Rect2(start_x, start_s, width, 28.0 + 4.0 * float(mini(stage - 1, 3)))
+
+func has_ground(x: float, s: float) -> bool:
+	if absf(x) > HALF_WIDTH:
+		return false
+	var rect := gap_rect(int(floor(s / CHUNK)))
+	return not rect.has_area() or not rect.has_point(Vector2(x, s))
 
 func grade(x: float, s: float) -> Vector2:
 	var e := 0.25
@@ -87,6 +116,8 @@ func _build(index: int) -> void:
 		var s := start + float(row) * CELL
 		for col in range(int(HALF_WIDTH * 2.0 / CELL)):
 			var x := -HALF_WIDTH + float(col) * CELL
+			if not has_ground(x + CELL * 0.5, s + CELL * 0.5):
+				continue
 			_vertex(st, x, s, start)
 			_vertex(st, x, s + CELL, start)
 			_vertex(st, x + CELL, s, start)
@@ -98,14 +129,27 @@ func _build(index: int) -> void:
 		var s := start + float(row) * CELL
 		for side in [-1.0, 1.0]:
 			var x: float = side * HALF_WIDTH
+			if not has_ground(x - float(side) * 0.1, s + CELL * 0.5):
+				continue
 			var a := Vector3(x, elevation(x, s), -(s - start))
 			var b := Vector3(x, elevation(x, s + CELL), -(s + CELL - start))
-			var lower_a := a - Vector3.UP * 30.0 - Vector3.RIGHT * side * 8.0
-			var lower_b := b - Vector3.UP * 30.0 - Vector3.RIGHT * side * 8.0
+			var lower_a: Vector3 = a - Vector3.UP * 30.0 - Vector3.RIGHT * float(side) * 8.0
+			var lower_b: Vector3 = b - Vector3.UP * 30.0 - Vector3.RIGHT * float(side) * 8.0
 			for point in [a, b, lower_a, lower_a, b, lower_b]:
 				st.set_color(Color(0.28, 0.22, 0.32))
 				st.set_normal(Vector3(side, 0.0, 0.0))
 				st.add_vertex(point)
+	var gap := gap_rect(index)
+	if gap.has_area():
+		# Cliff faces are generated from the same bounds as collision.
+		for border_s in [gap.position.y, gap.end.y]:
+			for col in range(int(gap.size.x / CELL)):
+				var x := gap.position.x + float(col) * CELL
+				_cliff(st, Vector2(x, float(border_s)), Vector2(x + CELL, float(border_s)), start)
+		var border_x := gap.end.x if gap.position.x < -100.0 else gap.position.x
+		for row in range(int(gap.size.y / CELL)):
+			var s := gap.position.y + float(row) * CELL
+			_cliff(st, Vector2(border_x, s), Vector2(border_x, s + CELL), start)
 	st.index()
 	var ground := MeshInstance3D.new()
 	ground.mesh = st.commit()
@@ -118,6 +162,8 @@ func _build(index: int) -> void:
 		for i in range(3 + mini(stage - 1, 2)):
 			var at := start + 24.0 + float(i) * 27.0 + rng.randf_range(-5.0, 5.0)
 			var across := rng.randf_range(-65.0, 65.0)
+			if not has_ground(across, at) or absf(across) < 9.0:
+				continue
 			var radius := rng.randf_range(2.0, 4.8)
 			var rock := MeshInstance3D.new()
 			rock.mesh = rock_mesh
@@ -127,7 +173,32 @@ func _build(index: int) -> void:
 			rock.rotation.y = rng.randf_range(0.0, TAU)
 			node.add_child(rock)
 			rocks.append({"x": across, "s": at, "r": radius, "used": false})
+	# Side silhouettes and contrasting landmarks provide genuine speed reference.
+	for i in range(6):
+		var across := (-1.0 if i % 2 == 0 else 1.0) * rng.randf_range(72.0, 99.0)
+		var at := start + 12.0 + float(i) * 23.0
+		if not has_ground(across, at):
+			continue
+		var spire := MeshInstance3D.new()
+		spire.mesh = ridge_mesh
+		spire.material_override = ridge_material
+		var tall := rng.randf_range(5.0, 14.0)
+		spire.scale = Vector3(rng.randf_range(1.4, 3.6), tall, rng.randf_range(1.4, 3.6))
+		spire.position = Vector3(across, elevation(across, at) + tall * 0.72, -(at - start))
+		spire.rotation.y = rng.randf_range(0.0, TAU)
+		node.add_child(spire)
+		rocks.append({"x": across, "s": at, "r": maxf(spire.scale.x, spire.scale.z), "used": false, "height": tall * 1.72})
 	chunks[index] = {"node": node, "rocks": rocks}
+
+func _cliff(st: SurfaceTool, a: Vector2, b: Vector2, start: float) -> void:
+	var va := Vector3(a.x, elevation(a.x, a.y), -(a.y - start))
+	var vb := Vector3(b.x, elevation(b.x, b.y), -(b.y - start))
+	var normal := (vb - va).cross(Vector3.DOWN).normalized()
+	for point in [va, vb, va - Vector3.UP * 34.0, va - Vector3.UP * 34.0, vb, vb - Vector3.UP * 34.0]:
+		st.set_normal(normal)
+		st.set_color(Color(0.29, 0.23, 0.36))
+		st.add_vertex(point)
+
 
 func stream(s: float) -> void:
 	var current := int(floor(s / CHUNK))
@@ -155,7 +226,7 @@ func obstacle_hit(a: Vector3, b: Vector3) -> bool:
 			var origin := Vector2(a.x, -a.z)
 			var t := clampf((center - origin).dot(line) / maxf(0.001, line.length_squared()), 0.0, 1.0)
 			var radius: float = rock["r"]
-			if (origin + line * t).distance_to(center) < radius + 0.45 and lerpf(a.y, b.y, t) < elevation(center.x, center.y) + radius * 1.5:
+			if (origin + line * t).distance_to(center) < radius + 0.45 and lerpf(a.y, b.y, t) < elevation(center.x, center.y) + float(rock.get("height", radius * 1.5)):
 				rock["used"] = true
 				return true
 	return false
