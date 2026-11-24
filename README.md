@@ -18,3 +18,6 @@ Prior momentum version: 8de9f3d399cf39e72a358b9536435e6603918ff8. Rhythm-action 
 Three attempts per expedition, deterministic retry terrain, completion grades and consecutive worlds. Original music and art; controls and values are independently implemented.
 
 Flow expansion: true procedural ravines with alternate corridors, support-aware flight, a colored landing prediction ring, articulated knees and elbows, landing-chain rewards, speed-sensitive camera, floating spires and two seeded route choices between stages. Terrain and route visuals use original procedural assets.
+
+## Shard expedition
+Ten unlockable shards, each with three worlds and a final guardian escape challenge. Choose one of three route profiles; collect sparks, buy from a seeded three-item shop, and build upgrades that persist through the shard (but not into a new expedition). Failed attempts discard unbanked sparks. Guardian waves are telegraphed terrain hazards, avoidable by steering or staying airborne. Shard unlocks persist locally. All values and content are original, and this is still a prototype, not full parity with Haste.

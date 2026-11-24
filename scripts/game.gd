@@ -1,6 +1,18 @@
 extends Node3D
 const Terrain = preload("res://scripts/course.gd")
 const Runner = preload("res://scripts/runner.gd")
+const Expedition = preload("res://scripts/expedition.gd")
+const Guardian = preload("res://scripts/guardian.gd")
+var expedition = Expedition.new()
+var guardian: Node3D
+var selected_shard := 1
+var unlocked_shard := 1
+var shard_picker: OptionButton
+var shop_box: VBoxContainer
+var shop_label: Label
+var shop_buttons: Array[Button] = []
+var expedition_label: Label
+var last_collected := 0
 var course: Node3D
 var runner: Node3D
 var camera: Camera3D
@@ -69,6 +81,8 @@ func _ready() -> void:
 	add_child(course)
 	runner = Runner.new()
 	add_child(runner)
+	guardian = Guardian.new()
+	add_child(guardian)
 	camera = Camera3D.new()
 	camera.current = true
 	camera.fov = 80.0
@@ -92,9 +106,11 @@ func _ready() -> void:
 	if config.load("user://velocity_flow.cfg") == OK:
 		best = float(config.get_value("record", "distance", 0.0))
 		music_enabled = bool(config.get_value("options", "music", true))
+		unlocked_shard = clampi(int(config.get_value("campaign", "unlocked", 1)), 1, Expedition.SHARD_COUNT)
 	_make_ui()
 	_configure_music()
 	world_seed = randi()
+	expedition.begin(selected_shard, world_seed)
 	_reset_stage()
 	_show("ready", "VECTOR VELOCITY", "Find the next downslope. Dive to land. Escape the collapse.", "START RUN")
 
@@ -121,10 +137,15 @@ func _make_gate() -> void:
 func _reset_stage() -> void:
 	elapsed = 0.0
 	storm_s = -130.0
-	storm_speed = 17.0 + float(stage - 1) * 0.8
+	stage = (expedition.shard - 1) * 3 + expedition.world
+	lives = expedition.attempts
+	storm_speed = 17.0 + float(mini(stage - 1, 16)) * 0.65 + (3.0 if expedition.guardian() else 0.0)
 	caught = 0.0
-	course.call("reset", world_seed + stage * 7919 + next_route * 104729, stage)
+	course.call("reset", expedition.terrain_seed(), stage, expedition.route, expedition.guardian())
 	runner.call("reset", course)
+	runner.call("apply_upgrades", expedition.items)
+	guardian.call("reset", expedition.guardian(), expedition.terrain_seed())
+	last_collected = 0
 	var length: float = course.get("length")
 	gate.position = Vector3(0.0, float(course.call("elevation", 0.0, length)), -length)
 	last_landing_serial = 0
@@ -141,6 +162,7 @@ func _reset_stage() -> void:
 func _save() -> void:
 	var config := ConfigFile.new()
 	config.set_value("record", "distance", best)
+	config.set_value("campaign", "unlocked", unlocked_shard)
 	config.set_value("options", "music", music_enabled)
 	config.save("user://velocity_flow.cfg")
 
@@ -171,7 +193,7 @@ func _physics_process(delta: float) -> void:
 		boost_input = boost_input or Input.is_joy_button_pressed(id, JOY_BUTTON_RIGHT_SHOULDER)
 	if pause_input and not pad_pause:
 		_toggle_pause()
-	if jump and not pad_jump and status in ["ready", "lost", "complete", "paused"]:
+	if jump and not pad_jump and status in ["ready", "lost", "complete", "paused", "shard_complete"]:
 		_primary()
 	if boost_input and not pad_boost and status == "running":
 		runner.call("request_boost")
@@ -181,7 +203,13 @@ func _physics_process(delta: float) -> void:
 	if status != "running":
 		return
 	elapsed += delta
+	var old := runner.position
 	runner.call("tick", delta, course)
+	guardian.call("tick", course, runner, old)
+	var new_collected: int = runner.get("collected")
+	if new_collected > last_collected:
+		expedition.collect(new_collected - last_collected)
+		last_collected = new_collected
 	var s: float = runner.call("progress")
 	course.call("stream", s)
 	storm_speed += delta * (0.52 + 0.008 * elapsed)
@@ -192,14 +220,22 @@ func _physics_process(delta: float) -> void:
 	if bool(runner.get("fallen")) or caught > 0.35:
 		best = maxf(best, s)
 		_save()
-		lives -= 1
+		expedition.fail_world()
+		lives = expedition.attempts
 		var reason := "The collapse caught you." if caught > 0.35 else "You left the world."
 		_show("lost", "WORLD LOST", reason + ("  •  %d attempts left" % lives if lives > 0 else "  •  Expedition ended"), "TRY AGAIN" if lives > 0 else "NEW EXPEDITION")
 	elif s >= float(course.get("length")):
 		best = maxf(best, s)
 		_save()
-		var rank := "S" if elapsed < 28.0 else ("A" if elapsed < 38.0 else ("B" if elapsed < 52.0 else "C"))
-		_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d good landings  •  %d attempts left" % [runner.get("perfect_landings"), runner.get("good_landings"), lives], "NEXT WORLD")
+		var pace := float(course.get("length")) / maxf(elapsed, 0.01)
+		var rank := "S" if pace >= 90.0 else ("A" if pace >= 65.0 else ("B" if pace >= 46.0 else "C"))
+		expedition.finish_world(float(course.get("length")), elapsed, int(runner.get("perfect_landings")))
+		if expedition.complete:
+			unlocked_shard = maxi(unlocked_shard, mini(expedition.shard + 1, Expedition.SHARD_COUNT))
+			_save()
+			_show("shard_complete", "SHARD CLEARED  /  " + rank, "%s  •  %.0f m in %.1f s" % [expedition.title(), expedition.total_distance, expedition.total_time], "NEXT SHARD" if expedition.shard < Expedition.SHARD_COUNT else "NEW EXPEDITION")
+		else:
+			_show("complete", "WORLD CLEARED  /  " + rank, "%d perfect landings  •  %d attempts left" % [runner.get("perfect_landings"), lives], "NEXT WORLD")
 
 func _process(delta: float) -> void:
 	if status == "running":
@@ -278,6 +314,8 @@ func _make_ui() -> void:
 	energy_meter.show_percentage = false
 	energy_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stats.add_child(energy_meter)
+	expedition_label = _label("", 14)
+	stats.add_child(expedition_label)
 	cue_label = _label("", 24)
 	root.add_child(cue_label)
 	cue_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -335,12 +373,29 @@ func _make_ui() -> void:
 	action_button.pressed.connect(_primary)
 	world_choice = HBoxContainer.new()
 	stack.add_child(world_choice)
-	for i in range(2):
-		var choice := _button("RIDGE ROUTE" if i == 0 else "VALLEY ROUTE")
-		choice.pressed.connect(func() -> void: next_route = i; _primary())
+	for i in range(3):
+		var choice := _button(Expedition.ROUTES[i].to_upper())
+		choice.custom_minimum_size = Vector2(230, 50)
+		choice.pressed.connect(_choose_route.bind(i))
 		world_choice.add_child(choice)
 		route_buttons.append(choice)
 	world_choice.hide()
+	shop_box = VBoxContainer.new()
+	stack.add_child(shop_box)
+	shop_label = _label("", 17)
+	shop_box.add_child(shop_label)
+	for i in range(3):
+		var item := _button("")
+		item.add_theme_font_size_override("font_size", 16)
+		item.pressed.connect(_buy_offer.bind(i))
+		shop_box.add_child(item)
+		shop_buttons.append(item)
+	shop_box.hide()
+	shard_picker = OptionButton.new()
+	shard_picker.custom_minimum_size = Vector2(300, 40)
+	stack.add_child(shard_picker)
+	shard_picker.item_selected.connect(func(index: int) -> void: selected_shard = index + 1)
+	_refresh_shard_picker()
 	menu_button = _button("RESTART RUN")
 	stack.add_child(menu_button)
 	menu_button.pressed.connect(func() -> void: _new_expedition(); _start())
@@ -359,7 +414,8 @@ func _update_hud() -> void:
 	time_label.text = "TIME  %02d:%05.2f" % [int(elapsed / 60.0), fmod(elapsed, 60.0)]
 	best_label.text = "BEST  %d m" % int(maxf(best, s))
 	energy_meter.value = float(runner.get("energy"))
-	energy_label.text = "BOOST READY" if energy_meter.value >= 28.0 else "BOOST"
+	energy_label.text = "BOOST READY" if energy_meter.value >= float(runner.call("boost_cost")) else "BOOST"
+	expedition_label.text = "%02d / %d  •  %d sparks  •  %d attempts" % [expedition.shard, expedition.world, expedition.currency + expedition.pending_currency, expedition.attempts]
 	cue_label.text = str(runner.get("cue"))
 	cue_label.visible = float(runner.get("cue_time")) > 0.0 and status == "running"
 
@@ -370,6 +426,12 @@ func _show(value: String, title: String, detail: String, action: String) -> void
 	subtitle.text = detail
 	action_button.text = action
 	world_choice.visible = value == "complete"
+	shop_box.visible = value == "complete"
+	shard_picker.visible = value == "ready"
+	if value == "complete":
+		_refresh_shop()
+		for i in range(route_buttons.size()):
+			route_buttons[i].text = ("GUARDIAN / " if expedition.world == 2 else "") + Expedition.ROUTES[i].to_upper()
 	action_button.visible = value != "complete"
 	menu_button.visible = value != "ready"
 	touch_controls.hide()
@@ -388,7 +450,10 @@ func _start() -> void:
 
 func _primary() -> void:
 	match status:
-		"ready", "paused":
+		"ready":
+			_new_expedition()
+			_start()
+		"paused":
 			_start()
 		"lost":
 			if lives <= 0:
@@ -397,15 +462,18 @@ func _primary() -> void:
 				_reset_stage()
 			_start()
 		"complete":
-			stage += 1
-			_reset_stage()
+			if expedition.advance(next_route):
+				_reset_stage()
+				_start()
+		"shard_complete":
+			selected_shard = mini(expedition.shard + 1, Expedition.SHARD_COUNT) if expedition.shard < Expedition.SHARD_COUNT else 1
+			_new_expedition()
 			_start()
 
 func _new_expedition() -> void:
-	stage = 1
-	lives = 3
 	world_seed = randi()
 	next_route = 0
+	expedition.begin(selected_shard, world_seed)
 	_reset_stage()
 
 func _toggle_pause() -> void:
@@ -432,7 +500,7 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			KEY_LEFT, KEY_RIGHT:
 				if status == "complete":
-					next_route = 0 if event.physical_keycode == KEY_LEFT else 1
+					next_route = posmod(next_route + (-1 if event.physical_keycode == KEY_LEFT else 1), route_buttons.size())
 					route_buttons[next_route].grab_focus()
 			KEY_F:
 				if status == "running":
@@ -445,3 +513,36 @@ func _input(event: InputEvent) -> void:
 				_new_expedition()
 				_start()
 				get_viewport().set_input_as_handled()
+
+func _choose_route(index: int) -> void:
+	if status != "complete":
+		return
+	next_route = index
+	_primary()
+
+func _refresh_shard_picker() -> void:
+	shard_picker.clear()
+	for i in range(Expedition.SHARD_COUNT):
+		shard_picker.add_item("%02d  %s" % [i + 1, Expedition.SHARD_NAMES[i]])
+		shard_picker.set_item_disabled(i, i + 1 > unlocked_shard)
+	shard_picker.select(selected_shard - 1)
+
+func _refresh_shop() -> void:
+	shop_label.text = "UPGRADES  •  %d sparks  •  %d attempts" % [expedition.currency, expedition.attempts]
+	for i in range(shop_buttons.size()):
+		var b := shop_buttons[i]
+		b.visible = i < expedition.offers.size()
+		if b.visible:
+			var id: String = expedition.offers[i]
+			var item: Dictionary = Expedition.ITEMS[id]
+			b.text = "%s  /  %d sparks  —  %s" % [item["name"], item["cost"], item["detail"]]
+			b.disabled = expedition.currency < int(item["cost"])
+
+func _buy_offer(index: int) -> void:
+	if status != "complete" or index >= expedition.offers.size():
+		return
+	var id: String = expedition.offers[index]
+	if expedition.buy(id):
+		lives = expedition.attempts
+		_refresh_shop()
+		_update_hud()

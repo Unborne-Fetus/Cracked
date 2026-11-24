@@ -8,6 +8,10 @@ var seed_value_saved := 0
 var ridge_material: StandardMaterial3D
 var ridge_mesh: CylinderMesh
 var stage := 1
+var route_style := 0
+var guardian_world := false
+var spark_mesh: SphereMesh
+var spark_material: StandardMaterial3D
 var length := 2400.0
 var chunks: Dictionary = {}
 var ground_material: StandardMaterial3D
@@ -35,16 +39,26 @@ func _ready() -> void:
 	ridge_mesh.bottom_radius = 1.0
 	ridge_mesh.height = 2.0
 	ridge_mesh.radial_segments = 5
+	spark_mesh = SphereMesh.new()
+	spark_mesh.radius = 0.65
+	spark_mesh.height = 1.3
+	spark_mesh.radial_segments = 8
+	spark_mesh.rings = 4
+	spark_material = StandardMaterial3D.new()
+	spark_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	spark_material.albedo_color = Color(1.0, 0.82, 0.25)
 
-func reset(seed_value: int, stage_value: int) -> void:
+func reset(seed_value: int, stage_value: int, route_value: int = 0, guardian_value: bool = false) -> void:
 	for data in chunks.values():
 		var node: Node3D = data["node"]
 		remove_child(node)
 		node.queue_free()
 	chunks.clear()
 	stage = stage_value
+	route_style = clampi(route_value, 0, 2)
+	guardian_world = guardian_value
 	seed_value_saved = seed_value
-	length = 2400.0 + float(mini(stage - 1, 6)) * 300.0
+	length = 2240.0 + float(mini(stage - 1, 6)) * 160.0 + (320.0 if guardian_world else 0.0)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	phase = rng.randf_range(0.0, TAU)
@@ -61,15 +75,16 @@ func elevation(x: float, s: float) -> float:
 	var d := 4.5 * cos(x * 0.065 - s * 0.011)
 	var rolling := 3.2 * sin(s * wavelength + x * 0.012)
 	var hill_scale := 1.0 + minf(float(stage - 1) * 0.042, 0.28)
-	return -s * 0.105 + (a + b + c + d + rolling) * hill_scale
+	var route_scale := 1.18 if route_style == 2 else (0.92 if route_style == 0 else 1.0)
+	return -s * 0.115 + (a + b + c + d + rolling) * hill_scale * lerpf(1.0, route_scale, blend)
 
 # Each ravine is a real rectangular hole. An alternate corridor always exists.
 func gap_rect(index: int) -> Rect2:
-	if index < 3 or posmod(index - 3, 4 if stage == 1 else 3) != 0 or float(index) * CHUNK > length - 250.0:
+	if index < 3 or posmod(index - 3, 3 if route_style == 1 else 4) != 0 or float(index) * CHUNK > length - 250.0:
 		return Rect2()
 	var direction := posmod(seed_value_saved + index, 2)
-	var start_x := -HALF_WIDTH if direction == 0 else -18.0
-	var width := 128.0
+	var width := 128.0 if route_style != 1 else 152.0
+	var start_x := -HALF_WIDTH if direction == 0 else HALF_WIDTH - width
 	var start_s := float(index) * CHUNK + 64.0
 	return Rect2(start_x, start_s, width, 28.0 + 4.0 * float(mini(stage - 1, 3)))
 
@@ -188,7 +203,25 @@ func _build(index: int) -> void:
 		spire.rotation.y = rng.randf_range(0.0, TAU)
 		node.add_child(spire)
 		rocks.append({"x": across, "s": at, "r": maxf(spire.scale.x, spire.scale.z), "used": false, "height": tall * 1.72})
-	chunks[index] = {"node": node, "rocks": rocks}
+	var sparks: Array[Dictionary] = []
+	if index >= 0 and start < length - 80.0:
+		for i in range(3):
+			var at := start + 24.0 + float(i) * 48.0
+			var across := sin(float(index * 3 + i) * 0.62 + phase) * 24.0
+			if not has_ground(across, at):
+				var hole := gap_rect(index)
+				across = 80.0 if hole.position.x < -100.0 else -80.0
+			if not has_ground(across, at):
+				continue
+			var spark := MeshInstance3D.new()
+			spark.mesh = spark_mesh
+			spark.material_override = spark_material
+			var height := elevation(across, at) + 1.6
+			spark.position = Vector3(across, height, -(at - start))
+			spark.scale = Vector3(1.0, 1.55, 1.0)
+			node.add_child(spark)
+			sparks.append({"point": Vector3(across, height, -at), "node": spark, "used": false})
+	chunks[index] = {"node": node, "rocks": rocks, "sparks": sparks}
 
 func _cliff(st: SurfaceTool, a: Vector2, b: Vector2, start: float) -> void:
 	var va := Vector3(a.x, elevation(a.x, a.y), -(a.y - start))
@@ -236,3 +269,23 @@ func collapse_behind(s: float) -> void:
 		if (float(key) + 1.0) * CHUNK < s - 20.0:
 			var node: Node3D = chunks[key]["node"]
 			node.hide()
+
+func collect_sparks(a: Vector3, b: Vector3) -> int:
+	var gained := 0
+	var first := int(floor(minf(-a.z, -b.z) / CHUNK))
+	var last := int(floor(maxf(-a.z, -b.z) / CHUNK))
+	var segment := b - a
+	for index in range(first - 1, last + 2):
+		if not chunks.has(index):
+			continue
+		for spark in chunks[index]["sparks"]:
+			if bool(spark["used"]):
+				continue
+			var point: Vector3 = spark["point"]
+			var t := clampf((point - a).dot(segment) / maxf(0.001, segment.length_squared()), 0.0, 1.0)
+			if (a + segment * t).distance_to(point) <= 3.6:
+				spark["used"] = true
+				var instance: Node3D = spark["node"]
+				instance.hide()
+				gained += 2
+	return gained

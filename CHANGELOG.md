@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Shard expedition
+- Ten unlockable shards, three-world routes, deterministic shops and collectible sparks.
+- Seven upgrade types affecting movement, energy, boost and attempts; guardian escape encounters.
+- Distinct route geometry and additional progression regression checks.
+
 ## Flow expansion
 - Corrected cliff-mesh type inference that prevented the prior build from compiling.
 - Added real ravines, safe alternate corridors, support-aware landings and projected contact rings.

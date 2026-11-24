@@ -94,6 +94,58 @@ func _run() -> void:
 	if not bool(course.call("has_ground", predicted.x, -predicted.z)):
 		_fail("Landing marker predicts unsupported ground.")
 		return
+	var campaign = preload("res://scripts/expedition.gd").new()
+	campaign.begin(2, 1234)
+	var seed_before: int = campaign.terrain_seed()
+	campaign.collect(12)
+	campaign.fail_world()
+	if campaign.pending_currency != 0 or campaign.attempts != 2 or campaign.terrain_seed() != seed_before:
+		_fail("Retry changed seed or retained unbanked sparks.")
+		return
+	campaign.collect(40)
+	campaign.finish_world(2200.0, 30.0, 2)
+	var balance: int = campaign.currency
+	var offer: String = campaign.offers[0]
+	if not campaign.buy(offer) or campaign.currency >= balance or campaign.buy(offer):
+		_fail("Shop purchase or duplicate protection failed.")
+		return
+	if not campaign.advance(1) or campaign.guardian():
+		_fail("Branch selection failed.")
+		return
+	campaign.finish_world(2200.0, 30.0, 2)
+	if not campaign.advance(2) or not campaign.guardian():
+		_fail("Guardian stage not reached.")
+		return
+	campaign.finish_world(2200.0, 30.0, 2)
+	if not campaign.complete or campaign.advance(0):
+		_fail("Shard completion failed.")
+		return
+	var guard_rules = preload("res://scripts/guardian.gd")
+	if not guard_rules.wave_hits(0.0, 1.0, 0.0) or guard_rules.wave_hits(35.0, 1.0, 0.0) or guard_rules.wave_hits(0.0, 8.0, 0.0):
+		_fail("Guardian wave avoidance failed.")
+		return
+	runner.call("apply_upgrades", {"boost": 2, "glide": 2})
+	if float(runner.call("boost_cost")) >= 28.0 or float(runner.call("flight_gravity", false, 0.0)) >= 32.0:
+		_fail("Upgrades did not affect gameplay.")
+		return
+	var data: Dictionary = course.get("chunks")
+	var found := false
+	for chunk in data.values():
+		for spark in chunk["sparks"]:
+			if bool(spark["used"]):
+				continue
+			var point: Vector3 = spark["point"]
+			var gain: int = course.call("collect_sparks", point - Vector3.FORWARD, point + Vector3.FORWARD)
+			if gain <= 0 or int(course.call("collect_sparks", point, point)) != 0:
+				_fail("Spark pickup must only be collected once.")
+				return
+			found = true
+			break
+		if found:
+			break
+	if not found:
+		_fail("No collectible sparks generated.")
+		return
 	print("PASS: flow movement, slopes, landings and streaming")
 	quit(0)
 
