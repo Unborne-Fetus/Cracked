@@ -850,15 +850,12 @@ func _run_tests() -> void:
 	if absf(float(runner.get("speed")) - 60.0) > 0.01 or float(runner.get("momentum_reserve")) >= 30.0:
 		_fail("Uphill momentum reserve did not absorb the speed loss.")
 		return
-	runner.set("grounded", false)
-	runner.set("air_basis", Basis.IDENTITY)
-	runner.set("air_velocity", Vector3(0, -8, -40))
-	if not bool(runner.call("_double_jump")) or bool(runner.call("_double_jump")):
-		_fail("Double jump must be available exactly once per flight.")
-		return
-	var double_velocity: Vector3 = runner.get("air_velocity")
-	if double_velocity.y <= 0.0 or absf(double_velocity.z + 40.0) > 0.01:
-		_fail("Double jump injected forward speed or failed to lift.")
+	# Even stale airborne state cannot activate double jump.
+	runner.set("grounded",false)
+	runner.set("double_jump_available",true)
+	runner.set("air_velocity",Vector3(0,-8,-40))
+	if bool(runner.call("_double_jump")) or (runner.get("air_velocity") as Vector3)!=Vector3(0,-8,-40):
+		_fail("Removed double jump still changes velocity.")
 		return
 	game.call("_restart")
 	await process_frame
@@ -931,8 +928,8 @@ func _run_tests() -> void:
 	await process_frame
 	var split_s := 23.0 * 192.0 + 96.0
 	var gap_s := 24.0 * 192.0 + 84.0
-	if bool(course.call("support_at", split_s, 0.0)) or not bool(course.call("support_at", split_s, -28.0)) or bool(course.call("support_at", gap_s, 32.0)) or not bool(course.call("support_at", gap_s, -32.0)):
-		_fail("Split and gap routes lack an open, supported bypass.")
+	if bool(course.call("support_at", split_s, 0.0)) or not bool(course.call("support_at", split_s, -28.0)) or not bool(course.call("support_at", gap_s, 32.0)) or not bool(course.call("support_at", gap_s, -32.0)):
+		_fail("Split route lacks a bypass or former jump gap is not bridged.")
 		return
 	var fork_left: Transform3D = course.call("surface_frame", split_s, -28.0, 1)
 	var fork_right: Transform3D = course.call("surface_frame", split_s, 28.0, 1)

@@ -1406,13 +1406,13 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	if snap_camera:
 		mountain_pose_ready = false
 		effects.clear_trail()
-	runner.grounded = bool(state["grounded"])
 	runner.grounded = true
-	runner.diving = bool(state["diving"])
+	runner.is_sliding = bool(state["sliding"])
 	runner.diving = false
 	runner.height = 0.0
 	runner.air_time = 0.0
 	runner.kickflip_progress = 1.0
+	runner.rider_crouch = float(state.get("rider_crouch", 0.85 if runner.is_sliding else 0.0))
 	runner.rider_phase = float(state.get("rider_phase", 0.0))
 	runner.rider_steer = float(state.get("rider_steer", 0.0))
 	runner.rider_landing = float(state.get("rider_landing", 0.0))
@@ -1441,10 +1441,13 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.momentum_reserve = float(state["reserve"])
 	runner.double_jump_available = false
 	runner.landing_blend = 0.0
-	if runner.grounded:
-		runner.sync_pose(course)
-	else:
-		runner.air_basis = pose.basis
+	# Keep legacy replay positions inside the actual support bounds.
+	var edge: float = course.call("half_width_at",runner.distance)
+	runner.lane = float(course.call("wrap_pipe_lane",runner.distance,runner.lane))
+	if not bool(course.call("is_closed_pipe",runner.distance)):
+		runner.lane = clampf(runner.lane,-edge+0.10,edge-0.10)
+	runner.lane = float(course.call("guided_fork_lane",runner.distance,runner.lane,runner.lane,0.0))
+	runner.sync_pose(course)
 	runner.avatar.position = Vector3.ZERO
 	runner.avatar.scale.y = 0.55 if runner.is_sliding else 1.0
 	storm.front_s = float(state["storm_s"])

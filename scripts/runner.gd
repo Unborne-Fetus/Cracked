@@ -337,20 +337,8 @@ func _dive_input() -> bool:
 	return false
 
 func _double_jump() -> bool:
-	if grounded or not double_jump_available or jumps_disabled:
-		return false
 	double_jump_available = false
-	double_jumps += 1
-	if rider_glider>0.65 and rider_glider_return<0.0:
-		rider_glider_spin=0.0
-		glider_idle_clock=0.0
-		kickflip_progress=1.0
-	else:
-		kickflip_progress=0.0
-	var up := air_basis.y
-	var impulse := jump_impulse_for_speed(speed) * 0.75
-	air_velocity += up * maxf(0.0, impulse - air_velocity.dot(up))
-	return true
+	return false
 
 func _banked_slide(grade: float, delta: float) -> void:
 	var next_speed := slide_speed_step(speed, grade, delta)
@@ -817,6 +805,9 @@ func _obstacle_rebound(course: Node3D, collision: Dictionary, from_s: float, to_
 	var frame: Transform3D = course.call("surface_frame",distance,lane,1)
 	if was_grounded:
 		# Resolve collision on the current surface, never by launching the bike.
+		if not bool(course.call("support_at",distance,lane)):
+			distance = from_s
+			lane = from_lane
 		var escape_sign := -1.0 if lane < float(hazard["lane"]) else 1.0
 		lateral_speed = escape_sign * minf(14.0, speed * 0.3)
 		steering_heading = clampf(atan2(lateral_speed,maxf(speed,MIN_SPEED)),-0.65,0.65)
