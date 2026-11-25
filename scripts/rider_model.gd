@@ -125,50 +125,10 @@ func _ready() -> void:
 			var post := _block(handles,Vector3(0.10,0.36,0.10),deck_mat)
 			post.position=Vector3(side*0.37,0.18,z)
 	handles.visible=false
+	# Empty compatibility anchor: no wing meshes or engines are created.
 	wings=Node3D.new()
-	wings.name="GliderWings"
 	board.add_child(wings)
-	for wing_side: float in [-1.0,1.0]:
-		var wing:=SurfaceTool.new()
-		wing.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var root_a:=Vector3(wing_side*0.48,0.09,-0.60)
-		var tip_a:=Vector3(wing_side*3.0,0.17,0.30)
-		var tip_b:=Vector3(wing_side*2.85,0.17,0.58)
-		var root_b:=Vector3(wing_side*0.48,0.09,0.72)
-		_quad(wing,root_a,root_b,tip_a,tip_b)
-		var panel:=MeshInstance3D.new()
-		panel.mesh=wing.commit()
-		panel.material_override=deck_mat
-		wings.add_child(panel)
-		var line:=SurfaceTool.new()
-		line.begin(Mesh.PRIMITIVE_LINES)
-		for vertex: Vector3 in [root_a,tip_a,tip_a,tip_b,tip_b,root_b,root_b,root_a,root_a,tip_b]:
-			line.add_vertex(vertex+Vector3.UP*0.012)
-		var trim:=MeshInstance3D.new()
-		trim.mesh=line.commit()
-		trim.material_override=edge_mat
-		wings.add_child(trim)
-		var nacelle:=Node3D.new()
-		nacelle.name="JetNacelle"
-		nacelle.position=Vector3(wing_side*1.72,0.28,0.16)
-		wings.add_child(nacelle)
-		engines.append(nacelle)
-		var cylinder:=CylinderMesh.new()
-		cylinder.top_radius=0.27
-		cylinder.bottom_radius=0.22
-		cylinder.height=0.96
-		cylinder.radial_segments=10
-		var casing:=MeshInstance3D.new()
-		casing.mesh=cylinder
-		casing.material_override=deck_mat
-		casing.rotation.x=PI*0.5
-		nacelle.add_child(casing)
-		var nozzle:=_block(nacelle,Vector3(0.37,0.37,0.17),edge_mat)
-		nozzle.position.z=0.50
-		var exhaust:=_block(nacelle,Vector3(0.17,0.17,0.85),jet_mat)
-		exhaust.position.z=0.98
-		exhausts.append(exhaust)
-	wings.visible=false
+	wings.hide()
 	# Empty compatibility anchors: the old spider and gyro meshes are removed.
 	treads=Node3D.new()
 	board.add_child(treads)
@@ -495,15 +455,11 @@ func pose(crouch: float, steer: float, airborne: bool, flip: float, phase: float
 	var dive_amount := maxf(dive_blend,1.0 if dive else 0.0) if airborne else 0.0
 	# All phases are derived from recorded simulation time; camera orbit
 	# and render rate never alter the animation or the player's physics.
-	var glide:=clampf(float(extra.get("glider",0.0)),0.0,1.0)
-	var return_progress:=float(extra.get("glider_return",-1.0))
-	var entry_progress:=float(extra.get("glider_entry",-1.0))
-	var legacy_transfer:=float(extra.get("glider_gyro",-1.0))
-	if legacy_transfer>=0.0:
-		return_progress=lerpf(0.60,1.0,legacy_transfer)
-	var gyro_transfer:=-1.0
-	if entry_progress>=0.0:
-		return_progress=1.0-entry_progress
+	# Ignore obsolete flight animation data, including older recordings.
+	var glide: float=0.0
+	var return_progress: float=-1.0
+	var entry_progress: float=-1.0
+	var gyro_transfer: float=-1.0
 	var returning:=return_progress>=0.0
 	var transferring:=gyro_transfer>=0.0
 	var transfer_settle:=smoothstep(0.0,0.44,gyro_transfer) if transferring else 0.0

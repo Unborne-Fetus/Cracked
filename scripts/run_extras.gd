@@ -81,11 +81,11 @@ func finish(mode: int, day: String, seed_value: int, distance: float, seconds: f
 	var key := record_key(mode, day)
 	if distance >= best_for(mode, day):
 		records[key] = {"distance": distance, "speed": top_speed, "seconds": seconds, "seed": seed_value}
-	var checks := {"First kilometer": distance >= 1000.0, "Five kilometers": distance >= 5000.0, "Velocity 100": top_speed >= 100.0, "Velocity 200": top_speed >= 200.0, "Airborne": airtime >= 10.0, "Gate master": int(runner.get("clean_gates")) >= 3, "Perfect landing": int(runner.get("perfect_landings")) >= 1, "Dive master": int(runner.get("dive_landings")) >= 1}
+	var checks := {"First kilometer": distance >= 1000.0, "Five kilometers": distance >= 5000.0, "Velocity 100": top_speed >= 100.0, "Velocity 200": top_speed >= 200.0, "Gate master": int(runner.get("clean_gates")) >= 3}
 	for title in checks:
 		if bool(checks[title]):
 			achievements[title] = true
 	save_profile()
 
 func summary(distance_text: String, display_speed: int, units: String) -> String:
-	return "DISTANCE %s    |    TOP SPEED %d %s\nAIRTIME %.1f s    |    SLIDING %.1f s\nMOMENTUM LOST %.1f m/s" % [distance_text, display_speed, units, airtime, slide_time, momentum_lost]
+	return "DISTANCE %s    |    TOP SPEED %d %s\nSLIDING %.1f s\nMOMENTUM LOST %.1f m/s" % [distance_text, display_speed, units, slide_time, momentum_lost]

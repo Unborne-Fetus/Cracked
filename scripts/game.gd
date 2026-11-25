@@ -29,7 +29,7 @@ var replay_speed_button: Button
 var watch_replay_button: Button
 var profile_replay_button: Button
 var cosmetic_picker: OptionButton
-const MODES: Array[String] = ["Endless", "Daily seeded", "No jumping", "First person", "Fast storm", "Practice"]
+const MODES: Array[String] = ["Endless", "Daily seeded", "Grounded (legacy)", "First person", "Fast storm", "Practice"]
 var extras
 var effects
 var mode := 0
@@ -188,7 +188,7 @@ func _restart() -> void:
 	course.reset_course(run_seed)
 	runner.reset_run(course)
 	mountain_pose_ready = false
-	runner.jumps_disabled = mode == 2
+	runner.jumps_disabled = true
 	if mode == 3:
 		first_person = true
 	runner.set_first_person(first_person)
@@ -887,20 +887,13 @@ func _create_hud() -> void:
 	root.add_child(slide)
 	slide.button_down.connect(func() -> void: runner.touch_slide = true)
 	slide.button_up.connect(func() -> void: runner.touch_slide = false)
-	var jump := _button("JUMP", -138, -20, 124, true)
-	root.add_child(jump)
-	jump.pressed.connect(func() -> void: runner.request_jump())
 	var view := _button("VIEW", -138, -20, 202, true)
 	root.add_child(view)
 	view.pressed.connect(_toggle_camera)
 	var recenter := _button("CENTER", -394, -276, 202, true)
 	root.add_child(recenter)
 	recenter.pressed.connect(_recenter_camera)
-	var dive := _button("DIVE", -266, -148, 124, true)
-	root.add_child(dive)
-	dive.button_down.connect(func() -> void: runner.touch_dive = true)
-	dive.button_up.connect(func() -> void: runner.touch_dive = false)
-	touch_buttons.assign([left, right, slide, jump, view, recenter, dive])
+	touch_buttons.assign([left, right, slide, view, recenter])
 	touch_ui_active = OS.has_feature("mobile") or DisplayServer.is_touchscreen_available()
 	for touch_button in touch_buttons:
 		touch_button.visible = touch_ui_active
@@ -1076,6 +1069,7 @@ func _create_extras_page(pages: VBoxContainer) -> void:
 	mode_picker = OptionButton.new()
 	for name_value in MODES:
 		mode_picker.add_item(name_value)
+	mode_picker.set_item_disabled(2,true)
 	mode_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
 	_add_extra(mode_picker)
 	var start := _menu_button("START SELECTED RUN")
@@ -1143,7 +1137,7 @@ func _create_settings_pages(pages: VBoxContainer) -> void:
 	pages.add_child(controls_page)
 	controls_page.add_child(_label("CONTROLS", 28, Color(0.1, 0.9, 1.0)))
 	binding_picker = OptionButton.new()
-	for name_value in ["left", "right", "drift_left", "drift_right", "slide", "jump", "dive", "camera", "recenter", "restart"]:
+	for name_value in ["left", "right", "drift_left", "drift_right", "slide", "camera", "recenter", "restart"]:
 		binding_picker.add_item(name_value)
 	binding_picker.item_selected.connect(func(_i: int) -> void: _refresh_profile())
 	_add_control(binding_picker)
@@ -1413,18 +1407,18 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 		mountain_pose_ready = false
 		effects.clear_trail()
 	runner.grounded = bool(state["grounded"])
-	runner.is_sliding = bool(state["sliding"])
+	runner.grounded = true
 	runner.diving = bool(state["diving"])
-	runner.height = float(state["height"])
-	runner.air_time = float(state["air_time"])
-	runner.kickflip_progress = float(state.get("kickflip", 1.0))
-	runner.rider_crouch = float(state.get("rider_crouch", 0.85 if runner.is_sliding else 0.0))
+	runner.diving = false
+	runner.height = 0.0
+	runner.air_time = 0.0
+	runner.kickflip_progress = 1.0
 	runner.rider_phase = float(state.get("rider_phase", 0.0))
 	runner.rider_steer = float(state.get("rider_steer", 0.0))
 	runner.rider_landing = float(state.get("rider_landing", 0.0))
 	runner.rider_impact = float(state.get("rider_impact", 0.0))
 	runner.rider_clearance = float(state.get("rider_clearance",0.0))
-	runner.rider_dive = float(state.get("rider_dive",1.0 if runner.diving else 0.0))
+	runner.rider_dive = 0.0
 	runner.rider_flourish = float(state.get("rider_flourish",0.0))
 	runner.rider_bank = float(state.get("rider_bank",0.0))
 	runner.rider_brace = float(state.get("rider_brace",0.0))
@@ -1433,19 +1427,19 @@ func _seek_replay(value: float, snap_camera: bool = true) -> void:
 	runner.steering_heading = float(state.get("steering_heading",0.0))
 	runner.rider_ground_idle = float(state.get("rider_ground_idle",0.0))
 	runner.rider_inverted = float(state.get("rider_inverted",0.0))
-	runner.rider_glider=float(state.get("rider_glider",0.0))
-	runner.rider_glider_return=float(state.get("rider_glider_return",-1.0))
-	runner.rider_glider_entry=float(state.get("rider_glider_entry",-1.0))
-	runner.rider_glider_gyro=float(state.get("rider_glider_gyro",-1.0))
-	runner.rider_glider_spin=float(state.get("rider_glider_spin",1.0))
-	runner.glider_trick_clock=float(state.get("glider_trick_clock",0.0))
+	runner.rider_glider=0.0
+	runner.rider_glider_return=-1.0
+	runner.rider_glider_entry=-1.0
+	runner.rider_glider_gyro=-1.0
+	runner.rider_glider_spin=1.0
+	runner.glider_trick_clock=0.0
 	runner.gyro_trick_clock=float(state.get("gyro_trick_clock",0.0))
 	runner.drift_amount = float(state.get("drift_amount",0.0))
 	runner.rider_ground_variant = int(state.get("rider_ground_variant",0))
-	runner.cycle_fall=float(state.get("cycle_fall",0.0))
+	runner.cycle_fall=0.0
 	runner.cycle_antigrav=float(state.get("cycle_antigrav",maxf(float(state.get("rider_inverted",0.0)),smoothstep(0.40,0.86,absf(pose.basis.x.y))) if runner.grounded else 0.0))
 	runner.momentum_reserve = float(state["reserve"])
-	runner.double_jump_available = bool(state["double_jump"])
+	runner.double_jump_available = false
 	runner.landing_blend = 0.0
 	if runner.grounded:
 		runner.sync_pose(course)

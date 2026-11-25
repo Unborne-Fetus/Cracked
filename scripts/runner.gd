@@ -1,5 +1,5 @@
 extends Node3D
-## Grounded runner follows the ribbon; airborne runner uses world-space flight.
+## Grounded lightcycle stays attached to the ribbon on every live tick.
 
 const START_SPEED := 22.0
 const MIN_SPEED := 7.0
@@ -189,66 +189,17 @@ func _update_rider_animation(delta: float) -> void:
 	var brace_target := 1.0 if not grounded and air_time > 0.25 and air_velocity.y < -10.0 else 0.0
 	rider_brace = move_toward(rider_brace, brace_target, delta*4.0)
 	rider_inverted=0.0 if loop_cycle else move_toward(rider_inverted,smoothstep(0.15,0.85,-transform.basis.y.y) if grounded else 0.0,delta*3.0)
-	if loop_cycle:
-		rider_glider=0.0
-		rider_glider_entry=-1.0
-		rider_glider_return=-1.0
-		rider_glider_gyro=-1.0
-	if not grounded and is_instance_valid(rider_course):
-		var road_frame: Transform3D=rider_course.call("sample",distance)
-		glide_height=position.y-road_frame.origin.y
-	else:
-		glide_height=0.0
-	# All surfaces now use the same glider-to-cycle catch.
-	if rider_glider_gyro>=0.0:
-		rider_glider_return=lerpf(0.60,1.0,rider_glider_gyro)
-		rider_glider_gyro=-1.0
-	if rider_glider_return>=0.0:
-		if grounded:
-			rider_glider_return=maxf(rider_glider_return,0.74)
-		rider_glider_return=minf(1.0,rider_glider_return+delta/GLIDER_RETURN_TIME)
-		if rider_glider_return>=1.0:
-			rider_glider=0.0
-			rider_glider_return=-1.0
-			rider_glider_spin=1.0
-			glider_idle_clock=0.0
-	elif rider_glider_entry>=0.0:
-		if grounded or glide_height<20.0:
-			rider_glider_return=maxf(0.0,1.0-rider_glider_entry)
-			rider_glider_entry=-1.0
-		else:
-			rider_glider_entry=minf(1.0,rider_glider_entry+delta/GLIDER_ENTRY_TIME)
-			if rider_glider_entry>=1.0:
-				rider_glider_entry=-1.0
-	elif rider_glider>0.01 and (grounded or glide_height<30.0 or (air_velocity.y< -1.0 and glide_height/maxf(1.0,-air_velocity.y)<1.0)):
-		rider_glider_return=0.74 if grounded else 0.0
-		rider_glider_spin=1.0
-		glider_idle_clock=0.0
-	elif rider_glider<=0.01 and not grounded and not diving and glide_height>=50.0:
-		rider_glider=1.0
-		rider_glider_entry=0.0
-		rider_glider_spin=1.0
-	else:
-		if rider_glider>0.95 and glide_height>55.0 and not diving:
-			glider_idle_clock+=delta
-			if glider_idle_clock>5.0 and rider_glider_spin>=1.0:
-				rider_glider_spin=0.0
-				glider_idle_clock=0.0
-		rider_glider_spin=minf(1.0,rider_glider_spin+delta/GLIDER_SPIN_TIME)
-	if rider_glider>0.9 and rider_glider_return<0.0:
-		glider_trick_clock+=delta
-	elif rider_glider<=0.01:
-		glider_trick_clock=0.0
-	if grounded and absf(rider_bank)>0.65 and rider_inverted<0.3:
-		gyro_trick_clock+=delta
-	else:
-		gyro_trick_clock=0.0
-	var idle_trick := not grounded and not diving and rider_glider<0.1 and air_time > 0.45 and kickflip_progress >= 1.0 and rider_impact < 0.2 and rider_brace < 0.35
-	rider_trick_mix = move_toward(rider_trick_mix,1.0 if idle_trick else 0.0,delta*5.0)
-	if idle_trick:
-		rider_trick_clock += delta
-	elif rider_trick_mix<=0.001 and grounded:
-		rider_trick_clock=0.0
+	# No glider, airborne tricks or vehicle handoff in grounded gameplay.
+	rider_glider=0.0
+	rider_glider_entry=-1.0
+	rider_glider_return=-1.0
+	rider_glider_gyro=-1.0
+	rider_glider_spin=1.0
+	glide_height=0.0
+	glider_trick_clock=0.0
+	gyro_trick_clock=0.0
+	rider_trick_mix=0.0
+	rider_trick_clock=0.0
 	var calm_ground := grounded and not is_sliding and absf(steering_heading)<0.10 and speed<55.0 and rider_inverted<0.1 and rider_impact<0.1 and rider_landing<0.1
 	if calm_ground:
 		rider_ground_clock += delta
@@ -343,7 +294,7 @@ func reset_run(course: Node3D) -> void:
 	dive_landings = 0
 	double_jumps = 0
 	momentum_reserve = 0.0
-	double_jump_available = true
+	double_jump_available = false
 	diving = false
 	touch_dive = false
 	gate_timer = 0.0
@@ -363,8 +314,8 @@ func reset_run(course: Node3D) -> void:
 	sync_pose(course)
 
 func request_jump() -> void:
-	if not jumps_disabled:
-		queued_jump = true
+	# Kept as a no-op for older input/replay callers.
+	queued_jump = false
 
 func apply_cosmetic(index: int) -> void:
 	if is_instance_valid(rider_model):
@@ -383,11 +334,6 @@ func pad_down(device: int, action: String, defaults: Array) -> bool:
 	return false
 
 func _dive_input() -> bool:
-	if touch_dive or key_down("dive", [KEY_F]):
-		return true
-	for device in Input.get_connected_joypads():
-		if pad_down(device, "dive", [JOY_BUTTON_RIGHT_STICK]):
-			return true
 	return false
 
 func _double_jump() -> bool:
@@ -869,6 +815,19 @@ func _obstacle_rebound(course: Node3D, collision: Dictionary, from_s: float, to_
 	distance = lerpf(from_s,to_s,fraction)
 	lane = lerpf(from_lane,to_lane,fraction)
 	var frame: Transform3D = course.call("surface_frame",distance,lane,1)
+	if was_grounded:
+		# Resolve collision on the current surface, never by launching the bike.
+		var escape_sign := -1.0 if lane < float(hazard["lane"]) else 1.0
+		lateral_speed = escape_sign * minf(14.0, speed * 0.3)
+		steering_heading = clampf(atan2(lateral_speed,maxf(speed,MIN_SPEED)),-0.65,0.65)
+		speed = maxf(MIN_SPEED,speed * OBSTACLE_RETAIN)
+		rider_impact = 1.0
+		hit_timer = 0.85
+		if not bool(group["used"]):
+			group["used"] = true
+			hits += 1
+		sync_pose(course)
+		return
 	var incoming := -frame.basis.z * speed + frame.basis.x * lateral_speed if grounded else air_velocity
 	var axis := int(collision["axis"])
 	var normal := (-frame.basis.z if axis == 0 else frame.basis.x if axis == 1 else frame.basis.y) * float(collision["sign"])
@@ -1099,6 +1058,18 @@ func _flight_step(delta: float, course: Node3D, steer: float) -> void:
 func tick(delta: float, course: Node3D) -> void:
 	if fallen:
 		return
+	# Ground adhesion is authoritative; legacy replay/input state cannot launch the bike.
+	grounded = true
+	height = 0.0
+	vertical_speed = 0.0
+	air_velocity = Vector3.ZERO
+	air_time = 0.0
+	diving = false
+	touch_dive = false
+	double_jump_available = false
+	queued_jump = false
+	jump_held = false
+	kickflip_progress = 1.0
 	var steer := touch_axis
 	if key_down("left", [KEY_A, KEY_LEFT]):
 		steer -= 1.0
@@ -1108,12 +1079,6 @@ func tick(delta: float, course: Node3D) -> void:
 	var drift_input := float(key_down("drift_right",[KEY_E]))-float(key_down("drift_left",[KEY_Q]))
 	drift_amount = move_toward(drift_amount,drift_input if grounded else 0.0,delta*6.5)
 	var slide := _slide_input()
-	var jump := not jumps_disabled and (key_down("jump", [KEY_SPACE]) or _pad_jump())
-	if jumps_disabled:
-		queued_jump = false
-	if jump and not jump_held:
-		queued_jump = true
-	jump_held = jump
 	landing_timer = maxf(0.0, landing_timer - delta)
 	if grounded:
 		landing_blend = maxf(0.0, landing_blend - delta)
@@ -1125,17 +1090,12 @@ func tick(delta: float, course: Node3D) -> void:
 		var frame: Transform3D = course.call("surface_frame", distance, lane, surface_side)
 		var grade := -frame.basis.z.y
 		var section: String = course.call("section_name", distance)
-		var curved_launch := section in ["HALFPIPE", "CORKSCREW TUNNEL", "STACKED ROUTES", "SPLIT ROUTE","LOOP ROUTE"]
 		uphill = grade > 0.025
 		if section=="LOOP ROUTE" and lane<0.0 and surface_side>0:
 			var progress: float = course.call("loop_progress",distance)
 			var loop_index: int = course.call("chunk_index_at",distance)
 			if progress<0.24:
 				active_loop=loop_index
-			if progress>0.38 and progress<0.64 and frame.basis.y.y<0.15 and speed<float(course.call("loop_required_speed",distance)):
-				active_loop=-1
-				_begin_flight(frame,0.0,true)
-				return
 			if progress>=0.78 and active_loop==loop_index and not rewarded_loops.has(loop_index):
 				rewarded_loops[loop_index]=true
 				speed+=24.0
@@ -1150,91 +1110,78 @@ func tick(delta: float, course: Node3D) -> void:
 			lateral_speed=0.0
 			steering_heading=0.0
 			drift_amount=0.0
-		var normal_accel := relative_normal_acceleration(course,distance,lane,speed,lateral_speed)
-		var natural_lift := natural_lift_impulse(normal_accel, speed)
-		if landing_timer <= 0.0 and (queued_jump or natural_lift > 0.0):
-			var impulse := jump_impulse_for_speed(speed) if queued_jump else natural_lift
-			_begin_flight(frame, impulse, curved_launch, queued_jump)
+		is_sliding = slide
+		if slide:
+			_banked_slide(grade, delta)
+			speed += float(course.call("recovery_accel", distance, lane, surface_side)) * delta
 		else:
-			is_sliding = slide
-			if slide:
-				_banked_slide(grade, delta)
-				speed += float(course.call("recovery_accel", distance, lane, surface_side)) * delta
-			else:
-				speed = step_speed(speed, grade, true, false, delta)
-			speed += float(course.call("slipstream_accel", distance, lane, 0.0, surface_side)) * delta
-			var old_s := distance
-			var old_lane := lane
-			var steering_factor := 0.88 if slide else 1.0
-			var base_frame: Transform3D = course.call("sample", distance)
-			var screen_right := (-base_frame.basis.z).cross(Vector3.UP).normalized()
-			var screen_alignment := (frame.basis.x * float(surface_side)).dot(screen_right)
-			# A/D moves in the visible horizontal direction where possible.
-			# On a vertical wall retain the last mapping to avoid jitter.
-			if absf(screen_alignment) > 0.18:
-				screen_steer_sign = signf(screen_alignment)
-			# A small gravity-driven drift makes vertical walls meaningfully
-			# different from flat ground, while steering can counter it.
-			var traction:=smoothstep(MIN_SPEED,MIN_SPEED+10.0,speed)
-			var wall_drift: float=-frame.basis.x.y*float(surface_side)*5.0*traction
-			# Input changes heading; the board and rider turn with it.
-			# At high speed limit lateral travel, not the steering response.
-			var max_angle := minf(0.83,asin(clampf(65.0/maxf(speed,MIN_SPEED),0.0,1.0)))
-			var desired := steer*screen_steer_sign*max_angle*steering_factor*traction
-			var ahead := distance + maxf(12.0,speed*0.65)
-			var guided_ahead: float = course.call("guided_fork_lane",ahead,lane,lane,steer*screen_steer_sign)
-			if absf(guided_ahead-lane) > 0.01:
-				var guide_angle := clampf(atan2(guided_ahead-lane,maxf(6.0,speed*0.35)),-max_angle,max_angle)
-				if absf(guide_angle) > absf(desired) or guide_angle*desired < 0.0:
-					desired = guide_angle
-			var initial_heading := steering_heading if absf(drift_amount)>0.01 else asin(clampf(lateral_speed/maxf(speed,MIN_SPEED),-0.95,0.95))
-			steering_heading = move_toward(initial_heading,desired,delta*5.8)
-			var drift_velocity := drift_amount*screen_steer_sign*minf(38.0,speed*0.70)*traction
-			lateral_speed = clampf(speed*sin(steering_heading)+drift_velocity,-speed*0.90,speed*0.90)+wall_drift
-			var forward_speed := sqrt(maxf(0.0,speed*speed-pow(lateral_speed-wall_drift,2.0)))
-			var route_metric: float=course.call("loop_metric",distance,lane) if section=="LOOP ROUTE" else 1.0
-			var next_s := distance + forward_speed*delta/route_metric
-			var next_lane := lane+lateral_speed*delta
-			course.call("stream",next_s,speed)
-			next_lane=float(course.call("wrap_pipe_lane",next_s,next_lane))
-			# The gold-marked inside rail gently catches missed fork entries
-			# or an inward carve. It never catches the outer track edge.
-			var guided_lane: float = course.call("guided_fork_lane",next_s,lane,next_lane,steer*screen_steer_sign)
-			if absf(guided_lane-next_lane) > 0.001:
-				next_lane = guided_lane
+			speed = step_speed(speed, grade, true, false, delta)
+		speed += float(course.call("slipstream_accel", distance, lane, 0.0, surface_side)) * delta
+		var old_s := distance
+		var old_lane := lane
+		var steering_factor := 0.88 if slide else 1.0
+		var base_frame: Transform3D = course.call("sample", distance)
+		var screen_right := (-base_frame.basis.z).cross(Vector3.UP).normalized()
+		var screen_alignment := (frame.basis.x * float(surface_side)).dot(screen_right)
+		# A/D moves in the visible horizontal direction where possible.
+		# On a vertical wall retain the last mapping to avoid jitter.
+		if absf(screen_alignment) > 0.18:
+			screen_steer_sign = signf(screen_alignment)
+		# A small gravity-driven drift makes vertical walls meaningfully
+		# different from flat ground, while steering can counter it.
+		var traction:=smoothstep(MIN_SPEED,MIN_SPEED+10.0,speed)
+		var wall_drift: float=-frame.basis.x.y*float(surface_side)*5.0*traction
+		# Input changes heading; the board and rider turn with it.
+		# At high speed limit lateral travel, not the steering response.
+		var max_angle := minf(0.83,asin(clampf(65.0/maxf(speed,MIN_SPEED),0.0,1.0)))
+		var desired := steer*screen_steer_sign*max_angle*steering_factor*traction
+		var ahead := distance + maxf(12.0,speed*0.65)
+		var guided_ahead: float = course.call("guided_fork_lane",ahead,lane,lane,steer*screen_steer_sign)
+		if absf(guided_ahead-lane) > 0.01:
+			var guide_angle := clampf(atan2(guided_ahead-lane,maxf(6.0,speed*0.35)),-max_angle,max_angle)
+			if absf(guide_angle) > absf(desired) or guide_angle*desired < 0.0:
+				desired = guide_angle
+		var initial_heading := steering_heading if absf(drift_amount)>0.01 else asin(clampf(lateral_speed/maxf(speed,MIN_SPEED),-0.95,0.95))
+		steering_heading = move_toward(initial_heading,desired,delta*5.8)
+		var drift_velocity := drift_amount*screen_steer_sign*minf(38.0,speed*0.70)*traction
+		lateral_speed = clampf(speed*sin(steering_heading)+drift_velocity,-speed*0.90,speed*0.90)+wall_drift
+		var forward_speed := sqrt(maxf(0.0,speed*speed-pow(lateral_speed-wall_drift,2.0)))
+		var route_metric: float=course.call("loop_metric",distance,lane) if section=="LOOP ROUTE" else 1.0
+		var next_s := distance + forward_speed*delta/route_metric
+		var next_lane := lane+lateral_speed*delta
+		course.call("stream",next_s,speed)
+		next_lane=float(course.call("wrap_pipe_lane",next_s,next_lane))
+		# The gold-marked inside rail gently catches missed fork entries
+		# or an inward carve. It never catches the outer track edge.
+		var guided_lane: float = course.call("guided_fork_lane",next_s,lane,next_lane,steer*screen_steer_sign)
+		if absf(guided_lane-next_lane) > 0.001:
+			next_lane = guided_lane
+			lateral_speed = 0.0
+			steering_heading = 0.0
+		var edge: float = course.call("half_width_at",next_s)
+		if not bool(course.call("is_closed_pipe",next_s)):
+			var bounded := clampf(next_lane,-edge+0.10,edge-0.10)
+			if absf(bounded-next_lane)>0.001:
 				lateral_speed = 0.0
 				steering_heading = 0.0
-			var edge: float = course.call("half_width_at",next_s)
-			if speed<MIN_SPEED+1.0 and not bool(course.call("is_closed_pipe",next_s)):
-				next_lane=clampf(next_lane,-edge+0.10,edge-0.10)
-			var obstacle: Dictionary = course.call("first_obstacle_contact",old_s,next_s,old_lane,next_lane,0.0,0.0,0.95 if slide else 1.7) if surface_side > 0 else {}
-			if not obstacle.is_empty():
-				_obstacle_rebound(course,obstacle,old_s,next_s,old_lane,next_lane,0.0,0.0)
-				_update_rider_animation(delta)
-				return
-			if absf(next_lane) > edge or not bool(course.call("support_at", next_s, next_lane)):
-				# No invisible walls. Start flight from the last supported
-				# point, then allow the player to steer back if possible.
-				sync_pose(course)
-				_begin_flight(frame, 0.0, curved_launch)
-			else:
-				distance = next_s
-				lane = next_lane
-				height = 0.0
-				vertical_speed = 0.0
-				if surface_side > 0:
-					_reward_gates(course, old_s, old_lane, 0.0, 0.0)
-				sync_pose(course)
-	if not grounded:
-		is_sliding = false
-		diving = _dive_input()
-		if queued_jump:
-			_double_jump()
-			queued_jump = false
-		_advance_flight(delta, course, steer)
-		kickflip_progress = minf(1.0, kickflip_progress + delta / KICKFLIP_TIME)
-	else:
-		diving = false
+			next_lane = bounded
+		var obstacle: Dictionary = course.call("first_obstacle_contact",old_s,next_s,old_lane,next_lane,0.0,0.0,0.95 if slide else 1.7) if surface_side > 0 else {}
+		if not obstacle.is_empty():
+			_obstacle_rebound(course,obstacle,old_s,next_s,old_lane,next_lane,0.0,0.0)
+			_update_rider_animation(delta)
+			return
+		# Never advance to unsupported geometry. Hold the last valid contact
+		# if a route seam is encountered; steering can recover on the next tick.
+		if bool(course.call("support_at", next_s, next_lane)):
+			distance = next_s
+			lane = next_lane
+			if surface_side > 0:
+				_reward_gates(course, old_s, old_lane, 0.0, 0.0)
+		else:
+			speed = maxf(MIN_SPEED, speed * 0.90)
+			lateral_speed = 0.0
+			steering_heading = 0.0
+		sync_pose(course)
 	avatar.scale.y = lerpf(avatar.scale.y, 0.55 if is_sliding else 1.0, minf(delta * 12.0, 1.0))
 	_update_rider_animation(delta)
 

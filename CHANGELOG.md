@@ -1,5 +1,10 @@
 # Vector Velocity changelog
 
+## Grounded lightcycle
+- Removed jump, double-jump, dive and glider deployment from gameplay and controls.
+- Permanent track adhesion through hills, banks and loops; edge bounds and grounded obstacle impacts.
+- Former jump gaps are bridged; legacy animation fields cannot deploy wings.
+
 ## Three-wheel anti-gravity lightcycle
 - One front wheel and a rear pair, animated rigid ninety-degree wheel swivels and glowing hover pads on walls and ceilings.
 - Remove spider and gyro geometry; preserve normal wheel orientation in loops and the glider catch.

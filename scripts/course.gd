@@ -14,7 +14,7 @@ const BEHIND := 2
 const REBASE_DISTANCE := 2048.0
 const RECOVERY_ACCEL := 18.0
 const RECOVERY_HALF_WIDTH := 6.0
-const SPECIAL_TRACKS: Array[String] = ["SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM", "LOOP ROUTE"]
+const SPECIAL_TRACKS: Array[String] = ["SPLIT ROUTE", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM", "LOOP ROUTE"]
 const RunnerRules = preload("res://scripts/runner.gd")
 const ObstacleGrid = preload("res://shaders/obstacle_grid.gdshader")
 const StormRules = preload("res://scripts/storm.gd")
@@ -199,7 +199,7 @@ func _kind(index: int) -> String:
 			return "LOOP ROUTE"
 		return "STACKED ROUTES" if rng.randf()<0.18 else "SPLIT ROUTE"
 	if terrain_bag.is_empty():
-		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY", "SPLIT ROUTE", "GAP CROSSING", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"])
+		terrain_bag.assign(["HILLS", "TURN", "BANKED TURN", "LONG DESCENT", "S CURVE", "NARROW BRIDGE", "ROLLING RIDGES", "CAMBER WAVE", "STEEP CLIMB", "DROP AND RECOVERY", "BANKED DESCENT", "WIDE BASIN", "CHICANE", "180 BANK", "360 BANK", "WALL ENTRY", "CEILING ENTRY", "SPLIT ROUTE", "CORKSCREW TUNNEL", "HALFPIPE", "STACKED ROUTES", "SLIPSTREAM"])
 		terrain_bag.append_array(SWEEP_TRACKS)
 	var candidates: Array[int] = []
 	for i in range(terrain_bag.size()):
@@ -207,7 +207,7 @@ func _kind(index: int) -> String:
 		if candidate == last_kind or recent_kinds.has(candidate):
 			continue
 		# Give the player an acceleration runway before difficult geometry.
-		if index < 2 and (is_extreme_bank(candidate) or candidate in ["SPLIT ROUTE", "GAP CROSSING", "STACKED ROUTES", "STEEP CLIMB", "NARROW BRIDGE"]):
+		if index < 2 and (is_extreme_bank(candidate) or candidate in ["SPLIT ROUTE", "STACKED ROUTES", "STEEP CLIMB", "NARROW BRIDGE"]):
 			continue
 		candidates.append(i)
 	if candidates.is_empty():
@@ -1003,7 +1003,7 @@ func _cell_supported(kind: String, local_s: float, across: float) -> bool:
 		var opening := 12.0 * _branch_envelope(local_s)
 		return absf(across) >= opening
 	if kind == "GAP CROSSING":
-		return not (local_s >= 76.0 and local_s < 96.0 and across > 12.0)
+		return true # Former jump gap is now continuous rideable geometry.
 	if kind == "STACKED ROUTES":
 		# A centre opening keeps the upper and lower deck physically separate.
 		return absf(across) >= 4.0 * _branch_envelope(local_s)
@@ -1063,7 +1063,7 @@ func support_at(distance: float, across: float) -> bool:
 	if not has_distance(distance) or absf(across) > half_width_at(distance):
 		return false
 	var kind := section_name(distance)
-	if kind not in ["SPLIT ROUTE", "GAP CROSSING", "STACKED ROUTES", "LOOP ROUTE"]:
+	if kind not in ["SPLIT ROUTE", "STACKED ROUTES", "LOOP ROUTE"]:
 		return true
 	var local_s := floorf(_local_s(distance)) + 0.5
 	# Match the emitted mesh cells (4 m across, 1 normalized metre long).

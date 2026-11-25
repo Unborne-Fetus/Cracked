@@ -121,65 +121,11 @@ func _run_tests() -> void:
 	if ceiling_treads.get_child_count()!=0 or gyro_probe.get_child_count()!=2:
 		_fail("Obsolete surface vehicle geometry still exists.")
 		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
-	var glider_rig:Node3D=model.get("wings")
-	var jet_engines:Array=model.get("engines")
-	if jet_engines.size()!=2:
-		_fail("Missing wing-mounted jet engines.")
+	var glider_rig: Node3D=model.get("wings")
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0,"glider_entry":0.5})
+	if glider_rig.visible or glider_rig.get_child_count()!=0 or (model.get("engines") as Array).size()!=0:
+		_fail("Removed glider can still deploy.")
 		return
-	if not glider_rig.visible or glider_rig.scale.x<0.9 or ceiling_treads.visible or gyro_probe.visible:
-		_fail("High-altitude glider pose does not deploy wings.")
-		return
-	var handle_rig: Node3D = model.get("handles")
-	if not handle_rig.visible or handle_rig.scale.y<0.9:
-		_fail("Inverted rider did not deploy handles.")
-		return
-	model.call("pose",0.0,0.0,true,0.5,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_spin":0.5})
-	if absf(model.rotation.z)>0.05 and absf(absf(model.rotation.z)-TAU)>0.05:
-		_fail("Glider flip failed to rotate the whole rig.")
-		return
-	if absf(flip_board.rotation.z)>0.05:
-		_fail("Glider flip still rotates only the board.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.30})
-	if flip_board.position.x<3.0 or handle_rig.visible:
-		_fail("Glider did not release and separate from free-falling rider.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.60})
-	if flip_board.position.y> -0.8:
-		_fail("Glider did not swoop below the rider before the catch.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.72})
-	if flip_board.position.distance_to(Vector3(0,0.13,0))>0.02 or glider_rig.scale.x<0.95:
-		_fail("Glider wings retracted before the board catch.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_return":0.90})
-	if glider_rig.scale.x>=0.85:
-		_fail("Glider wings did not retract after the catch.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,true,1.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0})
-	if absf(model.rotation.x)<0.5 or not glider_rig.visible:
-		_fail("Glider dive did not pitch the full wing rig.")
-		return
-	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_gyro":0.80,"sideways":1.0})
-	if gyro_probe.visible or ceiling_treads.visible:
-		_fail("Legacy replay deployed a removed vehicle.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_entry":0.70})
-	if flip_board.position.x<3.0 or not glider_rig.visible:
-		_fail("Board-to-glider reverse transfer did not separate the deck.")
-		return
-	# Distinct glider trick poses, independently of board kickflips.
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"glider_clock":1.1})
-	if absf(absf(model.rotation.z)-PI)<0.25:
-		_fail("Glider wing-rock idle is missing.")
-		return
-	model.call("set_first_person",true)
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"glider":1.0,"fp":true})
-	if glider_rig.visible:
-		_fail("Glider geometry blocks first-person cockpit.")
-		return
-	model.call("set_first_person",false)
 	# Loop branch reverses longitudinal direction at its crown, bypass
 	# remains upright and forward. Test geometry independently of seeds.
 	var loop_top: Transform3D = course.call("_loop_frame",Transform3D.IDENTITY,96.0,-30.0,640.0)
@@ -227,17 +173,9 @@ func _run_tests() -> void:
 	if not cycle_rig.visible or cycle_rig.rotation.x<0.2:
 		_fail("Short jump does not use a cycle takeoff pose.")
 		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0,"glider_entry":0.12})
-	if not cycle_rig.visible or float(model.get("cycle_fold"))<=0.0:
-		_fail("Cycle-to-glider transition does not fold the wheel carriers.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0})
-	if cycle_rig.visible or not glider_rig.visible:
-		_fail("Glider still displays cycle hardware.")
-		return
-	model.call("pose",0.0,0.0,true,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0,"glider_return":0.9})
-	if not cycle_rig.visible or float(model.get("cycle_fold"))<=0.0:
-		_fail("Glider return fails to unfold cycle before landing.")
+	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"glider":1.0,"glider_return":0.9})
+	if not cycle_rig.visible or glider_rig.visible or float(model.get("cycle_fold"))>0.001:
+		_fail("Legacy glider data changed grounded vehicle.")
 		return
 	model.call("pose",0.0,0.0,false,1.0,0.0,0.0,0.0,false,0.0,0.0,0.0,0.0,0.0,0.0,{"lightcycle":true,"sideways":1.0})
 	if not cycle_rig.visible or gyro_probe.visible or absf(float(model.get("cycle_antigrav"))-1.0)>0.001:
@@ -435,46 +373,32 @@ func _run_tests() -> void:
 	if continuous_speed < 150.0:
 		_fail("Continuous downhill sliding incorrectly loses grip.")
 		return
-	# The opening hill has negative normal curvature at 16 m.
-	# Slow players follow it, fast players leave the track without jumping.
-	var slow_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 22.0)
-	var fast_normal: float = runner.call("relative_normal_acceleration", course, 16.0, 0.0, 65.0)
-	var lift: float = runner.call("natural_lift_impulse", fast_normal, 65.0)
-	if slow_normal >= 0.0 or fast_normal <= 1.5 or lift <= 0.0 or lift > 2.6:
-		_fail("Terrain curvature did not distinguish low-speed contact from high-speed lift-off.")
-		return
-	runner.set("distance", 16.0)
-	runner.set("lane", 0.0)
-	runner.set("height", 0.0)
-	runner.set("speed", 65.0)
-	runner.set("vertical_speed", 0.0)
-	runner.set("queued_jump", false)
-	runner.call("sync_pose", course)
-	var peak := 0.0
-	var airborne_frames := 0
+	# High-speed crests and jump/dive inputs must never detach the bike.
+	runner.set("distance",16.0)
+	runner.set("lane",0.0)
+	runner.set("speed",165.0)
+	runner.call("sync_pose",course)
 	for i in range(30):
-		runner.call("tick", 1.0 / 60.0, course)
-		peak = maxf(peak, float(runner.get("height")))
-		if not bool(runner.call("is_grounded")):
-			airborne_frames += 1
-	if peak < 0.1 or peak > 6.0 or airborne_frames < 6:
-		_fail("Natural takeoff is missing or excessively strong.")
-		return
+		runner.call("request_jump")
+		runner.set("touch_dive",true)
+		runner.call("tick",1.0/60.0,course)
+		if not bool(runner.get("grounded")) or absf(float(runner.get("height")))>0.001 or bool(runner.get("diving")):
+			_fail("Crest or removed flight input detached the rider.")
+			return
 	if float(runner.call("landing_speed", 80.0, 35.0)) >= 70.0 or absf(float(runner.call("landing_speed", 80.0, 4.0)) - 80.0) > 0.001:
 		_fail("Hard landings must lose momentum while gentle landings preserve it.")
 		return
-	# Flight retains its world-space orientation even when the road rolls.
+	# Banks stay attached to the current surface even with old jump input.
 	game.call("_restart")
 	await process_frame
-	runner.set("distance", 784.0)
-	runner.set("speed", 40.0)
-	runner.call("sync_pose", course)
-	var takeoff_basis: Basis = runner.transform.basis
-	runner.call("request_jump")
+	runner.set("distance",784.0)
+	runner.set("speed",40.0)
+	runner.call("sync_pose",course)
 	for i in range(18):
-		runner.call("tick", 1.0 / 60.0, course)
-		if bool(runner.call("is_grounded")) or runner.transform.basis.y.dot(takeoff_basis.y) < 0.999:
-			_fail("Airborne body was rotated by a changing bank.")
+		runner.call("request_jump")
+		runner.call("tick",1.0/60.0,course)
+		if not bool(runner.get("grounded")):
+			_fail("Bank detached grounded bike.")
 			return
 	# Ground contact must clear a sideways flight pose immediately.
 	game.call("_restart")
@@ -609,18 +533,6 @@ func _run_tests() -> void:
 	if float(course.call("surface_lift", ramp_s, ramp_lane)) < 5.0 or absf(float(course.call("surface_lift", ramp_s, -ramp_lane))) > 0.001 or absf(float(course.call("surface_lift", ramp_s, 0.0))) > 0.001:
 		_fail("Partial-width ramp does not leave a flat bypass.")
 		return
-	# At takeoff the camera retains its previous offset instead of snapping.
-	game.call("_restart")
-	await process_frame
-	game.call("_update_camera", 1.0 / 60.0)
-	var previous_arm: Vector3 = game.get("camera_offset")
-	runner.call("request_jump")
-	runner.call("tick", 1.0 / 60.0, course)
-	game.call("_update_camera", 1.0 / 60.0)
-	var new_arm: Vector3 = game.get("camera_offset")
-	if new_arm.distance_to(previous_arm) > 0.2:
-		_fail("Camera arm snapped at takeoff.")
-		return
 	# First-person sliding lowers the camera without adding HUD clutter.
 	game.call("_restart")
 	await process_frame
@@ -667,28 +579,18 @@ func _run_tests() -> void:
 	if float(runner.get("steering_heading")) < 0.25 or (-runner.transform.basis.z).dot(turn_surface.basis.x) < 0.20:
 		_fail("Steering still strafes instead of turning the board.")
 		return
-	# Crossing a road edge must detach instead of clamping the lane.
+	# Track edges are hard movement bounds; never enter free flight.
 	game.call("_restart")
 	await process_frame
-	runner.set("lane", float(course.call("half_width_at", 8.0)) - 0.1)
-	runner.set("touch_axis", 1.0)
-	runner.set("lateral_speed", 25.0)
-	runner.call("sync_pose", course)
-	runner.call("tick", 1.0 / 60.0, course)
-	if bool(runner.call("is_grounded")):
-		_fail("Player remained tethered at the road edge.")
-		return
-	for i in range(240):
-		runner.call("tick", 1.0 / 60.0, course)
-		if bool(runner.get("fallen")):
-			break
-	if not bool(runner.get("fallen")):
-		_fail("Leaving the track did not eventually cause a fall.")
-		return
-	game.call("_physics_process", 1.0 / 60.0)
-	if not bool(game.get("run_finished")):
-		_fail("Falling off must end the run.")
-		return
+	runner.set("lane",float(course.call("half_width_at",8.0))-0.1)
+	runner.set("touch_axis",1.0)
+	runner.set("lateral_speed",25.0)
+	runner.call("sync_pose",course)
+	for i in range(60):
+		runner.call("tick",1.0/60.0,course)
+		if not bool(runner.get("grounded")) or bool(runner.get("fallen")) or not bool(course.call("support_at",float(runner.get("distance")),float(runner.get("lane")))):
+			_fail("Edge steering left rideable geometry.")
+			return
 	game.call("_restart")
 	await process_frame
 	# Roll curvature is not a launch ramp, even near the edge at high speed.
@@ -813,10 +715,8 @@ func _run_tests() -> void:
 	runner.set("grounded",true)
 	runner.set("speed",120.0)
 	runner.call("_obstacle_rebound",course,contact_info,at-12.0,at+12.0,lane,lane,0.0,0.0)
-	var rebound_frame: Transform3D = course.call("surface_frame",float(runner.get("distance")),lane,1)
-	var rebound_velocity: Vector3 = runner.get("air_velocity")
-	if bool(runner.get("grounded")) or float(runner.get("distance")) >= at or rebound_velocity.dot(-rebound_frame.basis.z) >= 0.0:
-		_fail("Obstacle contact failed to stop and reflect the rider.")
+	if not bool(runner.get("grounded")) or float(runner.get("distance")) >= at or float(runner.get("speed")) >= 120.0:
+		_fail("Obstacle did not stop the bike on the surface.")
 		return
 	# Stream the new terrain showcase in order, verifying geometry and width.
 	for index in range(6, 16):

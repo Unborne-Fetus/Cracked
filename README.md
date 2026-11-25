@@ -1,5 +1,7 @@
 # Cracked — VECTOR VELOCITY
 
+**Current gameplay: grounded lightcycle only.** Jumping, double jumps, diving and gliders have been removed. All terrain follows the riding surface, including crests, banks, loops and ceilings. Edges constrain movement, former jump gaps are continuous, and obstacle impacts reduce speed without launching the bike. Older implementation notes below describe historical versions.
+
 An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 
 **Play:** https://unborne-fetus.github.io/Cracked/
@@ -10,22 +12,19 @@ An endless 3D neon momentum runner built with Godot 4.7.2 for WebGL 2.
 | --- | --- |
 | A / D or Left / Right | Turn and carve the board |
 | Hold Shift, Ctrl, C, S or Down | Slide |
-| Space | Jump; press again for one midair jump |
-| F (hold in air) | Dive |
 | Tab | First-person / third-person |
 | G | Recenter the current camera (remappable) |
 | L3 / left stick click | Recenter the current camera (remappable) |
 | Escape | Pause / resume; return from Options |
 | R | Restart |
 | Controller left stick / D-pad | Steer; navigate menus |
-| A / Cross | Jump / double jump; select; retry after defeat |
-| R3 (right stick click, hold) | Dive |
+| A / Cross | Select; retry after defeat |
 | B / Circle, either shoulder or trigger | Hold to slide; B backs out of menu |
 | Y / Triangle | Switch camera |
 | X / Square | Restart |
 | Start / Options | Pause / resume |
 | Left / right in Options | Switch units |
-| Touch buttons | Steer, slide, jump, camera |
+| Touch buttons | Steer, slide, camera |
 
 Sliding on flat or downhill track builds momentum rapidly and indefinitely, without a grip meter or fatigue. Flat acceleration is 8 m/s²; a 20% downhill grade adds 28 m/s² total. Air drag is reduced to preserve speed during jumps. Sliding trades lateral steering precision for speed. Sliding uphill still drains speed, but the braking force is gentler and the uphill coasting floor is higher. Steep climbs have shorter ascents and shallow downhill approaches. Faster movement produces higher jumps; jumping never adds forward speed. Running and jumping do not accelerate the player. There is no maximum speed. Obstacles take away 70% of current speed without ending the run. Jump over low barriers or steer around taller ones. The pursuing storm starts at 14 m/s, accelerates at 1.05 m/s² initially, and increases its acceleration by 0.012 m/s³ as the run progresses; being caught ends the run. Tall route gates have alternating side openings that require steering rather than jumping. Air drag and brief landing recovery discourage repeated jumping.
 
